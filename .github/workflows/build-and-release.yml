@@ -71,6 +71,16 @@ jobs:
         git push
         echo "Version bump committed and pushed"
         
+    # UPDATE TO LATEST COMMIT AFTER VERSION BUMP
+    - name: Update to latest commit after version bump
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel') && steps.version_check.outputs.skip_bump == 'false'
+      run: |
+        git fetch origin ${{ github.ref_name }}
+        git checkout ${{ github.ref_name }}
+        git reset --hard origin/${{ github.ref_name }}
+        echo "Updated to latest commit after version bump"
+        echo "Current commit: $(git rev-parse HEAD)"
+        
     # BUILD LOGIC (runs for all events after version bump if needed)
     - name: Install ISO creation tools
       run: |
@@ -184,6 +194,7 @@ jobs:
         gh release create "$TAG_NAME" \
           --title "$RELEASE_TITLE" \
           --notes-file release_notes.md \
+          --target $(git rev-parse HEAD) \
           $RELEASE_FLAGS \
           ISOs/WindowsProvisioning.iso \
           ISOs/LinuxProvisioning.iso
