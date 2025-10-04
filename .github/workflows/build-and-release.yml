@@ -118,9 +118,10 @@ jobs:
     - name: Create release
       if: github.event_name == 'push' && steps.release_info.outputs.create_standard_release == 'true'
       run: |
-        # Get version from version file (now contains the bumped version)
-        VERSION_CONTENT=""
-        if [ -f "version" ]; then
+        # Use the bumped version if a version bump occurred, otherwise read from file
+        if [[ "${{ steps.version_check.outputs.skip_bump }}" == "false" ]]; then
+          VERSION_CONTENT="${{ steps.bump_version.outputs.new }}"
+        else
           VERSION_CONTENT=$(cat version)
         fi
         
