@@ -113,6 +113,11 @@
           ansible.windows.win_shell: >
             powershell.exe -ExecutionPolicy Bypass -Command
             "Enable-WSManCredSSP -Role Server -Force"
+          notify: Disable CredSSP server role
+
+        - name: Wait before cluster operation
+          pause:
+            seconds: 5
 
         - name: Add VM to Cluster (using CredSSP)
           ansible.windows.win_command: >
@@ -120,9 +125,14 @@
             "Add-ClusterVirtualMachineRole -VMName '{{ vm_name }}'"
           vars:
             ansible_winrm_transport: credssp
-
-        - name: Disable CredSSP server role
-          ansible.windows.win_shell: >
-            powershell.exe -ExecutionPolicy Bypass -Command
-            "Disable-WSManCredSSP -Role Server"
+          retries: 3
+          delay: 10
+          register: cluster_result
+          until: cluster_result is succeeded
       when: vm_clustered is defined and vm_clustered == "Yes"
+
+  handlers:
+    - name: Disable CredSSP server role
+      ansible.windows.win_shell: >
+        powershell.exe -ExecutionPolicy Bypass -Command
+        "Disable-WSManCredSSP -Role Server"
