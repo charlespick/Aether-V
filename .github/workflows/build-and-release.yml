@@ -71,6 +71,19 @@ jobs:
         git push
         echo "Version bump committed and pushed"
         
+    # UPDATE TO LATEST COMMIT AFTER VERSION BUMP
+    - name: Update to latest commit after version bump
+      if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'devel') && steps.version_check.outputs.skip_bump == 'false'
+      id: update_commit
+      run: |
+        git fetch origin ${{ github.ref_name }}
+        git checkout ${{ github.ref_name }}
+        git reset --hard origin/${{ github.ref_name }}
+        CURRENT_COMMIT=$(git rev-parse HEAD)
+        echo "Updated to latest commit after version bump"
+        echo "Current commit: $CURRENT_COMMIT"
+        echo "commit_sha=$CURRENT_COMMIT" >> $GITHUB_OUTPUT
+        
     # BUILD LOGIC (runs for all events after version bump if needed)
     - name: Install ISO creation tools
       run: |
@@ -105,9 +118,10 @@ jobs:
     - name: Create release
       if: github.event_name == 'push' && steps.release_info.outputs.create_standard_release == 'true'
       run: |
-        # Get version from version file (now contains the bumped version)
-        VERSION_CONTENT=""
-        if [ -f "version" ]; then
+        # Use the bumped version if a version bump occurred, otherwise read from file
+        if [[ "${{ steps.version_check.outputs.skip_bump }}" == "false" ]]; then
+          VERSION_CONTENT="${{ steps.bump_version.outputs.new }}"
+        else
           VERSION_CONTENT=$(cat version)
         fi
         
@@ -181,9 +195,19 @@ jobs:
           RELEASE_FLAGS="--prerelease"
         fi
         
+        # Determine the target commit for the release
+        if [[ "${{ steps.version_check.outputs.skip_bump }}" == "false" ]]; then
+          # Use the updated commit SHA from the update step
+          TARGET_COMMIT="${{ steps.update_commit.outputs.commit_sha }}"
+        else
+          # Use the current commit if no version bump occurred
+          TARGET_COMMIT=$(git rev-parse HEAD)
+        fi
+        
         gh release create "$TAG_NAME" \
           --title "$RELEASE_TITLE" \
           --notes-file release_notes.md \
+          --target "$TARGET_COMMIT" \
           $RELEASE_FLAGS \
           ISOs/WindowsProvisioning.iso \
           ISOs/LinuxProvisioning.iso
