@@ -5,8 +5,57 @@
   vars:
     develop: false
     install_directory: "{{ 'Home Lab Virtual Machine Manager (Devel)' if develop else 'Home Lab Virtual Machine Manager' }}"
+    deployment_type: "provisioned"
 
   pre_tasks:
+    - name: Validate deployment_type value
+      assert:
+        that:
+          - deployment_type in ['provisioned', 'managed']
+        fail_msg: "deployment_type must be either 'provisioned' or 'managed'. Got: {{ deployment_type }}"
+        success_msg: "deployment_type is valid: {{ deployment_type }}"
+
+    - name: Validate managed deployment requirements
+      assert:
+        that:
+          - vm_clustered is defined
+          - vm_clustered == "Yes"
+        fail_msg: "deployment_type 'managed' is only compatible with vm_clustered: Yes"
+        success_msg: "Managed deployment validation passed"
+      when: deployment_type == "managed"
+
+    - name: Check for existing VM in cluster (managed mode only)
+      block:
+        - name: Enable CredSSP server role for cluster check
+          ansible.windows.win_shell: >
+            powershell.exe -ExecutionPolicy Bypass -Command
+            "Enable-WSManCredSSP -Role Server -Force"
+          notify: Disable CredSSP server role
+
+        - name: Wait before cluster operation
+          pause:
+            seconds: 5
+
+        - name: Check if VM exists in cluster
+          ansible.windows.win_shell: >
+            powershell.exe -ExecutionPolicy Bypass -Command
+            "$vm = Get-ClusterGroup -Name '{{ vm_name }}' -ErrorAction SilentlyContinue;
+            if ($vm) { Write-Output 'EXISTS' } else { Write-Output 'NOTFOUND' }"
+          vars:
+            ansible_winrm_transport: credssp
+          register: vm_exists_check
+          changed_when: false
+
+        - name: End playbook if VM already exists
+          meta: end_play
+          when: "'EXISTS' in vm_exists_check.stdout"
+
+        - name: Display message that VM will be created
+          debug:
+            msg: "VM '{{ vm_name }}' does not exist in cluster. Proceeding with provisioning."
+          when: "'NOTFOUND' in vm_exists_check.stdout"
+      when: deployment_type == "managed"
+
     - name: Determine OS Family from Image Name
       set_fact:
         os_family: >-

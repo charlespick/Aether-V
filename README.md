@@ -17,7 +17,11 @@ Tower or another automation system for centralized management.
 mounting a specialized provisioning ISO with domain join and local administrator
 passwords, HLVMM submits provisioning data to the virtual machine using Hyper-V's 
 KVP integration, encrypted with a key only the VM has access to after the
-provisioning process has finished. 
+provisioning process has finished.
+* **Intelligent deployment modes** - Choose between traditional provisioning or
+managed deployments that automatically detect and skip existing VMs, enabling
+self-healing infrastructure patterns. See [Deployment Types](Docs/Deployment-Types.md)
+for details. 
 
 **How does it work?**
 
@@ -53,3 +57,9 @@ to fit your unique needs.
 2. Add additional phases if you need additional reboots
 3. Extend your calling hooks (Ansible playbooks or other scripts to use the 
 new fields)
+
+**Documentation**
+
+* [Deployment Types](Docs/Deployment-Types.md) - Provisioned vs Managed deployment modes
+* [Modular Provisioning System](Docs/Modular-Provisioning-System.md) - Architecture and module development
+* [CI/CD Process](Docs/CI-CD-Process.md) - Build and release workflow
