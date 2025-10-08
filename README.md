@@ -53,9 +53,8 @@ directly.
 While I'm actively developing properties and fields you can customize VMs with,
 if you have a custom need, you can easily extend the functionality of the project
 to fit your unique needs. 
-1. Extend ProvisioningService.sh/ps1 with added params and logic
-2. Add additional phases if you need additional reboots
-3. Extend your calling hooks (Ansible playbooks or other scripts to use the 
+1. Add addtional modules (see [Modular Provisioning System](Docs/Modular-Provisioning-System.md) for more information)
+2. Extend your calling hooks (Ansible playbooks or other scripts to use the 
 new fields)
 
 **Documentation**
