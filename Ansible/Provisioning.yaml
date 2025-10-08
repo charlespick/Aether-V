@@ -46,6 +46,9 @@
           register: vm_exists_check
           changed_when: false
 
+        - name: Flush handlers before the playbook may end
+          meta: flush_handlers
+
         - name: End playbook if VM already exists
           meta: end_play
           when: "'EXISTS' in vm_exists_check.stdout"
