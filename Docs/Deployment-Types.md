@@ -235,6 +235,39 @@ Managed mode works excellently with:
 - **Monitoring systems** - Trigger remediation when VMs are detected missing
 - **CI/CD pipelines** - Ensure development environments are always available
 
+## Quick Reference
+
+### Minimum Required Variables
+
+**Provisioned Mode:**
+```yaml
+deployment_type: provisioned  # or omit (default)
+hyperv_host: <hostname>
+vm_name: <name>
+image_name: <os_image>
+gb_ram: <memory>
+cpu_cores: <cores>
+guest_la_uid: <username>
+guest_la_pw: <password>
+```
+
+**Managed Mode:**
+```yaml
+deployment_type: managed
+vm_clustered: Yes  # REQUIRED
+hyperv_host: <hostname>
+vm_name: <name>
+image_name: <os_image>
+gb_ram: <memory>
+cpu_cores: <cores>
+guest_la_uid: <username>
+guest_la_pw: <password>
+```
+
+### Example Usage
+
+See [managed-deployment-example.yaml](Examples/managed-deployment-example.yaml) for a complete working example.
+
 ## Future Enhancements
 
 Potential future additions to deployment types:

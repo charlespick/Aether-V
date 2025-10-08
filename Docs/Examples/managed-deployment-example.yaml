@@ -1,0 +1,70 @@
+---
+# Example playbook demonstrating the managed deployment_type feature
+# This example shows how to create a self-healing VM deployment that will
+# automatically recreate the VM if it's removed from the cluster
+
+- name: Example Managed VM Deployment
+  hosts: localhost
+  gather_facts: no
+  vars:
+    # Hyper-V host where VM will be created
+    hyperv_host: hyperv01.example.com
+    
+    # VM Configuration
+    vm_name: managed-web-server-01
+    image_name: "Ubuntu 22.04 LTS"
+    gb_ram: 8
+    cpu_cores: 4
+    
+    # Network Configuration
+    guest_v4_ipaddr: 192.168.1.100
+    guest_v4_cidrprefix: 24
+    guest_v4_defaultgw: 192.168.1.1
+    guest_v4_dns1: 192.168.1.10
+    guest_v4_dns2: 192.168.1.11
+    guest_net_dnssuffix: example.com
+    
+    # Local Admin Credentials (use Ansible Vault in production!)
+    guest_la_uid: localadmin
+    guest_la_pw: "{{ vault_guest_la_pw }}"
+    
+    # Clustering Configuration
+    # REQUIRED for managed deployment_type
+    vm_clustered: Yes
+    
+    # Deployment Type
+    # Options: provisioned (default), managed
+    # managed = check cluster for existing VM before provisioning
+    deployment_type: managed
+    
+  tasks:
+    - name: Deploy VM using HLVMM provisioning playbook
+      include_role:
+        name: hlvmm_provision
+      # Or call the playbook directly:
+      # ansible.builtin.import_playbook: ../../Ansible/Provisioning.yaml
+
+---
+# Alternative: Direct playbook call with extra vars
+# This is how you would call the provisioning playbook from AWX or command line
+
+# Command line usage:
+# ansible-playbook /path/to/HLVMM/Ansible/Provisioning.yaml \
+#   -e "hyperv_host=hyperv01.example.com" \
+#   -e "vm_name=managed-web-server-01" \
+#   -e "image_name='Ubuntu 22.04 LTS'" \
+#   -e "gb_ram=8" \
+#   -e "cpu_cores=4" \
+#   -e "vm_clustered=Yes" \
+#   -e "deployment_type=managed" \
+#   -e "guest_v4_ipaddr=192.168.1.100" \
+#   -e "guest_v4_cidrprefix=24" \
+#   -e "guest_v4_defaultgw=192.168.1.1" \
+#   -e "guest_v4_dns1=192.168.1.10" \
+#   -e "guest_la_uid=localadmin" \
+#   --extra-vars "@secrets.yml"
+
+# Expected behavior with managed deployment:
+# 1. First run: VM doesn't exist, VM is created and provisioned
+# 2. Second run: VM exists in cluster, playbook exits early with no changes
+# 3. After VM deletion: Next run detects missing VM and recreates it
