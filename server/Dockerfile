@@ -1,27 +1,7 @@
 # Multi-stage build for Aether-V Orchestrator
+# Note: ISOs should be pre-built using GitHub Actions before Docker build
 
-# Stage 1: ISO Builder
-FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04 AS isobuilder
-
-# Install ISO creation tools
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    xorriso \
-    genisoimage \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-# Copy source files needed for ISO building
-COPY version /build/version
-COPY Windows /build/Windows
-COPY Linux /build/Linux
-COPY Scripts/Build-ProvisioningISOs.ps1 /build/Build-ProvisioningISOs.ps1
-
-# Build the ISOs
-RUN pwsh /build/Build-ProvisioningISOs.ps1 -OutputPath /build/ISOs
-
-# Stage 2: Base image with Python
+# Stage 1: Base image with Python
 FROM python:3.11-slim AS base
 
 # Set environment variables
@@ -32,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Stage 3: Dependencies
+# Stage 2: Dependencies
 FROM base AS dependencies
 
 # Install system dependencies
@@ -45,7 +25,7 @@ RUN apt-get update && \
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 4: Application
+# Stage 3: Application
 FROM base AS application
 
 # Copy Python dependencies from previous stage
@@ -58,9 +38,9 @@ COPY server/app /app/app
 # Create directories for ISO and script storage
 RUN mkdir -p /app/artifacts/isos /app/artifacts/scripts
 
-# Copy built ISOs from builder stage
-COPY --from=isobuilder /build/ISOs/WindowsProvisioning.iso /app/artifacts/isos/
-COPY --from=isobuilder /build/ISOs/LinuxProvisioning.iso /app/artifacts/isos/
+# Copy pre-built ISOs (built by GitHub Actions)
+COPY ISOs/WindowsProvisioning.iso /app/artifacts/isos/
+COPY ISOs/LinuxProvisioning.iso /app/artifacts/isos/
 
 # Copy PowerShell scripts for deployment to hosts
 COPY Powershell /app/artifacts/scripts/
