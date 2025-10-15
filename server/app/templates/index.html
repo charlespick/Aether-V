@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aether-V Orchestrator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .header p {
+            opacity: 0.9;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .stat-card h3 {
+            font-size: 0.875rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            overflow: hidden;
+        }
+        
+        .section-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .section-header h2 {
+            font-size: 1.25rem;
+        }
+        
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        
+        .btn:hover {
+            background: #5568d3;
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 1rem 1.5rem;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        th {
+            background: #f9f9f9;
+            font-weight: 600;
+            font-size: 0.875rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        tr:hover {
+            background: #f9f9f9;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status.running {
+            background: #dcfce7;
+            color: #166534;
+        }
+        
+        .status.off {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
+        .status.connected {
+            background: #dcfce7;
+            color: #166534;
+        }
+        
+        .status.disconnected {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+        }
+        
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 1rem 1.5rem;
+            border-radius: 4px;
+            margin: 1rem 0;
+        }
+        
+        .empty {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+        }
+        
+        .refresh-info {
+            font-size: 0.875rem;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚀 Aether-V Orchestrator</h1>
+        <p>Hyper-V Virtual Machine Management</p>
+    </div>
+    
+    <div class="container">
+        <div class="stats">
+            <div class="stat-card">
+                <h3>Total Hosts</h3>
+                <div class="value" id="total-hosts">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Connected Hosts</h3>
+                <div class="value" id="connected-hosts">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Total VMs</h3>
+                <div class="value" id="total-vms">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Running VMs</h3>
+                <div class="value" id="running-vms">-</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <div>
+                    <h2>Hyper-V Hosts</h2>
+                    <div class="refresh-info" id="refresh-info"></div>
+                </div>
+                <button class="btn" onclick="refreshInventory()">🔄 Refresh</button>
+            </div>
+            <div id="hosts-content">
+                <div class="loading">Loading hosts...</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <h2>Virtual Machines</h2>
+            </div>
+            <div id="vms-content">
+                <div class="loading">Loading VMs...</div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let authToken = null;
+        
+        async function loadInventory() {
+            try {
+                const headers = {};
+                if (authToken) {
+                    headers['Authorization'] = `Bearer ${authToken}`;
+                }
+                
+                const response = await fetch('/api/v1/inventory', { headers });
+                
+                if (response.status === 401) {
+                    showError('Authentication required. Please configure authentication.');
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update stats
+                document.getElementById('total-hosts').textContent = data.total_hosts;
+                document.getElementById('connected-hosts').textContent = 
+                    data.hosts.filter(h => h.connected).length;
+                document.getElementById('total-vms').textContent = data.total_vms;
+                document.getElementById('running-vms').textContent = 
+                    data.vms.filter(vm => vm.state === 'Running').length;
+                
+                // Update refresh info
+                if (data.last_refresh) {
+                    const lastRefresh = new Date(data.last_refresh);
+                    document.getElementById('refresh-info').textContent = 
+                        `Last updated: ${lastRefresh.toLocaleString()}`;
+                }
+                
+                // Render hosts
+                renderHosts(data.hosts);
+                
+                // Render VMs
+                renderVMs(data.vms);
+                
+            } catch (error) {
+                console.error('Error loading inventory:', error);
+                showError('Failed to load inventory: ' + error.message);
+            }
+        }
+        
+        function renderHosts(hosts) {
+            const container = document.getElementById('hosts-content');
+            
+            if (hosts.length === 0) {
+                container.innerHTML = '<div class="empty">No hosts configured</div>';
+                return;
+            }
+            
+            let html = '<table><thead><tr><th>Hostname</th><th>Status</th><th>Last Seen</th></tr></thead><tbody>';
+            
+            for (const host of hosts) {
+                const status = host.connected ? 'connected' : 'disconnected';
+                const statusText = host.connected ? 'Connected' : 'Disconnected';
+                const lastSeen = host.last_seen ? new Date(host.last_seen).toLocaleString() : '-';
+                
+                html += `
+                    <tr>
+                        <td><strong>${host.hostname}</strong></td>
+                        <td><span class="status ${status}">${statusText}</span></td>
+                        <td>${lastSeen}</td>
+                    </tr>
+                `;
+            }
+            
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+        
+        function renderVMs(vms) {
+            const container = document.getElementById('vms-content');
+            
+            if (vms.length === 0) {
+                container.innerHTML = '<div class="empty">No VMs found</div>';
+                return;
+            }
+            
+            let html = '<table><thead><tr><th>Name</th><th>Host</th><th>State</th><th>CPU Cores</th><th>Memory (GB)</th></tr></thead><tbody>';
+            
+            for (const vm of vms) {
+                const statusClass = vm.state === 'Running' ? 'running' : 'off';
+                
+                html += `
+                    <tr>
+                        <td><strong>${vm.name}</strong></td>
+                        <td>${vm.host}</td>
+                        <td><span class="status ${statusClass}">${vm.state}</span></td>
+                        <td>${vm.cpu_cores}</td>
+                        <td>${vm.memory_gb.toFixed(2)}</td>
+                    </tr>
+                `;
+            }
+            
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+        
+        function showError(message) {
+            const hostsContent = document.getElementById('hosts-content');
+            const vmsContent = document.getElementById('vms-content');
+            
+            const errorHtml = `<div class="error">${message}</div>`;
+            hostsContent.innerHTML = errorHtml;
+            vmsContent.innerHTML = errorHtml;
+        }
+        
+        async function refreshInventory() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '⏳ Refreshing...';
+            
+            await loadInventory();
+            
+            btn.disabled = false;
+            btn.textContent = '🔄 Refresh';
+        }
+        
+        // Load inventory on page load
+        loadInventory();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadInventory, 30000);
+    </script>
+</body>
+</html>

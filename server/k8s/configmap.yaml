@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aetherv-config
+  namespace: aetherv
+data:
+  # Application settings
+  DEBUG: "false"
+  
+  # OIDC settings
+  OIDC_ENABLED: "true"
+  OIDC_ISSUER_URL: "https://login.microsoftonline.com/<tenant-id>/v2.0"
+  OIDC_CLIENT_ID: "<client-id>"
+  OIDC_ROLE_NAME: "vm-admin"
+  OIDC_REDIRECT_URI: "https://aetherv.example.com/oidc/callback"
+  
+  # Hyper-V hosts (comma-separated)
+  HYPERV_HOSTS: "hyperv01.example.com,hyperv02.example.com"
+  
+  # WinRM settings
+  WINRM_TRANSPORT: "ntlm"
+  WINRM_PORT: "5985"
+  
+  # Inventory refresh interval (seconds)
+  INVENTORY_REFRESH_INTERVAL: "60"
