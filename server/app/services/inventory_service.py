@@ -84,6 +84,8 @@ class InventoryService:
         
         if not host_list:
             logger.warning("No Hyper-V hosts configured")
+            # Still set last_refresh to indicate the service is ready
+            self.last_refresh = datetime.utcnow()
             return
         
         # Query each host
