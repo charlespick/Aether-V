@@ -32,9 +32,33 @@ class Settings(BaseSettings):
     # Inventory settings
     inventory_refresh_interval: int = 60  # seconds
     
-    # Paths (for future ISO/script deployment)
-    script_path: str = "/app/scripts"
-    iso_path: str = "/app/isos"
+    # Host deployment settings
+    development_install: bool = False  # Use development directories on hosts
+    
+    # Artifact paths (ISOs and scripts bundled in container)
+    artifacts_base_path: str = "/app/artifacts"
+    
+    @property
+    def iso_path(self) -> str:
+        """Get path to ISOs in container."""
+        return f"{self.artifacts_base_path}/isos"
+    
+    @property
+    def script_path(self) -> str:
+        """Get path to scripts in container."""
+        return f"{self.artifacts_base_path}/scripts"
+    
+    @property
+    def version_file_path(self) -> str:
+        """Get path to version file in container."""
+        return f"{self.artifacts_base_path}/version"
+    
+    @property
+    def host_install_directory(self) -> str:
+        """Get installation directory on Hyper-V hosts."""
+        if self.development_install:
+            return "C:\\Program Files\\Home Lab Virtual Machine Manager (Devel)"
+        return "C:\\Program Files\\Home Lab Virtual Machine Manager"
     
     class Config:
         env_file = ".env"

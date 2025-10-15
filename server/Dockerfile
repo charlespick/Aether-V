@@ -1,6 +1,37 @@
 # Multi-stage build for Aether-V Orchestrator
 
-# Stage 1: Base image with Python
+# Stage 1: ISO Builder
+FROM ubuntu:22.04 AS isobuilder
+
+# Install ISO creation tools and PowerShell
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    xorriso \
+    genisoimage \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PowerShell
+RUN wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb && \
+    dpkg -i packages-microsoft-prod.deb && \
+    rm packages-microsoft-prod.deb && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends powershell && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy source files needed for ISO building
+COPY version /build/version
+COPY Windows /build/Windows
+COPY Linux /build/Linux
+COPY Scripts/Build-ProvisioningISOs.ps1 /build/Build-ProvisioningISOs.ps1
+
+# Build the ISOs
+RUN pwsh /build/Build-ProvisioningISOs.ps1 -OutputPath /build/ISOs
+
+# Stage 2: Base image with Python
 FROM python:3.11-slim AS base
 
 # Set environment variables
@@ -11,7 +42,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Stage 2: Dependencies
+# Stage 3: Dependencies
 FROM base AS dependencies
 
 # Install system dependencies
@@ -24,7 +55,7 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 3: Application
+# Stage 4: Application
 FROM base AS application
 
 # Copy Python dependencies from previous stage
@@ -34,8 +65,18 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 # Copy application code
 COPY app /app/app
 
-# Create directories for future ISO/script deployment
-RUN mkdir -p /app/scripts /app/isos
+# Create directories for ISO and script storage
+RUN mkdir -p /app/artifacts/isos /app/artifacts/scripts
+
+# Copy built ISOs from builder stage
+COPY --from=isobuilder /build/ISOs/WindowsProvisioning.iso /app/artifacts/isos/
+COPY --from=isobuilder /build/ISOs/LinuxProvisioning.iso /app/artifacts/isos/
+
+# Copy PowerShell scripts for deployment to hosts
+COPY Powershell /app/artifacts/scripts/
+
+# Copy version file
+COPY version /app/artifacts/version
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \
