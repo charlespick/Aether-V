@@ -84,6 +84,8 @@ curl http://localhost:8000/api/v1/inventory | jq
 
 ### Create a VM
 
+> **Note**: Always use strong, unique passwords in production. The example password below is for demonstration only.
+
 ```bash
 curl -X POST http://localhost:8000/api/v1/vms/create \
   -H "Content-Type: application/json" \
@@ -94,7 +96,7 @@ curl -X POST http://localhost:8000/api/v1/vms/create \
     "gb_ram": 4,
     "cpu_cores": 2,
     "guest_la_uid": "Administrator",
-    "guest_la_pw": "P@ssw0rd123",
+    "guest_la_pw": "YourSecurePassword123!",
     "guest_v4_ipaddr": "192.168.1.100",
     "guest_v4_cidrprefix": 24,
     "guest_v4_defaultgw": "192.168.1.1"

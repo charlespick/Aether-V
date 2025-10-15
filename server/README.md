@@ -128,7 +128,7 @@ curl -X POST "https://aetherv.example.com/api/v1/vms/create" \
     "gb_ram": 4,
     "cpu_cores": 2,
     "guest_la_uid": "Administrator",
-    "guest_la_pw": "P@ssw0rd123",
+    "guest_la_pw": "YourSecurePassword123!",
     "guest_v4_ipaddr": "192.168.1.100",
     "guest_v4_cidrprefix": 24,
     "guest_v4_defaultgw": "192.168.1.1",
