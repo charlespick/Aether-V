@@ -75,6 +75,11 @@ The GitHub Actions workflow `.github/workflows/build-server.yml` automatically b
 
 Published images are available at:
 ```
+ghcr.io/<repository-owner>/aetherv-orchestrator:latest
+```
+
+For this repository:
+```
 ghcr.io/charlespick/aetherv-orchestrator:latest
 ```
 
