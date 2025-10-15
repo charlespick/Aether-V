@@ -35,20 +35,9 @@ This guide covers deploying the Aether-V Orchestrator on Kubernetes for developm
 
 ## Preparing Hyper-V Hosts
 
-### 1. Deploy PowerShell Scripts
+### 1. Enable WinRM
 
-The orchestrator uses the existing PowerShell scripts from the HLVMM project. Deploy them to each Hyper-V host:
-
-```powershell
-# On each Hyper-V host
-$url = "https://raw.githubusercontent.com/charlespick/HLVMM/main/Scripts/InstallHostScripts.ps1"
-Invoke-WebRequest -Uri $url -OutFile C:\Temp\InstallHostScripts.ps1
-C:\Temp\InstallHostScripts.ps1
-```
-
-This installs scripts to: `C:\Program Files\Home Lab Virtual Machine Manager\`
-
-### 2. Enable WinRM
+**Note**: PowerShell scripts and ISOs are automatically deployed by the service at startup. No manual installation required!
 
 Ensure WinRM is enabled and configured:
 
@@ -70,13 +59,13 @@ New-NetFirewallRule -Name "WinRM-HTTP" -DisplayName "WinRM HTTP" `
 Test-WSMan
 ```
 
-### 3. Prepare Golden Images
+### 2. Prepare Golden Images
 
 Ensure golden images are available on cluster storage:
 - Path: `C:\ClusterStorage\*\DiskImages\`
 - Format: VHDX files named `<ImageName>.vhdx`
 
-### 4. Network Connectivity
+### 3. Network Connectivity
 
 Verify network connectivity from Kubernetes to Hyper-V hosts:
 - Ensure Kubernetes nodes or pods can reach hosts on port 5985 (HTTP) or 5986 (HTTPS)

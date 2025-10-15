@@ -1,24 +1,14 @@
 # Multi-stage build for Aether-V Orchestrator
 
 # Stage 1: ISO Builder
-FROM ubuntu:22.04 AS isobuilder
+FROM mcr.microsoft.com/powershell:lts-ubuntu-22.04 AS isobuilder
 
-# Install ISO creation tools and PowerShell
+# Install ISO creation tools
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     xorriso \
     genisoimage \
-    wget \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# Install PowerShell
-RUN wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb && \
-    dpkg -i packages-microsoft-prod.deb && \
-    rm packages-microsoft-prod.deb && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends powershell && \
-    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
@@ -52,7 +42,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 4: Application
@@ -63,7 +53,7 @@ COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY app /app/app
+COPY server/app /app/app
 
 # Create directories for ISO and script storage
 RUN mkdir -p /app/artifacts/isos /app/artifacts/scripts

@@ -7,12 +7,22 @@ on:
       - copilot/start-server-development
     paths:
       - 'server/**'
+      - 'Scripts/Build-ProvisioningISOs.ps1'
+      - 'Windows/**'
+      - 'Linux/**'
+      - 'Powershell/**'
+      - 'version'
       - '.github/workflows/build-server.yml'
   pull_request:
     branches:
       - server
     paths:
       - 'server/**'
+      - 'Scripts/Build-ProvisioningISOs.ps1'
+      - 'Windows/**'
+      - 'Linux/**'
+      - 'Powershell/**'
+      - 'version'
       - '.github/workflows/build-server.yml'
   workflow_dispatch:
 
@@ -57,7 +67,7 @@ jobs:
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
-        context: ./server
+        context: .
         file: ./server/Dockerfile
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
