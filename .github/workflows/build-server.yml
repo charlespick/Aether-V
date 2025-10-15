@@ -1,0 +1,100 @@
+name: Build and Publish Server Container
+
+on:
+  push:
+    branches:
+      - server
+      - copilot/start-server-development
+    paths:
+      - 'server/**'
+      - '.github/workflows/build-server.yml'
+  pull_request:
+    branches:
+      - server
+    paths:
+      - 'server/**'
+      - '.github/workflows/build-server.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: aetherv-orchestrator
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to GitHub Container Registry
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./server
+        file: ./server/Dockerfile
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Comment on PR with image info
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const prNumber = context.issue.number;
+          const sha = context.payload.pull_request.head.sha.substring(0, 7);
+          const branch = context.payload.pull_request.head.ref;
+          
+          const comment = `## 🐳 Container Build Completed
+          
+          The Aether-V Orchestrator container has been built successfully!
+          
+          **Image Details:**
+          - Branch: \`${branch}\`
+          - Commit: \`${sha}\`
+          - Registry: \`${process.env.REGISTRY}\`
+          - Image: \`${process.env.REGISTRY}/${context.repo.owner}/${process.env.IMAGE_NAME}\`
+          
+          **Tags:**
+          \`\`\`
+          ${process.env.REGISTRY}/${context.repo.owner}/${process.env.IMAGE_NAME}:pr-${prNumber}
+          ${process.env.REGISTRY}/${context.repo.owner}/${process.env.IMAGE_NAME}:${branch}-${sha}
+          \`\`\`
+          
+          Note: Images are only pushed for merged commits, not PR builds.`;
+          
+          github.rest.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
