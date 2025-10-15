@@ -1,6 +1,13 @@
-# Home Lab Virtual Machine Manager
-Provision Virtual Machines on Hyper-V Infrastructure from Ansible or your favorite
-automation system. 
+# Aether-V
+Next-gen VMM for Hyper-V - wip
+
+> [!IMPORTANT]
+> This project is currently undergoing it's biggest migration yet on the `server` branch. Referances to HLVMM is just a remanant of the old project name. `hlvmm` will continue to be used in source code, variables, namespaces, and such but we will be slowly transitioning to Aether-V and `aetherv` in Docs and new code. 
+
+> This renaming and overhaul marks a fundamental change in the direction of the project. Building on the strong foundation in secure, resiliant Hyper-V KVP powered configuration injection of HLVMM, Aether-V is the server portion of the project designed to be lightweight to maintain, and unifying workflows that were previously spread out across build systems, AWX/Ansible, and other systems. 
+
+> [!TIP]
+> During this transition, continue to use the project on the `main` branch. 
 
 ![HLVMM In AWX](Docs/AWXSurvey.png)
 
