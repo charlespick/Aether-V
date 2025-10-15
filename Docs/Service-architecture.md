@@ -76,14 +76,14 @@ The service is intended to act as a foundation for future integrations — inclu
 
    1. Read configuration from environment variables and ConfigMaps.
    2. Load WinRM credentials from Kubernetes Secrets.
-   3. Establish WinRM connections to all listed Hyper-V hosts.
-   4. Query each host for:
-
-      * Available virtual machines
-      * ISOs present on disk
-      * Script versions
-   5. Store inventory in memory.
-   6. Expose REST API and web UI.
+   3. Deploy artifacts to Hyper-V hosts:
+      * Check version on each host
+      * Deploy scripts and ISOs if version mismatch detected
+      * Scripts and ISOs are bundled in container (built at container build time)
+   4. Establish WinRM connections to all listed Hyper-V hosts.
+   5. Query each host for available virtual machines.
+   6. Store inventory in memory.
+   7. Expose REST API and web UI.
 
 2. **Runtime Behavior**
 
@@ -93,9 +93,10 @@ The service is intended to act as a foundation for future integrations — inclu
      * Example: *Create new VM → choose host, template, name, vCPUs, VLAN, etc.*
    * Job runner executes:
 
-     1. Ensure ISOs/scripts exist on host (upload if not).
-     2. Run PowerShell creation scripts via WinRM with injected variables.
-     3. Monitor script output and stream logs back to client.
+     1. Run PowerShell creation scripts via WinRM with injected variables.
+     2. Monitor script output and stream logs back to client.
+     
+   Note: Scripts and ISOs are deployed at startup, not at job time.
    * Job result and logs are held in memory until service restart.
 
 3. **Failure and Restart Behavior**

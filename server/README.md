@@ -29,7 +29,8 @@ The orchestrator is a single Python FastAPI application that:
 - Kubernetes cluster
 - Hyper-V hosts with WinRM enabled
 - OIDC provider (Azure AD recommended) or disable auth for development
-- PowerShell scripts deployed on Hyper-V hosts (from main HLVMM project)
+
+**Note**: PowerShell scripts and ISOs are automatically deployed to hosts by the service at startup. No manual installation required!
 
 ### Development Mode (No Auth)
 
@@ -162,6 +163,9 @@ All configuration is via environment variables (from ConfigMap and Secrets in Ku
 ### Inventory Settings
 - `INVENTORY_REFRESH_INTERVAL` - Seconds between inventory refreshes (default: 60)
 
+### Host Deployment Settings
+- `DEVELOPMENT_INSTALL` - Use development directory on hosts (default: false)
+
 ## Orchestration Logic
 
 The orchestrator mirrors the existing Ansible playbooks:
@@ -262,9 +266,9 @@ docker run -p 8000:8000 --env-file .env aetherv-orchestrator:dev
 - [x] OIDC authentication
 - [x] Kubernetes manifests
 - [x] Container build pipeline
+- [x] ISO building at container build time
+- [x] Script and ISO deployment to hosts at startup
 - [ ] Enhanced job logging
-- [ ] ISO building at runtime
-- [ ] Script deployment to hosts
 - [ ] Terraform provider integration
 - [ ] Multiple replica support with leader election
 - [ ] Persistent job history

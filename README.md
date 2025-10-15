@@ -45,11 +45,10 @@ the host with a shut down
     Linux: Make sure cloud-init is ready and configured for "nocloud" (ISO/CD-ROM)
     provisioning. Make sure KVP Daemons are installed if not included with your
     distro by default. 
-2. Bake the generic provisioning ISOs - refer to /Scripts
-3. Publish the golden images and ISOs - further docs later, refer to the code
-for exact paths for now
-4. Hook up Ansible or another automation platform/front end. Or call the scripts
-directly. 
+2. Deploy the Aether-V service (containerized) - ISOs are built automatically
+   at container build time and deployed to hosts on startup.
+3. Publish the golden images to your Hyper-V hosts.
+4. Use the Aether-V web UI, REST API, or Terraform provider (future) to manage VMs. 
 
 **How can I extend the capabilities of the customization phase?**
 

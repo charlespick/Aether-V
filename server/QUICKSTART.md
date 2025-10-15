@@ -151,7 +151,15 @@ make deploy   # Deploy to Kubernetes
 1. Check WinRM is enabled: `Test-WSMan -ComputerName <host>`
 2. Verify credentials are correct
 3. Check firewall allows port 5985
-4. Look at logs for specific errors
+4. Ensure hosts have sufficient disk space for scripts and ISOs
+5. Look at logs for specific errors
+
+### Artifact deployment failed?
+
+1. Check host has write permissions to `C:\Program Files\`
+2. Verify WinRM has sufficient privileges
+3. Check logs for specific deployment errors
+4. Manually verify version file exists on host after deployment
 
 ### UI shows empty inventory?
 
