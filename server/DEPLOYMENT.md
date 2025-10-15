@@ -307,7 +307,20 @@ Use the same steps as production but with:
 OIDC_ENABLED: "false"
 ```
 
-2. **Use NodePort** instead of Ingress:
+2. **Configure Development Installation Directory** in ConfigMap:
+```yaml
+# Use a separate directory to avoid conflicts with production
+HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Home Lab Virtual Machine Manager (Devel)"
+```
+
+This allows you to run development and production instances of the service simultaneously against the same Hyper-V hosts without conflicts. Each instance will:
+- Deploy its artifacts to its own directory
+- Maintain its own version tracking
+- Operate independently
+
+See [Host Setup documentation](../Docs/Host-Setup.md) for more details on installation directory configuration.
+
+3. **Use NodePort** instead of Ingress:
 ```yaml
 # In k8s/service.yaml
 spec:
@@ -318,7 +331,7 @@ spec:
     nodePort: 30800  # Pick an available port
 ```
 
-3. Access via: `http://<node-ip>:30800`
+4. Access via: `http://<node-ip>:30800`
 
 ### Hot Reload for Development
 

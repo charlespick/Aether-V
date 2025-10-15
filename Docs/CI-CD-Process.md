@@ -69,7 +69,10 @@ Validates version consistency across the repository:
 
 - **Single Version Source**: `version` file at repository root
 - **Automatic Synchronization**: Hosts automatically updated to match container version
-- **Development Mode**: Use `DEVELOPMENT_INSTALL=true` to deploy to separate directory on hosts
+- **Installation Directory**: Configured via `HOST_INSTALL_DIRECTORY` environment variable
+  - Default: `C:\Program Files\Home Lab Virtual Machine Manager`
+  - Allows parallel installations for production, development, and testing
+  - See [Host Setup documentation](./Host-Setup.md) for details
 
 ## Migration from Legacy System
 

@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     inventory_refresh_interval: int = 60  # seconds
     
     # Host deployment settings
-    development_install: bool = False  # Use development directories on hosts
+    host_install_directory: str = "C:\\Program Files\\Home Lab Virtual Machine Manager"
     
     # Artifact paths (ISOs and scripts bundled in container)
     artifacts_base_path: str = "/app/artifacts"
@@ -52,13 +52,6 @@ class Settings(BaseSettings):
     def version_file_path(self) -> str:
         """Get path to version file in container."""
         return f"{self.artifacts_base_path}/version"
-    
-    @property
-    def host_install_directory(self) -> str:
-        """Get installation directory on Hyper-V hosts."""
-        if self.development_install:
-            return "C:\\Program Files\\Home Lab Virtual Machine Manager (Devel)"
-        return "C:\\Program Files\\Home Lab Virtual Machine Manager"
     
     class Config:
         env_file = ".env"

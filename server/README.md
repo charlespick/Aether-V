@@ -164,7 +164,9 @@ All configuration is via environment variables (from ConfigMap and Secrets in Ku
 - `INVENTORY_REFRESH_INTERVAL` - Seconds between inventory refreshes (default: 60)
 
 ### Host Deployment Settings
-- `DEVELOPMENT_INSTALL` - Use development directory on hosts (default: false)
+- `HOST_INSTALL_DIRECTORY` - Installation directory on Hyper-V hosts (default: `C:\Program Files\Home Lab Virtual Machine Manager`)
+  - Use different paths for parallel installations (production, development, testing)
+  - See [Host Setup documentation](../Docs/Host-Setup.md) for configuration examples
 
 ## Orchestration Logic
 
