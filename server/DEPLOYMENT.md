@@ -35,20 +35,9 @@ This guide covers deploying the Aether-V Orchestrator on Kubernetes for developm
 
 ## Preparing Hyper-V Hosts
 
-### 1. Deploy PowerShell Scripts
+### 1. Enable WinRM
 
-The orchestrator uses the existing PowerShell scripts from the HLVMM project. Deploy them to each Hyper-V host:
-
-```powershell
-# On each Hyper-V host
-$url = "https://raw.githubusercontent.com/charlespick/HLVMM/main/Scripts/InstallHostScripts.ps1"
-Invoke-WebRequest -Uri $url -OutFile C:\Temp\InstallHostScripts.ps1
-C:\Temp\InstallHostScripts.ps1
-```
-
-This installs scripts to: `C:\Program Files\Home Lab Virtual Machine Manager\`
-
-### 2. Enable WinRM
+**Note**: PowerShell scripts and ISOs are automatically deployed by the service at startup. No manual installation required!
 
 Ensure WinRM is enabled and configured:
 
@@ -70,13 +59,13 @@ New-NetFirewallRule -Name "WinRM-HTTP" -DisplayName "WinRM HTTP" `
 Test-WSMan
 ```
 
-### 3. Prepare Golden Images
+### 2. Prepare Golden Images
 
 Ensure golden images are available on cluster storage:
 - Path: `C:\ClusterStorage\*\DiskImages\`
 - Format: VHDX files named `<ImageName>.vhdx`
 
-### 4. Network Connectivity
+### 3. Network Connectivity
 
 Verify network connectivity from Kubernetes to Hyper-V hosts:
 - Ensure Kubernetes nodes or pods can reach hosts on port 5985 (HTTP) or 5986 (HTTPS)
@@ -318,7 +307,20 @@ Use the same steps as production but with:
 OIDC_ENABLED: "false"
 ```
 
-2. **Use NodePort** instead of Ingress:
+2. **Configure Development Installation Directory** in ConfigMap:
+```yaml
+# Use a separate directory to avoid conflicts with production
+HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Home Lab Virtual Machine Manager (Devel)"
+```
+
+This allows you to run development and production instances of the service simultaneously against the same Hyper-V hosts without conflicts. Each instance will:
+- Deploy its artifacts to its own directory
+- Maintain its own version tracking
+- Operate independently
+
+See [Host Setup documentation](../Docs/Host-Setup.md) for more details on installation directory configuration.
+
+3. **Use NodePort** instead of Ingress:
 ```yaml
 # In k8s/service.yaml
 spec:
@@ -329,7 +331,7 @@ spec:
     nodePort: 30800  # Pick an available port
 ```
 
-3. Access via: `http://<node-ip>:30800`
+4. Access via: `http://<node-ip>:30800`
 
 ### Hot Reload for Development
 

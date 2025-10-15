@@ -4,15 +4,24 @@ on:
   push:
     branches:
       - server
-      - copilot/start-server-development
     paths:
       - 'server/**'
+      - 'Scripts/Build-ProvisioningISOs.ps1'
+      - 'Windows/**'
+      - 'Linux/**'
+      - 'Powershell/**'
+      - 'version'
       - '.github/workflows/build-server.yml'
   pull_request:
     branches:
       - server
     paths:
       - 'server/**'
+      - 'Scripts/Build-ProvisioningISOs.ps1'
+      - 'Windows/**'
+      - 'Linux/**'
+      - 'Powershell/**'
+      - 'version'
       - '.github/workflows/build-server.yml'
   workflow_dispatch:
 
@@ -31,6 +40,15 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+    
+    - name: Install ISO creation tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xorriso genisoimage
+    
+    - name: Build ISOs
+      run: |
+        pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs
     
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -57,7 +75,7 @@ jobs:
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
-        context: ./server
+        context: .
         file: ./server/Dockerfile
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
@@ -78,6 +96,10 @@ jobs:
           
           The Aether-V Orchestrator container has been built successfully!
           
+          **Build Process:**
+          - ✅ ISOs built with modular provisioning system
+          - ✅ Container built with pre-built ISOs
+          
           **Image Details:**
           - Branch: \`${branch}\`
           - Commit: \`${sha}\`
@@ -89,6 +111,9 @@ jobs:
           ${process.env.REGISTRY}/${context.repo.owner}/${process.env.IMAGE_NAME}:pr-${prNumber}
           ${process.env.REGISTRY}/${context.repo.owner}/${process.env.IMAGE_NAME}:${branch}-${sha}
           \`\`\`
+          
+          **Artifacts:**
+          - Provisioning ISOs are available as build artifacts
           
           Note: Images are only pushed for merged commits, not PR builds.`;
           

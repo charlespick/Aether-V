@@ -8,6 +8,7 @@ import json
 from ..core.models import Host, VM, VMState, OSFamily
 from ..core.config import settings
 from .winrm_service import winrm_service
+from .host_deployment_service import host_deployment_service
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,11 @@ class InventoryService:
     async def start(self):
         """Start the inventory service and begin periodic refresh."""
         logger.info("Starting inventory service")
+        
+        # Deploy artifacts to hosts first
+        await self._deploy_artifacts_to_hosts()
+        
+        # Then refresh inventory
         await self.refresh_inventory()
         
         # Start background refresh task
@@ -38,6 +44,26 @@ class InventoryService:
                 await self._refresh_task
             except asyncio.CancelledError:
                 pass
+    
+    async def _deploy_artifacts_to_hosts(self):
+        """Deploy scripts and ISOs to all configured hosts."""
+        logger.info("Deploying artifacts to Hyper-V hosts")
+        
+        host_list = settings.get_hyperv_hosts_list()
+        
+        if not host_list:
+            logger.warning("No Hyper-V hosts configured, skipping artifact deployment")
+            return
+        
+        container_version = host_deployment_service.get_container_version()
+        logger.info(f"Container version: {container_version}")
+        
+        successful, failed = await host_deployment_service.deploy_to_all_hosts(host_list)
+        
+        if failed > 0:
+            logger.warning(f"Artifact deployment completed with {failed} failure(s) and {successful} success(es)")
+        else:
+            logger.info(f"Artifact deployment completed successfully to all {successful} host(s)")
     
     async def _periodic_refresh(self):
         """Periodically refresh inventory."""

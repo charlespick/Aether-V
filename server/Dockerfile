@@ -1,4 +1,5 @@
 # Multi-stage build for Aether-V Orchestrator
+# Note: ISOs should be pre-built using GitHub Actions before Docker build
 
 # Stage 1: Base image with Python
 FROM python:3.11-slim AS base
@@ -21,7 +22,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
+COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 3: Application
@@ -32,10 +33,20 @@ COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY app /app/app
+COPY server/app /app/app
 
-# Create directories for future ISO/script deployment
-RUN mkdir -p /app/scripts /app/isos
+# Create directories for ISO and script storage
+RUN mkdir -p /app/artifacts/isos /app/artifacts/scripts
+
+# Copy pre-built ISOs (built by GitHub Actions)
+COPY ISOs/WindowsProvisioning.iso /app/artifacts/isos/
+COPY ISOs/LinuxProvisioning.iso /app/artifacts/isos/
+
+# Copy PowerShell scripts for deployment to hosts
+COPY Powershell /app/artifacts/scripts/
+
+# Copy version file
+COPY version /app/artifacts/version
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \

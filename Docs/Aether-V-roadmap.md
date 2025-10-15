@@ -10,8 +10,8 @@
 - [ ] Ensure inventory display works
 - [ ] Ensure job queue and new/delete VM actions work
 - [ ] Ensure "worker" process disbatch and orchestration works - should mirror existing Ansible playbooks
-- [ ] Move ISO building and scripts/ISO deployment into the service - build ISOs when needed on service startup, deploy scripts and ISOs to hosts at startup if version mismatch
-- [ ] Clean up legacy Ansible, CI tasks, docs
+- [x] Move ISO building and scripts/ISO deployment into the service - build ISOs when needed on service startup, deploy scripts and ISOs to hosts at startup if version mismatch
+- [x] Clean up legacy Ansible, CI tasks, docs
 - [ ] Handle image management
 - [ ] Write Terraform provider to interface with API
 
@@ -21,4 +21,4 @@
 [service architecture document](./service-architecture.md)
 * Maintain exact orchestration parity with existing Ansible playbooks during initial migration
 * This service should replicate the concepts of auth, job management, and interfacing that were previously provided by AWX with Ansible, while providing a strong platform for new features such as the inventory view, Terraform integration, etc
-* Host setup is now done on the fly - ISOs are built at container build time and stored in the container with the scripts. Scripts and ISOs are transfered to hosts at job time if needed. No more need for CI jobs and host setup tasks
+* Host setup is now done on the fly - ISOs are built at container build time and stored in the container with the scripts. Scripts and ISOs are transferred to hosts at service startup if version mismatch detected. No more need for CI jobs publishing ISOs, host setup tasks, or manual installation scripts
