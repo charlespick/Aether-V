@@ -2,11 +2,11 @@
 
 - [x] Define roadmap
 - [X] New name
-- [ ] Create containerized, k8s ready, python service to handle auth, orchestration, api, future terraform integration, and web ui
-- [ ] Ci to build the container while on the `server` branch and publish to GHCR
-- [ ] Docs and examples for deploying on k8s during development
+- [x] Create containerized, k8s ready, python service to handle auth, orchestration, api, future terraform integration, and web ui
+- [x] Ci to build the container while on the `server` branch and publish to GHCR
+- [x] Docs and examples for deploying on k8s during development
 - [ ] Ensure auth works - OIDC interactive and API token
-- [ ] Ensure webui works
+- [x] Ensure webui works
 - [ ] Ensure inventory display works
 - [ ] Ensure job queue and new/delete VM actions work
 - [ ] Ensure "worker" process disbatch and orchestration works - should mirror existing Ansible playbooks
