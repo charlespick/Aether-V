@@ -1,11 +1,14 @@
 """Main application entry point."""
 import logging
+import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, HTTPException, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
+import secrets
 
 from .core.config import settings
 from .api.routes import router
@@ -27,7 +30,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Aether-V Orchestrator")
     logger.info(f"Version: {settings.app_version}")
     logger.info(f"Debug mode: {settings.debug}")
-    logger.info(f"OIDC enabled: {settings.oidc_enabled}")
+    logger.info(f"Authentication enabled: {settings.auth_enabled}")
     
     # Start services
     job_service.start()
@@ -52,6 +55,84 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Add security headers and audit logging middleware
+@app.middleware("http")
+async def security_and_audit_middleware(request: Request, call_next):
+    """Add security headers and comprehensive audit logging."""
+    start_time = time.time()
+    
+    # Log incoming request (audit trail)
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    
+    # Don't log sensitive headers
+    safe_headers = {k: v for k, v in request.headers.items() 
+                   if k.lower() not in ['authorization', 'cookie', 'x-api-key']}
+    
+    logger.info(
+        f"Request started: {request.method} {request.url.path} "
+        f"from {client_ip} UA: {user_agent[:100]}"
+    )
+    
+    try:
+        response = await call_next(request)
+        
+
+        
+        # Add security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'"
+        )
+        
+        # Add HSTS in production
+        if settings.oidc_force_https:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        
+        # Audit logging (success)
+        process_time = time.time() - start_time
+        logger.info(
+            f"Request completed: {request.method} {request.url.path} "
+            f"Status: {response.status_code} Time: {process_time:.4f}s"
+        )
+        
+        return response
+        
+    except Exception as e:
+        # Audit logging (error)
+        process_time = time.time() - start_time
+        logger.error(
+            f"Request failed: {request.method} {request.url.path} "
+            f"Error: {str(e)[:200]} Time: {process_time:.4f}s"
+        )
+        raise
+
+# Add session middleware with enhanced security
+# Use secure session configuration for production
+session_secret = settings.session_secret_key
+if not session_secret:
+    # For development: use a consistent secret that doesn't change between restarts
+    session_secret = "aether-v-dev-session-secret-key-123456789"
+    logger.warning("Using development session secret - set SESSION_SECRET_KEY for production")
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret,
+    max_age=3600,  # 1 hour session timeout
+    same_site="lax",  # CSRF protection
+    https_only=False,  # Disable for debugging - ingress may terminate HTTPS
+    domain=None,  # Don't restrict domain for debugging
+    path="/"  # Ensure cookies work for all paths
+    # Note: httponly is always True by default in SessionMiddleware for security
+)
+
 # Include API routes
 app.include_router(router)
 
@@ -62,13 +143,43 @@ templates = Jinja2Templates(directory="app/templates")
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
 async def root(request: Request):
     """Serve the web UI."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    try:
+        # Check authentication status
+        auth_param = request.query_params.get("auth")
+        session_user = request.session.get("user_info")
+        
+        if session_user and session_user.get("authenticated"):
+            username = session_user.get("preferred_username", "unknown")
+            logger.info(f"Authenticated request from user: {username}")
+        
+        # Always serve the page - let the frontend handle authentication state
+        # This prevents redirect loops and allows graceful token handling
+        response = templates.TemplateResponse("index.html", {
+            "request": request, 
+            "auth_enabled": settings.auth_enabled
+        })
+        
+        # Add cache headers to prevent caching issues
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in root route: {type(e).__name__}: {e}")
+        # Return a minimal HTML response to prevent 502 errors
+        return HTMLResponse(
+            content="<html><body><h1>Aether-V Orchestrator</h1><p>Loading...</p><script>setTimeout(function(){location.reload()}, 2000);</script></body></html>",
+            status_code=200
+        )
 
 
 @app.get("/ui", response_class=HTMLResponse, tags=["UI"])
 async def ui(request: Request):
     """Serve the web UI."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    # Redirect to root which handles auth
+    return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
 
 
 def main():

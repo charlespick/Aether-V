@@ -79,7 +79,7 @@ Verify network connectivity from Kubernetes to Hyper-V hosts:
    - Go to Azure Portal → Azure Active Directory → App registrations
    - New registration
    - Name: "Aether-V Orchestrator"
-   - Redirect URI: `https://aetherv.example.com/oidc/callback` (adjust domain)
+   - Redirect URI: `https://aetherv.example.com/auth/callback` (adjust domain)
 
 2. **Configure App Roles**:
    - In your app registration, go to App roles

@@ -1,2 +1,4 @@
 ﻿ISOs
 build/
+.venv
+pyvenv.cfg

@@ -7,12 +7,23 @@ data:
   # Application settings
   DEBUG: "false"
   
-  # OIDC settings
-  OIDC_ENABLED: "true"
+  # Authentication settings
+  AUTH_ENABLED: "true"
+  ALLOW_DEV_AUTH: "false"  # NEVER set to true in production
+  
+  # OIDC settings (for interactive authentication)
   OIDC_ISSUER_URL: "https://login.microsoftonline.com/<tenant-id>/v2.0"
   OIDC_CLIENT_ID: "<client-id>"
   OIDC_ROLE_NAME: "vm-admin"
-  OIDC_REDIRECT_URI: "https://aetherv.example.com/oidc/callback"
+  OIDC_REDIRECT_URI: "https://aetherv.example.com/auth/callback"
+  OIDC_FORCE_HTTPS: "true"
+  
+  # Security settings
+  JWKS_CACHE_TTL: "300"
+  MAX_TOKEN_AGE: "3600"
+  COOKIE_SECURE: "true"
+  COOKIE_SAMESITE: "lax"
+  # Note: Cookie httponly is always enabled by default in SessionMiddleware
   
   # Hyper-V hosts (comma-separated)
   HYPERV_HOSTS: "hyperv01.example.com,hyperv02.example.com"

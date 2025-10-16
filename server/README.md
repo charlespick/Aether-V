@@ -103,18 +103,61 @@ Visit http://localhost:8000 for the UI or http://localhost:8000/docs for API doc
    kubectl -n aetherv logs -f deployment/aetherv-orchestrator
    ```
 
+## Authentication
+
+Aether-V supports OIDC authentication for enterprise security:
+
+### Authentication Flow
+
+1. **Web UI Access**: User visits the application URL
+2. **Login Redirect**: If not authenticated, user is redirected to `/auth/login`
+3. **OIDC Provider**: User authenticates with their OIDC provider (e.g., Azure AD)
+4. **Callback**: Provider redirects to `/auth/callback` with authorization code
+5. **Token Exchange**: Application exchanges code for access token
+6. **UI Redirect**: User is redirected back to UI with token
+7. **API Access**: Frontend uses token for subsequent API calls
+
+### Development Mode
+
+For development, disable OIDC authentication:
+
+```env
+OIDC_ENABLED=false
+```
+
+This allows unrestricted access. **Never use in production!**
+
+### API Token Authentication
+
+For automation and CI/CD, use a static API token:
+
+```bash
+curl -H "Authorization: Bearer $API_TOKEN" \
+  https://aetherv.example.com/api/v1/hosts
+```
+
 ## API Documentation
 
 Once running, visit `/docs` for interactive API documentation (Swagger UI) or `/redoc` for alternative documentation.
 
 ### Key Endpoints
 
+#### Core API
 - `GET /api/v1/inventory` - Get complete inventory
 - `GET /api/v1/hosts` - List Hyper-V hosts
 - `GET /api/v1/vms` - List all VMs
 - `POST /api/v1/vms/create` - Create a new VM
 - `POST /api/v1/vms/delete` - Delete a VM
 - `GET /api/v1/jobs/{job_id}` - Get job status
+
+#### Authentication (OIDC)
+- `GET /auth/login` - Initiate OIDC login flow
+- `GET /auth/callback` - Handle OIDC provider callback
+- `POST /auth/logout` - Logout and clear session
+
+#### Health Checks
+- `GET /healthz` - Basic health check
+- `GET /readyz` - Readiness check
 
 ### Example: Create a VM
 
@@ -151,6 +194,8 @@ All configuration is via environment variables (from ConfigMap and Secrets in Ku
 - `OIDC_CLIENT_ID` - OIDC client ID
 - `OIDC_CLIENT_SECRET` - OIDC client secret (from Secret)
 - `OIDC_ROLE_NAME` - Required role claim (default: "vm-admin")
+- `OIDC_REDIRECT_URI` - Callback URL (default: auto-detected)
+- `OIDC_FORCE_HTTPS` - Force HTTPS for callback URLs (default: true)
 - `API_TOKEN` - Optional static token for automation (from Secret)
 
 ### Hyper-V Settings

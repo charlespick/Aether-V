@@ -189,8 +189,17 @@
 </head>
 <body>
     <div class="header">
-        <h1>🚀 Aether-V Orchestrator</h1>
-        <p>Hyper-V Virtual Machine Management</p>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h1>🚀 Aether-V Orchestrator</h1>
+                <p>Hyper-V Virtual Machine Management</p>
+            </div>
+            <div id="auth-controls" style="display: none;">
+                <button class="btn" onclick="logout()" style="background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3);">
+                    🔓 Logout
+                </button>
+            </div>
+        </div>
     </div>
     
     <div class="container">
@@ -236,21 +245,175 @@
         </div>
     </div>
     
+    <!-- Configuration passed from backend -->
+    <script id="config-data" type="application/json">
+        {"auth_enabled": {{ auth_enabled | tojson }}}
+    </script>
+    
     <script>
-        let authToken = null;
-        
+        // Get configuration from backend
+        const configData = JSON.parse(document.getElementById('config-data').textContent);
+        const authEnabled = configData.auth_enabled;
+
+        // Authentication state
+        let userInfo = null;
+        let authCheckInProgress = false;
+
+        // Check authentication status from server session (secure)
+        async function checkAuthenticationStatus() {
+            if (authCheckInProgress) {
+                return false;
+            }
+            
+            authCheckInProgress = true;
+            
+            try {
+                const response = await fetch('/auth/token', {
+                    method: 'GET',
+                    credentials: 'same-origin' // Include session cookies
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    if (data.authenticated) {
+                        userInfo = data.user;
+                        
+                        // Show auth controls
+                        if (authEnabled) {
+                            const authControls = document.getElementById('auth-controls');
+                            if (authControls) {
+                                authControls.style.display = 'block';
+                            }
+                        }
+                        
+                        console.log('Authentication validated from server session');
+                        return true;
+                    } else {
+                        console.log('Not authenticated:', data.reason);
+                        // Clear any local state
+                        userInfo = null;
+                        localStorage.removeItem('authToken'); // Clean up any old localStorage
+                        
+                        // Hide auth controls
+                        const authControls = document.getElementById('auth-controls');
+                        if (authControls) {
+                            authControls.style.display = 'none';
+                        }
+                        
+                        return false;
+                    }
+                } else {
+                    console.log('Auth check failed:', response.status);
+                    return false;
+                }
+            } catch (error) {
+                console.error('Error checking authentication:', error);
+                return false;
+            } finally {
+                authCheckInProgress = false;
+            }
+        }
+
+        // Handle authentication callback
+        async function handleAuthCallback() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const authSuccess = urlParams.get('auth');
+            
+            if (authSuccess === 'success') {
+                // Clean up URL
+                const url = new URL(window.location);
+                url.searchParams.delete('auth');
+                window.history.replaceState({}, '', url);
+                
+                console.log('Authentication callback received');
+                // Check auth status which will update the UI
+                return await checkAuthenticationStatus();
+            }
+            
+            return false;
+        }
+
+        // Initialize authentication state
+        async function initializeAuth() {
+            // Clean up any old localStorage tokens since we now use sessions
+            localStorage.removeItem('authToken');
+            
+            // Handle auth callback first
+            const callbackHandled = await handleAuthCallback();
+            
+            if (!callbackHandled) {
+                // Check existing session
+                const isAuthenticated = await checkAuthenticationStatus();
+                
+                // If OIDC is enabled and we're not authenticated, redirect to login
+                if (authEnabled && !isAuthenticated) {
+                    console.log('OIDC enabled but not authenticated, redirecting to login');
+                    setTimeout(() => {
+                        window.location.href = '/auth/login';
+                    }, 500); // Small delay to prevent rapid redirects
+                    return;
+                }
+            }
+        }
+
+        // Secure logout function
+        async function logout() {
+            if (!authEnabled) {
+                console.log('OIDC not enabled, no logout needed');
+                return;
+            }
+            
+            try {
+                // Call the logout endpoint (no auth header needed - uses session)
+                await fetch('/auth/logout', { 
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+            
+            // Clear local state
+            userInfo = null;
+            
+            // Hide logout button
+            const authControls = document.getElementById('auth-controls');
+            if (authControls) {
+                authControls.style.display = 'none';
+            }
+            
+            // Redirect to login
+            window.location.href = '/auth/login';
+        }
+
+        // Enhanced loadInventory with better error handling
         async function loadInventory() {
             try {
-                const headers = {};
-                if (authToken) {
-                    headers['Authorization'] = `Bearer ${authToken}`;
-                }
-                
-                const response = await fetch('/api/v1/inventory', { headers });
+                const response = await fetch('/api/v1/inventory', { 
+                    credentials: 'same-origin'  // Use session cookies for auth
+                });
                 
                 if (response.status === 401) {
-                    showError('Authentication required. Please configure authentication.');
-                    return;
+                    // Token is invalid - try to refresh auth state
+                    if (authEnabled) {
+                        console.log('Token invalid, checking auth state');
+                        const isAuthenticated = await checkAuthenticationStatus();
+                        
+                        if (!isAuthenticated) {
+                            console.log('Not authenticated, redirecting to login');
+                            setTimeout(() => {
+                                window.location.href = '/auth/login';
+                            }, 1000);
+                            return;
+                        }
+                        
+                        // If we're authenticated now, retry the request
+                        return loadInventory();
+                    } else {
+                        showError('Authentication required. Please configure authentication.');
+                        return;
+                    }
                 }
                 
                 if (!response.ok) {
@@ -285,6 +448,9 @@
                 showError('Failed to load inventory: ' + error.message);
             }
         }
+
+        // Call initializeAuth when page loads
+        document.addEventListener('DOMContentLoaded', initializeAuth);
         
         function renderHosts(hosts) {
             const container = document.getElementById('hosts-content');
@@ -361,9 +527,6 @@
             btn.disabled = false;
             btn.textContent = '🔄 Refresh';
         }
-        
-        // Load inventory on page load
-        loadInventory();
         
         // Auto-refresh every 30 seconds
         setInterval(loadInventory, 30000);
