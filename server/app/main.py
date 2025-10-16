@@ -89,7 +89,9 @@ async def security_and_audit_middleware(request: Request, call_next):
             "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
-            "connect-src 'self'"
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'"
         )
         
         # Add HSTS in production
@@ -118,9 +120,9 @@ async def security_and_audit_middleware(request: Request, call_next):
 # Use secure session configuration for production
 session_secret = settings.session_secret_key
 if not session_secret:
-    # For development: use a consistent secret that doesn't change between restarts
-    session_secret = "aether-v-dev-session-secret-key-123456789"
-    logger.warning("Using development session secret - set SESSION_SECRET_KEY for production")
+    # Generate a secure random secret for this session (will require re-login on restart)
+    session_secret = secrets.token_urlsafe(32)
+    logger.warning("Generated temporary session secret - set SESSION_SECRET_KEY environment variable for production")
 
 app.add_middleware(
     SessionMiddleware,

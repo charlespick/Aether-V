@@ -1,4 +1,5 @@
 """API route handlers."""
+import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse
@@ -291,37 +292,60 @@ async def auth_callback(request: Request):
 @router.get("/auth/token", tags=["Authentication"])
 async def get_auth_token(request: Request):
     """Get authentication status from session."""
+    from fastapi import Response
+    
     if not settings.auth_enabled:
-        return {"authenticated": False, "reason": "Authentication disabled"}
-    
-    user_info = request.session.get("user_info")
-    
-    if not user_info or not user_info.get("authenticated"):
-        return {"authenticated": False, "reason": "No session"}
-    
-    # Check if session is still valid (within reasonable time)
-    try:
-        auth_timestamp = user_info.get("auth_timestamp")
-        if auth_timestamp:
-            from datetime import datetime, timedelta
-            auth_time = datetime.fromisoformat(auth_timestamp)
-            if datetime.now() - auth_time > timedelta(hours=24):
-                # Session too old
-                request.session.pop("user_info", None)
-                return {"authenticated": False, "reason": "Session expired"}
+        response_data = {"authenticated": False, "reason": "Authentication disabled"}
+    else:
+        user_info = request.session.get("user_info")
         
-        return {
-            "authenticated": True,
-            "user": {
-                "sub": user_info.get("sub"),
-                "preferred_username": user_info.get("preferred_username"),
-                "roles": user_info.get("roles", [])
-            }
+        if not user_info or not user_info.get("authenticated"):
+            response_data = {"authenticated": False, "reason": "No session"}
+        else:
+            # Check if session is still valid (within reasonable time)
+            try:
+                auth_timestamp = user_info.get("auth_timestamp")
+                if auth_timestamp:
+                    from datetime import datetime, timedelta
+                    auth_time = datetime.fromisoformat(auth_timestamp)
+                    if datetime.now() - auth_time > timedelta(hours=24):
+                        # Session too old
+                        request.session.pop("user_info", None)
+                        response_data = {"authenticated": False, "reason": "Session expired"}
+                    else:
+                        response_data = {
+                            "authenticated": True,
+                            "user": {
+                                "sub": user_info.get("sub"),
+                                "preferred_username": user_info.get("preferred_username"),
+                                "roles": user_info.get("roles", [])
+                            }
+                        }
+                else:
+                    response_data = {
+                        "authenticated": True,
+                        "user": {
+                            "sub": user_info.get("sub"),
+                            "preferred_username": user_info.get("preferred_username"),
+                            "roles": user_info.get("roles", [])
+                        }
+                    }
+            except Exception as e:
+                # Session is invalid, clear it
+                request.session.pop("user_info", None)
+                response_data = {"authenticated": False, "reason": f"Session error: {str(e)}"}
+    
+    # Create response with cache control headers
+    response = Response(
+        content=json.dumps(response_data),
+        media_type="application/json",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
         }
-    except Exception as e:
-        # Session is invalid, clear it
-        request.session.pop("user_info", None)
-        return {"authenticated": False, "reason": f"Session error: {str(e)}"}
+    )
+    return response
 
 
 @router.post("/auth/logout", tags=["Authentication"])

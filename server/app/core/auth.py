@@ -58,7 +58,7 @@ class JWKSCache:
                 # Security: validate each key has required fields
                 for key in new_keys['keys']:
                     if not key.get('kty') or not key.get('use') or not key.get('kid'):
-                        logger.error(f"Invalid JWK structure: {key.get('kid', 'unknown')}")
+                        logger.error("Invalid JWK structure: missing required fields (kty, use, or kid)")
                         raise ValueError("Invalid JWK structure")
                     
                 self._keys = new_keys
