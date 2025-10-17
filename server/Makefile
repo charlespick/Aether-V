@@ -22,10 +22,10 @@ dev:
 	@./dev.sh
 
 build:
-	docker build -t aetherv-orchestrator:latest .
+	cd .. && docker build -f server/Dockerfile -t aetherv:latest .
 
 run:
-	docker run -p 8000:8000 --env-file .env aetherv-orchestrator:latest
+	docker run -p 8000:8000 --env-file .env aetherv:latest
 
 test:
 	@echo "Tests not yet implemented"

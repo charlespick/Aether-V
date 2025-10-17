@@ -2,7 +2,7 @@
 import logging
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException, status
+from fastapi import FastAPI, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -31,15 +31,15 @@ async def lifespan(app: FastAPI):
     logger.info(f"Version: {settings.app_version}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
-    
+
     # Start services
     job_service.start()
     await inventory_service.start()
-    
+
     logger.info("Application started successfully")
-    
+
     yield
-    
+
     # Shutdown services
     logger.info("Shutting down application")
     await inventory_service.stop()
@@ -55,32 +55,32 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Add security headers and audit logging middleware
+
+
 @app.middleware("http")
 async def security_and_audit_middleware(request: Request, call_next):
     """Add security headers and comprehensive audit logging."""
     start_time = time.time()
-    
+
     # Log incoming request (audit trail)
     client_ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
-    
+
     # Don't log sensitive headers
-    safe_headers = {k: v for k, v in request.headers.items() 
-                   if k.lower() not in ['authorization', 'cookie', 'x-api-key']}
-    
+    safe_headers = {k: v for k, v in request.headers.items()
+                    if k.lower() not in ['authorization', 'cookie', 'x-api-key']}
+
     logger.info(
         f"Request started: {request.method} {request.url.path} "
         f"from {client_ip} UA: {user_agent[:100]}"
     )
-    
+
     try:
         response = await call_next(request)
-        
 
-        
         # Add security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -95,20 +95,20 @@ async def security_and_audit_middleware(request: Request, call_next):
             "frame-ancestors 'none'; "
             "base-uri 'self'"
         )
-        
+
         # Add HSTS in production
         if settings.oidc_force_https:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        
+
         # Audit logging (success)
         process_time = time.time() - start_time
         logger.info(
             f"Request completed: {request.method} {request.url.path} "
             f"Status: {response.status_code} Time: {process_time:.4f}s"
         )
-        
+
         return response
-        
+
     except Exception as e:
         # Audit logging (error)
         process_time = time.time() - start_time
@@ -124,7 +124,8 @@ session_secret = settings.session_secret_key
 if not session_secret:
     # Generate a secure random secret for this session (will require re-login on restart)
     session_secret = secrets.token_urlsafe(32)
-    logger.warning("Generated temporary session secret - set SESSION_SECRET_KEY environment variable for production")
+    logger.warning(
+        "Generated temporary session secret - set SESSION_SECRET_KEY environment variable for production")
 
 app.add_middleware(
     SessionMiddleware,
@@ -151,25 +152,25 @@ async def root(request: Request):
         # Check authentication status
         auth_param = request.query_params.get("auth")
         session_user = request.session.get("user_info")
-        
+
         if session_user and session_user.get("authenticated"):
             username = session_user.get("preferred_username", "unknown")
             logger.info(f"Authenticated request from user: {username}")
-        
+
         # Always serve the page - let the frontend handle authentication state
         # This prevents redirect loops and allows graceful token handling
         response = templates.TemplateResponse("index.html", {
-            "request": request, 
+            "request": request,
             "auth_enabled": settings.auth_enabled
         })
-        
+
         # Add cache headers to prevent caching issues
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
-        
+
         return response
-        
+
     except Exception as e:
         logger.error(f"Error in root route: {type(e).__name__}: {e}")
         # Return a minimal HTML response to prevent 502 errors

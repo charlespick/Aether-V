@@ -81,10 +81,9 @@
 	
 	// Use 'postCreateCommand' to run commands after the container is created
 	"postCreateCommand": {
-		"install-requirements": "cd /workspaces/HLVMM/server && pip install -r requirements.txt",
-		"build-isos": "cd /workspaces/HLVMM && pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath server/artifacts/isos || echo 'ISO build failed - continuing without ISOs'",
-		"copy-scripts": "cp -r /workspaces/HLVMM/Powershell /workspaces/HLVMM/server/artifacts/scripts/ || echo 'Script copy failed - continuing'",
-		"copy-version": "cp /workspaces/HLVMM/version /workspaces/HLVMM/server/artifacts/ || echo 'Version copy failed - continuing'",
+		"build-isos": "cd /workspaces/HLVMM && pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs || echo 'ISO build failed - continuing without ISOs'",
+		"build-docker-image": "cd /workspaces/HLVMM && docker build -f server/Dockerfile -t aetherv .",
+		"setup-git-safe": "git config --global --add safe.directory /workspaces/HLVMM",
 		"create-env": "cd /workspaces/HLVMM/server && [ ! -f .env ] && cp .env.example .env || echo '.env already exists'"
 	},
 	
@@ -100,7 +99,6 @@
 	
 	// Configure mounts for better performance and persistence
 	"mounts": [
-		"source=hlvmm-venv,target=/workspaces/HLVMM/server/venv,type=volume",
 		"source=hlvmm-pip-cache,target=/home/vscode/.cache/pip,type=volume"
 	],
 	
