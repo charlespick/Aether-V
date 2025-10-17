@@ -55,6 +55,8 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # Add security headers and audit logging middleware
 @app.middleware("http")
 async def security_and_audit_middleware(request: Request, call_next):
