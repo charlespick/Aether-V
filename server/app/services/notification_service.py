@@ -148,11 +148,13 @@ class NotificationService:
         self.notifications[notification.id] = notification
         logger.info(
             f"Created notification: {notification.title} ({notification.level})")
-        
+
         # Broadcast notification via WebSocket
         if self._websocket_manager:
-            asyncio.create_task(self._broadcast_notification(notification))
-        
+            task = asyncio.create_task(
+                self._broadcast_notification(notification))
+            task.add_done_callback(self._handle_broadcast_task_exception)
+
         return notification
 
     async def _broadcast_notification(self, notification: Notification):
@@ -174,6 +176,15 @@ class NotificationService:
             }, topic="notifications")
         except Exception as e:
             logger.error(f"Error broadcasting notification via WebSocket: {e}")
+
+    def _handle_broadcast_task_exception(self, task):
+        """Handle exceptions from broadcast tasks."""
+        try:
+            exception = task.exception()
+            if exception:
+                logger.error(f"Exception in broadcast task: {exception}")
+        except Exception as e:
+            logger.error(f"Error handling broadcast task exception: {e}")
 
     def create_host_unreachable_notification(self, hostname: str, error: str) -> Notification:
         """Create a notification for when a host becomes unreachable."""
@@ -247,11 +258,13 @@ class NotificationService:
         if notification:
             notification.read = True
             logger.info(f"Marked notification {notification_id} as read")
-            
+
             # Broadcast update via WebSocket
             if self._websocket_manager:
-                asyncio.create_task(self._broadcast_notification_update(notification))
-            
+                task = asyncio.create_task(
+                    self._broadcast_notification_update(notification))
+                task.add_done_callback(self._handle_broadcast_task_exception)
+
             return True
         return False
 
@@ -267,7 +280,8 @@ class NotificationService:
                 }
             }, topic="notifications")
         except Exception as e:
-            logger.error(f"Error broadcasting notification update via WebSocket: {e}")
+            logger.error(
+                f"Error broadcasting notification update via WebSocket: {e}")
 
     def mark_all_read(self) -> int:
         """Mark all notifications as read. Returns count of notifications marked."""

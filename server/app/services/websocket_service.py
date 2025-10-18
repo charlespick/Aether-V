@@ -14,7 +14,8 @@ class ConnectionManager:
 
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
-        self.subscriptions: Dict[str, Set[str]] = {}  # client_id -> set of topics
+        # client_id -> set of topics
+        self.subscriptions: Dict[str, Set[str]] = {}
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, client_id: str) -> bool:
@@ -25,7 +26,7 @@ class ConnectionManager:
                 self.active_connections[client_id] = websocket
                 self.subscriptions[client_id] = set()
             logger.info(f"WebSocket client connected: {client_id}")
-            
+
             # Send welcome message
             await self.send_personal_message(client_id, {
                 "type": "connection",
@@ -34,8 +35,16 @@ class ConnectionManager:
                 "timestamp": datetime.utcnow().isoformat()
             })
             return True
+        except ConnectionError as e:
+            logger.error(
+                f"WebSocket connection error for client {client_id}: {e}")
+            return False
+        except ValueError as e:
+            logger.error(f"WebSocket value error for client {client_id}: {e}")
+            return False
         except Exception as e:
-            logger.error(f"Error connecting WebSocket client {client_id}: {e}")
+            logger.error(
+                f"Unexpected error connecting WebSocket client {client_id}: {e}")
             return False
 
     async def disconnect(self, client_id: str):
@@ -74,10 +83,10 @@ class ConnectionManager:
     async def broadcast(self, message: dict, topic: Optional[str] = None):
         """Broadcast a message to all connected clients or clients subscribed to a topic."""
         disconnected_clients = []
-        
+
         async with self._lock:
             clients_to_send = []
-            
+
             if topic:
                 # Send only to clients subscribed to this topic
                 for client_id, topics in self.subscriptions.items():
@@ -86,7 +95,7 @@ class ConnectionManager:
             else:
                 # Send to all clients
                 clients_to_send = list(self.active_connections.keys())
-            
+
             # Send messages outside the lock to avoid blocking
             for client_id in clients_to_send:
                 websocket = self.active_connections.get(client_id)
@@ -96,7 +105,7 @@ class ConnectionManager:
                     except Exception as e:
                         logger.error(f"Error broadcasting to {client_id}: {e}")
                         disconnected_clients.append(client_id)
-        
+
         # Clean up disconnected clients
         for client_id in disconnected_clients:
             await self.disconnect(client_id)
@@ -107,9 +116,21 @@ class ConnectionManager:
             return len(self.active_connections)
 
     async def handle_client_message(self, client_id: str, message: dict):
-        """Handle incoming messages from clients."""
+        """Handle incoming messages from clients with validation."""
+        # Validate message structure
+        if not isinstance(message, dict):
+            logger.warning(
+                f"Invalid message type from client {client_id}: {type(message)}")
+            return
+
         message_type = message.get("type")
-        
+        if not message_type or not isinstance(message_type, str):
+            logger.warning(
+                f"Invalid or missing message type from client {client_id}")
+            return
+
+        # Rate limiting could be added here by tracking message counts per client
+
         if message_type == "subscribe":
             topics = message.get("topics", [])
             await self.subscribe(client_id, topics)
@@ -118,7 +139,7 @@ class ConnectionManager:
                 "status": "subscribed",
                 "topics": topics
             })
-        
+
         elif message_type == "unsubscribe":
             topics = message.get("topics", [])
             await self.unsubscribe(client_id, topics)
@@ -127,7 +148,7 @@ class ConnectionManager:
                 "status": "unsubscribed",
                 "topics": topics
             })
-        
+
         elif message_type == "ping":
             await self.send_personal_message(client_id, {
                 "type": "pong",

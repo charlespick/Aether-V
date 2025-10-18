@@ -431,26 +431,28 @@ async def websocket_endpoint(websocket: WebSocket):
     client_id = str(uuid.uuid4())
     client_ip = websocket.client.host if websocket.client else "unknown"
     connection_start = datetime.utcnow()
-    MAX_CONNECTION_TIME = 1800  # 30 minutes in seconds
-    
+    MAX_CONNECTION_TIME = settings.websocket_timeout
+
     try:
-        # Authenticate using existing mechanisms
-        user = await authenticate_websocket_simple(websocket)
-        
+        # Authenticate the WebSocket connection
+        user = await authenticate_websocket(websocket)
+
         if not user:
             await websocket.close(code=1008, reason="Authentication required")
-            logger.warning(f"WebSocket authentication failed for client from {client_ip}")
+            logger.warning(
+                f"WebSocket authentication failed for client from {client_ip}")
             return
-        
+
         username = user.get("preferred_username", user.get("sub", "unknown"))
-        logger.info(f"WebSocket authenticated for user {username} from {client_ip}")
-        
+        logger.info(
+            f"WebSocket authenticated for user {username} from {client_ip}")
+
         # Accept and register with connection manager
         connected = await websocket_manager.connect(websocket, client_id)
-        
+
         if not connected:
             return
-        
+
         # Send initial state
         try:
             notifications = notification_service.get_all_notifications()
@@ -475,17 +477,19 @@ async def websocket_endpoint(websocket: WebSocket):
             })
         except Exception as e:
             logger.error(f"Error sending initial state to {client_id}: {e}")
-        
+
         # Listen for messages from client
         while True:
             try:
                 # Check connection time limit
-                connection_age = (datetime.utcnow() - connection_start).total_seconds()
+                connection_age = (datetime.utcnow() -
+                                  connection_start).total_seconds()
                 if connection_age > MAX_CONNECTION_TIME:
-                    logger.info(f"WebSocket connection time limit reached for {client_id} ({username})")
+                    logger.info(
+                        f"WebSocket connection time limit reached for {client_id} ({username})")
                     await websocket.close(code=1000, reason="Connection time limit reached")
                     break
-                
+
                 data = await websocket.receive_json()
                 await websocket_manager.handle_client_message(client_id, data)
             except WebSocketDisconnect:
@@ -494,91 +498,99 @@ async def websocket_endpoint(websocket: WebSocket):
             except Exception as e:
                 logger.error(f"Error processing message from {client_id}: {e}")
                 break
-    
+
     except Exception as e:
-        logger.error(f"WebSocket error for client {client_id} from {client_ip}: {e}")
-    
+        logger.error(
+            f"WebSocket error for client {client_id} from {client_ip}: {e}")
+
     finally:
         await websocket_manager.disconnect(client_id)
 
 
-async def authenticate_websocket_simple(websocket: WebSocket) -> Optional[dict]:
+async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
     """
-    Authenticate WebSocket using existing auth mechanisms - no custom token system.
-    
-    For browser clients: Use session cookies (same as REST API)
-    For API clients: Use OIDC JWT or static API token in query parameter
-    
-    Returns user info dict if authenticated, None otherwise.
+    Authenticate WebSocket using shared authentication logic.
+
+    Since FastAPI's Depends() doesn't work with WebSocket endpoints,
+    we use the shared auth functions from the auth module for consistency.
     """
-    from ..core.auth import validate_oidc_token, extract_user_roles
-    
+    from ..core.auth import authenticate_with_token, validate_session_data, get_dev_user
+    from http.cookies import SimpleCookie
+
     client_ip = websocket.client.host if websocket.client else "unknown"
-    
+
     # Development mode: no authentication required
     if not settings.auth_enabled:
         if not settings.allow_dev_auth:
-            logger.error(f"Auth disabled but ALLOW_DEV_AUTH not set - WebSocket denied from {client_ip}")
+            logger.error(
+                f"Auth disabled but ALLOW_DEV_AUTH not set - WebSocket denied from {client_ip}")
             return None
-        logger.warning(f"WebSocket authentication disabled - dev mode access from {client_ip}")
-        return {"sub": "dev-user", "roles": [settings.oidc_role_name], "auth_type": "dev"}
-    
+        logger.warning(
+            f"WebSocket authentication disabled - dev mode access from {client_ip}")
+        return get_dev_user()
+
     # Try session authentication first (for browser clients)
-    # Note: Session cookie is automatically included in WebSocket upgrade request
+    # WebSocket upgrade request includes cookies automatically
     try:
-        # Access session from cookies if available
-        # The session middleware should have already processed the cookies
-        # We can check if there's a valid session by looking at the cookies
         cookie_header = websocket.headers.get("cookie", "")
-        if cookie_header and "session" in cookie_header:
-            # For simplicity, we'll validate via the session cookie being present
-            # The actual session validation happens at the middleware level
-            # Here we just check if there's a session indicator
-            logger.debug(f"WebSocket has session cookie from {client_ip}")
-            # In a full implementation, you'd decode the session cookie here
-            # For now, we'll assume if there's a session cookie and auth is enabled,
-            # the user is authenticated via the web UI
-            # This is a simplification - in production you'd want to properly validate the session
+        if cookie_header:
+            # Parse cookies properly using SimpleCookie
+            cookies = SimpleCookie()
+            cookies.load(cookie_header)
+
+            # Look for session cookie
+            session_cookie = None
+            for morsel in cookies.values():
+                if morsel.key == "session":
+                    session_cookie = morsel.value
+                    break
+
+            if session_cookie:
+                # Decode session cookie to get session data
+                try:
+                    from itsdangerous import URLSafeTimedSerializer
+
+                    if settings.session_secret_key:
+                        serializer = URLSafeTimedSerializer(
+                            settings.session_secret_key)
+                        # Decode session data (will raise exception if invalid/expired)
+                        session_data = serializer.loads(
+                            session_cookie, max_age=3600*24)
+
+                        # Use shared session validation logic
+                        user = validate_session_data(session_data, client_ip)
+                        if user:
+                            username = user.get(
+                                'preferred_username', 'unknown')
+                            logger.info(
+                                f"WebSocket session authentication successful for {username} from {client_ip}")
+                            return user
+                    else:
+                        logger.warning(
+                            f"Session secret not configured - cannot validate WebSocket session from {client_ip}")
+
+                except Exception as session_error:
+                    logger.debug(
+                        f"WebSocket session validation failed from {client_ip}: {session_error}")
+
     except Exception as e:
-        logger.debug(f"Error checking session for WebSocket from {client_ip}: {e}")
-    
-    # Try token from query parameter (for API clients or browser fallback)
+        logger.debug(f"Error parsing WebSocket cookies from {client_ip}: {e}")
+
+    # Try token from query parameter (for API clients)
     token = websocket.query_params.get("token")
-    
     if token:
-        # Try static API token authentication
-        if settings.api_token and token == settings.api_token:
-            logger.info(f"WebSocket API token authentication successful from {client_ip}")
-            return {
-                "sub": "api-service",
-                "roles": [settings.oidc_role_name],
-                "auth_type": "api_token",
-                "preferred_username": "api-service"
-            }
-        
-        # Try OIDC JWT token validation
-        if settings.oidc_issuer_url:
-            try:
-                user_info = await validate_oidc_token(token)
-                user_roles = extract_user_roles(user_info)
-                
-                # Check role requirements
-                if settings.oidc_role_name and settings.oidc_role_name != "*":
-                    if settings.oidc_role_name not in user_roles:
-                        username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
-                        logger.warning(f"WebSocket user {username} from {client_ip} lacks required role")
-                        return None
-                
-                user_info["auth_type"] = "oidc"
-                user_info["roles"] = user_roles
-                
-                username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
-                logger.info(f"WebSocket OIDC authentication successful for {username} from {client_ip}")
-                return user_info
-                
-            except Exception as e:
-                logger.error(f"WebSocket OIDC token validation failed from {client_ip}: {e}")
-                return None
-    
-    logger.warning(f"WebSocket authentication failed: no valid credentials from {client_ip}")
+        try:
+            # Use shared token authentication logic
+            user = await authenticate_with_token(token, client_ip)
+            if user:
+                username = user.get('preferred_username', 'api-service')
+                logger.info(
+                    f"WebSocket token authentication successful for {username} from {client_ip}")
+                return user
+        except Exception as e:
+            logger.error(
+                f"WebSocket token authentication failed from {client_ip}: {e}")
+
+    logger.warning(
+        f"WebSocket authentication failed: no valid credentials from {client_ip}")
     return None

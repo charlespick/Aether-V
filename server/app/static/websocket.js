@@ -14,7 +14,13 @@ class WebSocketClient {
         this.messageHandlers = new Map();
         this.connectionStatusCallbacks = [];
         this.subscriptions = new Set();
-        this.connectionRefreshTime = 25 * 60 * 1000; // 25 minutes (less than server's 30 min limit)
+        
+        // Get configuration from server
+        const configElement = document.getElementById('config-data');
+        const config = configElement ? JSON.parse(configElement.textContent) : {};
+        
+        this.connectionRefreshTime = config.websocket_refresh_time || (25 * 60 * 1000); // Default 25 minutes
+        this.pingIntervalTime = config.websocket_ping_interval || 30000; // Default 30 seconds
     }
 
     connect() {
@@ -123,12 +129,12 @@ class WebSocketClient {
 
     startPingInterval() {
         this.stopPingInterval();
-        // Send ping every 30 seconds to keep connection alive
+        // Send ping to keep connection alive
         this.pingInterval = setInterval(() => {
             if (this.connected) {
                 this.send({ type: 'ping' });
             }
-        }, 30000);
+        }, this.pingIntervalTime);
     }
 
     stopPingInterval() {

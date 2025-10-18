@@ -36,10 +36,10 @@ async def lifespan(app: FastAPI):
 
     # Start services
     await notification_service.start()
-    
+
     # Connect WebSocket manager to notification service
     notification_service.set_websocket_manager(websocket_manager)
-    
+
     job_service.start()
     await inventory_service.start()
 
@@ -169,7 +169,11 @@ async def root(request: Request):
         # This prevents redirect loops and allows graceful token handling
         response = templates.TemplateResponse("index.html", {
             "request": request,
-            "auth_enabled": settings.auth_enabled
+            "auth_enabled": settings.auth_enabled,
+            # Convert to milliseconds
+            "websocket_refresh_time": settings.websocket_refresh_time * 1000,
+            # Convert to milliseconds
+            "websocket_ping_interval": settings.websocket_ping_interval * 1000
         })
 
         # Add cache headers to prevent caching issues
