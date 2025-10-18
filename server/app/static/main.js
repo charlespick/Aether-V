@@ -793,6 +793,7 @@ setInterval(refreshInventory, 30000);
 class SearchOverlay {
     constructor() {
         this.isOpen = false;
+        this.suppressNextOpen = false;
         this.overlayElement = null;
         this.expandoElement = null;
         this.originRect = null;
@@ -1132,6 +1133,7 @@ class SearchOverlay {
 
     open() {
         if (this.isOpen) return;
+        this.suppressNextOpen = false;
         this.isOpen = true;
         
         const originalInput = document.querySelector('#global-search');
@@ -1192,6 +1194,7 @@ class SearchOverlay {
     close() {
         if (!this.isOpen) return;
         this.isOpen = false;
+        this.suppressNextOpen = true;
 
         const originalInput = document.querySelector('#global-search');
         const expandoInput = this.overlayElement.querySelector('.search-expando-input');
@@ -1236,7 +1239,14 @@ class SearchOverlay {
         if (content) content.innerHTML = this.renderEmptyState();
 
         // Return focus to original input
-        if (originalInput) originalInput.focus();
+        if (originalInput) {
+            originalInput.focus();
+            setTimeout(() => {
+                this.suppressNextOpen = false;
+            }, 0);
+        } else {
+            this.suppressNextOpen = false;
+        }
     }
 
     destroy() {
@@ -1278,6 +1288,15 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Handle focus on search input - redirect to overlay
         searchBox.addEventListener('focus', (e) => {
+            if (searchOverlay.isOpen) {
+                return;
+            }
+
+            if (searchOverlay.suppressNextOpen) {
+                searchOverlay.suppressNextOpen = false;
+                return;
+            }
+
             e.preventDefault();
             searchBox.blur();
             searchOverlay.open();
@@ -1285,6 +1304,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Handle typing in original search box - redirect to overlay
         searchBox.addEventListener('keydown', (e) => {
+            if (searchOverlay.suppressNextOpen) {
+                searchOverlay.suppressNextOpen = false;
+                return;
+            }
+
             e.preventDefault();
             searchOverlay.open();
             // After opening, transfer the typed character to the overlay input
