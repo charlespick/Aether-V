@@ -793,6 +793,7 @@ setInterval(refreshInventory, 30000);
 class SearchOverlay {
     constructor() {
         this.isOpen = false;
+        this.suppressNextOpen = false;
         this.overlayElement = null;
         this.expandoElement = null;
         this.originRect = null;
@@ -901,45 +902,75 @@ class SearchOverlay {
     updateExpandedPosition() {
         if (!this.originRect) return;
         
-        // Get CSS variables
         const rootStyles = getComputedStyle(document.documentElement);
-        const paddingRem = parseFloat(rootStyles.getPropertyValue('--overlay-padding')) || 1.5;
-        const paddingPx = paddingRem * 16; // Convert rem to px
-        
-        // Calculate target dimensions based on original search box
-        const extraWidth = paddingPx * 2; // Padding on both sides
-        const minWidth = Math.min(this.originRect.width + extraWidth, window.innerWidth - 32);
-        const maxWidth = Math.min(600, window.innerWidth - 32); // Max width for larger screens
-        const targetWidth = Math.max(minWidth, maxWidth);
-        
-        // Center horizontally over the original search box
-        let targetLeft = this.originRect.left + (this.originRect.width / 2) - (targetWidth / 2);
-        
-        // Ensure we don't go off-screen
-        targetLeft = Math.max(16, Math.min(targetLeft, window.innerWidth - targetWidth - 16));
-        
-        // Height calculation - should hug content
-        const maxViewportHeight = window.innerHeight * 0.6;
-        const headerHeight = 36 + (paddingPx * 2); // Header + top/bottom padding
-        const resultsElement = this.expandoElement.querySelector('.search-expando-results');
-        let contentHeight = 80; // Minimum height for empty state
-        
-        if (resultsElement) {
-            // Get the actual content height
-            const children = Array.from(resultsElement.children);
-            if (children.length > 0) {
-                // Calculate total height of all child elements
-                contentHeight = children.reduce((total, child) => {
-                    const rect = child.getBoundingClientRect();
-                    return total + rect.height;
-                }, 0) + (paddingPx * 2); // Add padding
-                
-                // Add some margin between sections
-                contentHeight += (children.length - 1) * 8;
-            }
+        const rawGap = rootStyles.getPropertyValue('--search-overlay-gap').trim();
+        const rootFontSize = parseFloat(rootStyles.fontSize) || 16;
+        let paddingPx = parseFloat(rawGap);
+
+        if (Number.isNaN(paddingPx)) {
+            paddingPx = 12;
+        } else if (rawGap.endsWith('rem')) {
+            paddingPx = paddingPx * rootFontSize;
         }
-        
-        const targetHeight = Math.min(maxViewportHeight, headerHeight + contentHeight);
+
+        // Ensure CSS variable stays in sync for nested rules
+        this.expandoElement.style.setProperty('--search-overlay-gap', `${paddingPx}px`);
+
+        const viewportPadding = 16;
+
+        // Calculate target dimensions based on original search box
+        let targetWidth = this.originRect.width + paddingPx * 2;
+        const maxWidth = window.innerWidth - viewportPadding * 2;
+        if (targetWidth > maxWidth) {
+            targetWidth = maxWidth;
+        }
+
+        // Keep overlay growing from original pill
+        let targetLeft = this.originRect.left - paddingPx;
+        const maxLeft = window.innerWidth - targetWidth - viewportPadding;
+        const minLeft = viewportPadding;
+        if (targetLeft < minLeft) {
+            targetLeft = minLeft;
+        }
+        if (targetLeft > maxLeft) {
+            targetLeft = Math.max(minLeft, maxLeft);
+        }
+
+        let targetTop = this.originRect.top - paddingPx;
+        if (targetTop < viewportPadding) {
+            targetTop = viewportPadding;
+        }
+
+        const headerElement = this.expandoElement.querySelector('.search-expando-header');
+        const headerHeight = headerElement ? headerElement.offsetHeight : this.originRect.height;
+        const resultsElement = this.expandoElement.querySelector('.search-expando-results');
+
+        let resultsHeight = 0;
+        let resultsMargin = 0;
+        if (resultsElement) {
+            resultsHeight = resultsElement.scrollHeight;
+            const resultsStyles = getComputedStyle(resultsElement);
+            const marginTop = parseFloat(resultsStyles.marginTop) || 0;
+            const marginBottom = parseFloat(resultsStyles.marginBottom) || 0;
+            resultsMargin = marginTop + marginBottom;
+        }
+
+        const minHeight = headerHeight + paddingPx * 2;
+        const availableHeight = Math.max(window.innerHeight - targetTop - viewportPadding, minHeight);
+        const naturalHeight = headerHeight + resultsHeight + paddingPx * 2 + resultsMargin;
+        let targetHeight = Math.min(naturalHeight, availableHeight);
+
+        if (availableHeight >= minHeight) {
+            targetHeight = Math.max(targetHeight, minHeight);
+        } else {
+            targetHeight = availableHeight;
+        }
+
+        const interiorHeight = Math.max(targetHeight - (paddingPx * 2) - headerHeight - resultsMargin, 0);
+
+        if (resultsElement) {
+            resultsElement.style.maxHeight = `${interiorHeight}px`;
+        }
 
         // Calculate concentric border radius
         const originalInput = document.querySelector('.search-container .search');
@@ -952,7 +983,7 @@ class SearchOverlay {
 
         this.expandoElement.style.left = targetLeft + 'px';
         this.expandoElement.style.width = targetWidth + 'px';
-        this.expandoElement.style.top = this.originRect.top + 'px';
+        this.expandoElement.style.top = targetTop + 'px';
         this.expandoElement.style.height = targetHeight + 'px';
         this.expandoElement.style.borderRadius = concentricRadius + 'px';
     }
@@ -977,7 +1008,10 @@ class SearchOverlay {
     async performSearch(query) {
         if (!query.trim()) {
             const content = this.overlayElement.querySelector('.search-expando-results');
-            if (content) content.innerHTML = this.renderEmptyState();
+            if (content) {
+                content.innerHTML = this.renderEmptyState();
+                requestAnimationFrame(() => this.updateExpandedPosition());
+            }
             return;
         }
 
@@ -1094,10 +1128,12 @@ class SearchOverlay {
         html += '</div>';
 
         content.innerHTML = html;
+        requestAnimationFrame(() => this.updateExpandedPosition());
     }
 
     open() {
         if (this.isOpen) return;
+        this.suppressNextOpen = false;
         this.isOpen = true;
         
         const originalInput = document.querySelector('#global-search');
@@ -1158,6 +1194,7 @@ class SearchOverlay {
     close() {
         if (!this.isOpen) return;
         this.isOpen = false;
+        this.suppressNextOpen = true;
 
         const originalInput = document.querySelector('#global-search');
         const expandoInput = this.overlayElement.querySelector('.search-expando-input');
@@ -1202,7 +1239,14 @@ class SearchOverlay {
         if (content) content.innerHTML = this.renderEmptyState();
 
         // Return focus to original input
-        if (originalInput) originalInput.focus();
+        if (originalInput) {
+            originalInput.focus();
+            setTimeout(() => {
+                this.suppressNextOpen = false;
+            }, 0);
+        } else {
+            this.suppressNextOpen = false;
+        }
     }
 
     destroy() {
@@ -1244,6 +1288,15 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Handle focus on search input - redirect to overlay
         searchBox.addEventListener('focus', (e) => {
+            if (searchOverlay.isOpen) {
+                return;
+            }
+
+            if (searchOverlay.suppressNextOpen) {
+                searchOverlay.suppressNextOpen = false;
+                return;
+            }
+
             e.preventDefault();
             searchBox.blur();
             searchOverlay.open();
@@ -1251,6 +1304,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Handle typing in original search box - redirect to overlay
         searchBox.addEventListener('keydown', (e) => {
+            if (searchOverlay.suppressNextOpen) {
+                searchOverlay.suppressNextOpen = false;
+                return;
+            }
+
             e.preventDefault();
             searchOverlay.open();
             // After opening, transfer the typed character to the overlay input
