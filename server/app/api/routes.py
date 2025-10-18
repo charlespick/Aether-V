@@ -3,24 +3,22 @@ import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import RedirectResponse
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import secrets
 
 from ..core.models import (
     Host, VM, Job, VMCreateRequest, VMDeleteRequest,
-    InventoryResponse, HealthResponse
+    InventoryResponse, HealthResponse, NotificationsResponse
 )
 from ..core.auth import get_current_user, oauth
 from ..core.config import settings
 from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
+from ..services.notification_service import notification_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-
 
 
 @router.get("/healthz", response_model=HealthResponse, tags=["Health"])
@@ -42,7 +40,7 @@ async def readiness_check():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Inventory not yet initialized"
         )
-    
+
     return HealthResponse(
         status="ready",
         version=settings.app_version,
@@ -52,15 +50,21 @@ async def readiness_check():
 
 @router.get("/api/v1/inventory", response_model=InventoryResponse, tags=["Inventory"])
 async def get_inventory(user: dict = Depends(get_current_user)):
-    """Get complete inventory of hosts and VMs."""
-    hosts = inventory_service.get_all_hosts()
+    """Get complete inventory of clusters, hosts and VMs."""
+    clusters = inventory_service.get_all_clusters()
+    hosts = inventory_service.get_connected_hosts()
     vms = inventory_service.get_all_vms()
-    
+    disconnected_hosts = inventory_service.get_disconnected_hosts()
+
     return InventoryResponse(
+        clusters=clusters,
         hosts=hosts,
         vms=vms,
-        total_hosts=len(hosts),
+        disconnected_hosts=disconnected_hosts,
+        total_hosts=len(hosts) + len(disconnected_hosts),
         total_vms=len(vms),
+        total_clusters=len(clusters),
+        disconnected_count=len(disconnected_hosts),
         last_refresh=inventory_service.last_refresh
     )
 
@@ -87,13 +91,13 @@ async def list_vms(user: dict = Depends(get_current_user)):
 async def get_vm(hostname: str, vm_name: str, user: dict = Depends(get_current_user)):
     """Get details of a specific VM."""
     vm = inventory_service.get_vm(hostname, vm_name)
-    
+
     if not vm:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"VM {vm_name} not found on host {hostname}"
         )
-    
+
     return vm
 
 
@@ -107,15 +111,16 @@ async def create_vm(request: VMCreateRequest, user: dict = Depends(get_current_u
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Host {request.hyperv_host} not found"
         )
-    
+
     # Check if VM already exists
-    existing_vm = inventory_service.get_vm(request.hyperv_host, request.vm_name)
+    existing_vm = inventory_service.get_vm(
+        request.hyperv_host, request.vm_name)
     if existing_vm:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"VM {request.vm_name} already exists on host {request.hyperv_host}"
         )
-    
+
     # Create job
     job = job_service.create_vm_job(request)
     return job
@@ -131,7 +136,7 @@ async def delete_vm(request: VMDeleteRequest, user: dict = Depends(get_current_u
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"VM {request.vm_name} not found on host {request.hyperv_host}"
         )
-    
+
     # Create job
     job = job_service.delete_vm_job(request)
     return job
@@ -147,14 +152,70 @@ async def list_jobs(user: dict = Depends(get_current_user)):
 async def get_job(job_id: str, user: dict = Depends(get_current_user)):
     """Get job details."""
     job = job_service.get_job(job_id)
-    
+
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job {job_id} not found"
         )
-    
+
     return job
+
+
+@router.get("/api/v1/notifications", response_model=NotificationsResponse, tags=["Notifications"])
+async def get_notifications(
+    limit: Optional[int] = None,
+    unread_only: bool = False,
+    user: dict = Depends(get_current_user)
+):
+    """Get notifications."""
+    if unread_only:
+        notifications = notification_service.get_unread_notifications(limit)
+    else:
+        notifications = notification_service.get_all_notifications(limit)
+
+    return NotificationsResponse(
+        notifications=notifications,
+        total_count=notification_service.get_notification_count(),
+        unread_count=notification_service.get_unread_count()
+    )
+
+
+@router.put("/api/v1/notifications/{notification_id}/read", tags=["Notifications"])
+async def mark_notification_read(
+    notification_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """Mark a notification as read."""
+    success = notification_service.mark_notification_read(notification_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Notification {notification_id} not found"
+        )
+    return {"message": "Notification marked as read"}
+
+
+@router.put("/api/v1/notifications/mark-all-read", tags=["Notifications"])
+async def mark_all_notifications_read(user: dict = Depends(get_current_user)):
+    """Mark all notifications as read."""
+    count = notification_service.mark_all_read()
+    return {"message": f"Marked {count} notifications as read"}
+
+
+@router.delete("/api/v1/notifications/{notification_id}", tags=["Notifications"])
+async def delete_notification(
+    notification_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """Delete a notification."""
+    success = notification_service.delete_notification(notification_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Notification {notification_id} not found"
+        )
+    return {"message": "Notification deleted"}
 
 
 # OIDC Authentication routes
@@ -166,27 +227,28 @@ async def login(request: Request):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Authentication is disabled"
         )
-    
+
     if not oauth.oidc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="OIDC not configured"
         )
-    
+
     # Generate state parameter for security
     state = secrets.token_urlsafe(32)
-    
+
     # Store state in session (you might want to use a more robust session store)
     request.session["oauth_state"] = state
-    
+
     # Build redirect URI
     redirect_uri = settings.oidc_redirect_uri
     if not redirect_uri:
         # Auto-generate redirect URI
-        host = request.headers.get("host", str(request.base_url).split("://")[1])
+        host = request.headers.get("host", str(
+            request.base_url).split("://")[1])
         scheme = "https" if settings.oidc_force_https else request.url.scheme
         redirect_uri = f"{scheme}://{host}/auth/callback"
-    
+
     # Redirect to OIDC provider
     return await oauth.oidc.authorize_redirect(request, redirect_uri, state=state)
 
@@ -199,36 +261,37 @@ async def auth_callback(request: Request):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Authentication is disabled"
         )
-    
+
     if not oauth.oidc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="OIDC not configured"
         )
-    
+
     try:
         # Get the token from the callback
         token = await oauth.oidc.authorize_access_token(request)
-        
+
         # Verify state parameter (if stored in session)
         stored_state = request.session.get("oauth_state")
         received_state = request.query_params.get("state")
-        
+
         if stored_state and stored_state != received_state:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid state parameter"
             )
-        
+
         # Clear the state from session
         request.session.pop("oauth_state", None)
-        
+
         # Extract both tokens - use ID token for authentication, access token for API calls
         access_token = token.get("access_token")
         id_token = token.get("id_token")
-        
-        logger.info(f"OAuth callback received - access_token: {'present' if access_token else 'missing'}, id_token: {'present' if id_token else 'missing'}")
-        
+
+        logger.info(
+            f"OAuth callback received - access_token: {'present' if access_token else 'missing'}, id_token: {'present' if id_token else 'missing'}")
+
         # For OIDC authentication, we should validate the ID token, not the access token
         auth_token = id_token or access_token
         if not auth_token:
@@ -236,13 +299,14 @@ async def auth_callback(request: Request):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No authentication token received (neither id_token nor access_token)"
             )
-        
+
         # Validate the token before storing
         try:
             from ..core.auth import validate_oidc_token
-            logger.info(f"Attempting to validate {'ID token' if id_token else 'access token'}")
+            logger.info(
+                f"Attempting to validate {'ID token' if id_token else 'access token'}")
             user_info = await validate_oidc_token(auth_token)
-            
+
             # Check for required role
             user_roles = user_info.get("roles", [])
             if settings.oidc_role_name not in user_roles:
@@ -251,12 +315,13 @@ async def auth_callback(request: Request):
                     detail=f"User does not have required role: {settings.oidc_role_name}",
                 )
         except Exception as e:
-            logger.error(f"Token validation failed in OAuth callback: {type(e).__name__}: {e}")
+            logger.error(
+                f"Token validation failed in OAuth callback: {type(e).__name__}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Token validation failed: {type(e).__name__}: {str(e)}"
             )
-        
+
         # Store minimal authentication data to prevent large session cookies
         # that exceed nginx header buffer limits
         request.session["user_info"] = {
@@ -266,16 +331,17 @@ async def auth_callback(request: Request):
             "authenticated": True,
             "auth_timestamp": datetime.now().isoformat()
         }
-        
-        username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
+
+        username = user_info.get("preferred_username",
+                                 user_info.get("sub", "unknown"))
         logger.info(f"Authentication successful for user: {username}")
-        
+
         # Redirect to main page
         return RedirectResponse(
             url="/?auth=success",
             status_code=status.HTTP_302_FOUND
         )
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
@@ -286,19 +352,17 @@ async def auth_callback(request: Request):
         )
 
 
-
-
-
 @router.get("/auth/token", tags=["Authentication"])
 async def get_auth_token(request: Request):
     """Get authentication status from session."""
     from fastapi import Response
-    
+
     if not settings.auth_enabled:
-        response_data = {"authenticated": False, "reason": "Authentication disabled"}
+        response_data = {"authenticated": False,
+                         "reason": "Authentication disabled"}
     else:
         user_info = request.session.get("user_info")
-        
+
         if not user_info or not user_info.get("authenticated"):
             response_data = {"authenticated": False, "reason": "No session"}
         else:
@@ -311,7 +375,8 @@ async def get_auth_token(request: Request):
                     if datetime.now() - auth_time > timedelta(hours=24):
                         # Session too old
                         request.session.pop("user_info", None)
-                        response_data = {"authenticated": False, "reason": "Session expired"}
+                        response_data = {"authenticated": False,
+                                         "reason": "Session expired"}
                     else:
                         response_data = {
                             "authenticated": True,
@@ -333,8 +398,9 @@ async def get_auth_token(request: Request):
             except Exception as e:
                 # Session is invalid, clear it
                 request.session.pop("user_info", None)
-                response_data = {"authenticated": False, "reason": f"Session error: {str(e)}"}
-    
+                response_data = {"authenticated": False,
+                                 "reason": f"Session error: {str(e)}"}
+
     # Create response with cache control headers
     response = Response(
         content=json.dumps(response_data),
@@ -353,5 +419,5 @@ async def logout(request: Request):
     """Logout and clear session."""
     # Clear session data
     request.session.clear()
-    
+
     return {"message": "Logged out successfully"}

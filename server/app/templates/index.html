@@ -40,24 +40,16 @@
 
                 <li class="nav-separator"></li>
 
-                <li class="nav-group expanded" data-level="cluster">
-                    <div class="nav-item group-header">
-                        <span class="nav-icon">📦</span>
-                        <span class="nav-label">Cluster</span>
-                        <span class="expand-icon">›</span>
-                    </div>
-                    <ul class="sub-list">
-                        <li class="nav-group expanded" data-level="host">
-                            <div class="sub-item group-header">
-                                <span class="sub-icon">🖥️</span>
-                                <span class="sub-label">Hosts</span>
-                                <span class="expand-icon">›</span>
-                            </div>
-                            <ul class="sub-sub-list" id="hosts-list">
-                                <!-- Dynamic host list will be inserted here -->
-                            </ul>
-                        </li>
-                    </ul>
+                <!-- Dynamic clusters will be inserted here -->
+                <div id="clusters-container">
+                    <!-- Clusters will be populated by JavaScript -->
+                </div>
+
+                <!-- Disconnected hosts section -->
+                <li class="nav-item disconnected-hosts" data-view="disconnected-hosts" style="display: none;">
+                    <span class="nav-icon">⚠️</span>
+                    <span class="nav-label">Disconnected Hosts</span>
+                    <span class="badge disconnected-count" style="display: none;">0</span>
                 </li>
             </ul>
 

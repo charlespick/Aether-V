@@ -34,3 +34,6 @@ data:
   
   # Inventory refresh interval (seconds)
   INVENTORY_REFRESH_INTERVAL: "60"
+  
+  # Development settings
+  DUMMY_DATA: "false"  # Set to true for development with dummy data

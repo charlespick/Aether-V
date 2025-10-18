@@ -64,6 +64,7 @@ class ViewManager {
         this.registerView('cluster', ClusterView);
         this.registerView('host', HostView);
         this.registerView('vm', VMView);
+        this.registerView('disconnected-hosts', DisconnectedHostsView);
     }
 }
 
@@ -103,7 +104,7 @@ class OverviewView extends BaseView {
 
                 <article class="stat-card">
                     <div class="stat-title">Connected Hosts</div>
-                    <div class="stat-value">${inventory.hosts.filter(h => h.connected).length}</div>
+                    <div class="stat-value">${(inventory.hosts || []).filter(h => h.connected).length}</div>
                 </article>
 
                 <article class="stat-card">
@@ -113,18 +114,59 @@ class OverviewView extends BaseView {
 
                 <article class="stat-card">
                     <div class="stat-title">Running VMs</div>
-                    <div class="stat-value">${inventory.vms.filter(vm => vm.state === 'Running').length}</div>
+                    <div class="stat-value">${(inventory.vms || []).filter(vm => vm.state === 'Running').length}</div>
+                </article>
+
+                <article class="stat-card">
+                    <div class="stat-title">Clusters</div>
+                    <div class="stat-value">${(inventory.clusters || []).length}</div>
                 </article>
             </section>
 
-            <div class="view-section">
-                <div class="section-header">
-                    <h2>Recent Activity</h2>
+            ${(inventory.hosts || []).length === 0 ? `
+                <div class="view-section">
+                    <div class="section-header">
+                        <h2>${(inventory.disconnected_hosts || []).length > 0 ? 'Connection Issues' : 'Getting Started'}</h2>
+                    </div>
+                    <div class="empty-state">
+                        ${(inventory.disconnected_hosts || []).length > 0 ? `
+                            <div class="empty-icon">⚠️</div>
+                            <div class="empty-title">No hosts connected</div>
+                            <div class="empty-description">
+                                ${(inventory.disconnected_hosts || []).length} host(s) are configured but currently unreachable.
+                                <br><br>
+                                <strong>Troubleshooting steps:</strong>
+                                <br>• Check network connectivity to hosts
+                                <br>• Verify WinRM is enabled and configured
+                                <br>• Confirm credentials are correct
+                                <br>• Check firewall settings on hosts
+                                <br><br>
+                                <button class="action-btn" onclick="viewManager.switchView('disconnected-hosts')" style="margin-top: 12px;">
+                                    <span class="action-icon">⚠️</span>
+                                    <span>View Disconnected Hosts</span>
+                                </button>
+                            </div>
+                        ` : `
+                            <div class="empty-icon">🖥️</div>
+                            <div class="empty-title">No hosts configured</div>
+                            <div class="empty-description">
+                                Configure Hyper-V hosts in your environment settings to begin managing virtual machines.
+                                <br><br>
+                                Set the <code>HYPERV_HOSTS</code> environment variable with comma-separated host names.
+                            </div>
+                        `}
+                    </div>
                 </div>
-                <div class="activity-list">
-                    <p class="empty">No recent activity</p>
+            ` : `
+                <div class="view-section">
+                    <div class="section-header">
+                        <h2>Recent Activity</h2>
+                    </div>
+                    <div class="activity-list">
+                        <p class="empty">No recent activity</p>
+                    </div>
                 </div>
-            </div>
+            `}
 
             <div class="view-section">
                 <div class="section-header">
@@ -382,6 +424,88 @@ class VMView extends BaseView {
         }
         return { hosts: [], vms: [] };
     }
+}
+
+// Disconnected Hosts View
+class DisconnectedHostsView extends BaseView {
+    async render() {
+        const inventory = await this.fetchInventory();
+        const disconnectedHosts = inventory.disconnected_hosts || [];
+
+        return `
+            <h1 class="page-title">Disconnected Hosts</h1>
+
+            <div class="view-section">
+                <div class="section-header">
+                    <h2>Hosts Not Currently Connected</h2>
+                    <p class="section-description">
+                        These hosts are configured but currently unreachable. Check network connectivity, 
+                        WinRM configuration, or host availability.
+                    </p>
+                </div>
+                
+                ${disconnectedHosts.length === 0 ? `
+                    <div class="empty-state">
+                        <div class="empty-icon">✅</div>
+                        <div class="empty-title">All hosts are connected</div>
+                        <div class="empty-description">Great! All configured hosts are currently reachable.</div>
+                    </div>
+                ` : `
+                    <div class="host-grid">
+                        ${this.renderDisconnectedHosts(disconnectedHosts)}
+                    </div>
+                `}
+            </div>
+        `;
+    }
+
+    renderDisconnectedHosts(hosts) {
+        return hosts.map(host => `
+            <div class="host-card disconnected">
+                <div class="host-card-header">
+                    <span class="host-icon">⚠️</span>
+                    <span class="host-name">${host.hostname}</span>
+                </div>
+                <div class="host-card-status">
+                    <span class="status disconnected">Disconnected</span>
+                    ${host.last_seen ? `
+                        <div class="last-seen">
+                            Last seen: ${new Date(host.last_seen).toLocaleString()}
+                        </div>
+                    ` : ''}
+                </div>
+                ${host.error ? `
+                    <div class="host-error">
+                        <strong>Error:</strong> ${host.error}
+                    </div>
+                ` : ''}
+                <div class="host-actions">
+                    <button class="action-btn retry" onclick="retryHostConnection('${host.hostname}')">
+                        <span class="action-icon">🔄</span>
+                        <span>Retry Connection</span>
+                    </button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    async fetchInventory() {
+        try {
+            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
+            if (response.ok) return await response.json();
+        } catch (error) {
+            console.error('Error:', error);
+        }
+        return { disconnected_hosts: [] };
+    }
+}
+
+// Helper function for retry connection button
+async function retryHostConnection(hostname) {
+    console.log('Retrying connection to:', hostname);
+    // In a real implementation, this would trigger a refresh for the specific host
+    await refreshInventory();
+    // Show a toast or notification about the retry attempt
 }
 
 // Initialize view manager

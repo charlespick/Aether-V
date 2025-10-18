@@ -14,6 +14,7 @@ from .core.config import settings
 from .api.routes import router
 from .services.inventory_service import inventory_service
 from .services.job_service import job_service
+from .services.notification_service import notification_service
 
 # Configure logging
 logging.basicConfig(
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
 
     # Start services
+    await notification_service.start()
     job_service.start()
     await inventory_service.start()
 
@@ -44,6 +46,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down application")
     await inventory_service.stop()
     job_service.stop()
+    await notification_service.stop()
     logger.info("Application stopped")
 
 
