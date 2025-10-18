@@ -825,18 +825,8 @@ class SearchOverlay {
 
         // Setup event listeners
         const backdrop = overlay.querySelector('.search-backdrop');
-        backdrop.addEventListener('click', (e) => {
-            // Close when clicking the backdrop directly
-            if (e.target === backdrop) {
-                this.close();
-            }
-        });
-        
-        // Also close when clicking anywhere in the overlay but outside the expando
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) {
-                this.close();
-            }
+        backdrop.addEventListener('click', () => {
+            this.close();
         });
         
         const closeBtn = overlay.querySelector('.search-close-btn');
@@ -1133,7 +1123,10 @@ class SearchOverlay {
 
     open() {
         if (this.isOpen) return;
-        this.suppressNextOpen = false;
+        if (this.suppressNextOpen) {
+            this.suppressNextOpen = false;
+            return;
+        }
         this.isOpen = true;
         
         const originalInput = document.querySelector('#global-search');
@@ -1235,17 +1228,22 @@ class SearchOverlay {
 
         // Clear search input and reset content
         if (expandoInput) expandoInput.value = '';
+        if (originalInput) originalInput.value = '';
         const content = this.overlayElement.querySelector('.search-expando-results');
         if (content) content.innerHTML = this.renderEmptyState();
 
-        // Return focus to original input
+        // Return focus to original input and reset suppressNextOpen after sufficient delay
         if (originalInput) {
             originalInput.focus();
+            // Allow time for focus event handlers to complete before resetting flag
             setTimeout(() => {
                 this.suppressNextOpen = false;
-            }, 0);
+            }, 100);
         } else {
-            this.suppressNextOpen = false;
+            // Reset after same delay to maintain consistent behavior
+            setTimeout(() => {
+                this.suppressNextOpen = false;
+            }, 100);
         }
     }
 
@@ -1274,6 +1272,10 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Handle clicks on search container
         searchContainer.addEventListener('click', (e) => {
+            if (searchOverlay.suppressNextOpen) {
+                searchOverlay.suppressNextOpen = false;
+                return;
+            }
             e.preventDefault();
             searchOverlay.open();
         });
@@ -1281,6 +1283,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Handle Enter/Space on search container
         searchContainer.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.key === ' ') {
+                if (searchOverlay.suppressNextOpen) {
+                    searchOverlay.suppressNextOpen = false;
+                    return;
+                }
                 e.preventDefault();
                 searchOverlay.open();
             }
@@ -1321,24 +1327,5 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }, 250);
         });
-
-        // Keep text in sync both ways
-        const syncInputs = () => {
-            const expandoInput = document.querySelector('.search-expando-input');
-            if (expandoInput) {
-                expandoInput.addEventListener('input', () => {
-                    searchBox.value = expandoInput.value;
-                });
-                
-                searchBox.addEventListener('input', () => {
-                    if (!searchOverlay.isOpen) {
-                        expandoInput.value = searchBox.value;
-                    }
-                });
-            }
-        };
-        
-        // Set up input syncing after a brief delay to ensure DOM is ready
-        setTimeout(syncInputs, 100);
     }
 });
