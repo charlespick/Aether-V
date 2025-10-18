@@ -38,26 +38,91 @@ function setupWebSocketHandlers() {
 }
 
 function updateWebSocketIndicator(status, data) {
-    // You can add a visual indicator in the UI here
+    // Update notification button indicator
     const notificationsBtn = document.getElementById('notifications-btn');
-    if (!notificationsBtn) return;
+    if (notificationsBtn) {
+        // Remove existing status classes
+        notificationsBtn.classList.remove('ws-connected', 'ws-connecting', 'ws-disconnected', 'ws-reconnecting', 'ws-error');
+        
+        // Add current status class
+        if (status === 'connected') {
+            notificationsBtn.classList.add('ws-connected');
+            notificationsBtn.title = 'Notifications (Live)';
+        } else if (status === 'connecting') {
+            notificationsBtn.classList.add('ws-connecting');
+            notificationsBtn.title = 'Notifications (Connecting...)';
+        } else if (status === 'reconnecting') {
+            notificationsBtn.classList.add('ws-reconnecting');
+            notificationsBtn.title = `Notifications (Reconnecting... attempt ${data.attempt})`;
+        } else if (status === 'disconnected' || status === 'error') {
+            notificationsBtn.classList.add('ws-disconnected');
+            notificationsBtn.title = 'Notifications (Offline)';
+        }
+    }
+
+    // Update connection status indicator in lower right corner
+    const indicator = document.getElementById('connection-status-indicator');
+    const titleEl = indicator?.querySelector('.connection-status-title');
+    const messageEl = indicator?.querySelector('.connection-status-message');
+    const retryBtn = document.getElementById('connection-retry-btn');
+
+    if (!indicator || !titleEl || !messageEl) return;
 
     // Remove existing status classes
-    notificationsBtn.classList.remove('ws-connected', 'ws-connecting', 'ws-disconnected', 'ws-reconnecting', 'ws-error');
-    
-    // Add current status class
+    indicator.classList.remove('disconnected', 'reconnecting', 'failed');
+
     if (status === 'connected') {
-        notificationsBtn.classList.add('ws-connected');
-        notificationsBtn.title = 'Notifications (Live)';
+        // Hide indicator when connected
+        hideConnectionIndicator();
     } else if (status === 'connecting') {
-        notificationsBtn.classList.add('ws-connecting');
-        notificationsBtn.title = 'Notifications (Connecting...)';
+        // Show initial connection attempt (optional, can be skipped for less noise)
+        indicator.classList.add('reconnecting');
+        titleEl.textContent = 'Connecting...';
+        messageEl.textContent = 'Establishing connection to server';
+        if (retryBtn) retryBtn.style.display = 'none';
+        showConnectionIndicator();
     } else if (status === 'reconnecting') {
-        notificationsBtn.classList.add('ws-reconnecting');
-        notificationsBtn.title = `Notifications (Reconnecting... attempt ${data.attempt})`;
+        // Show reconnection attempts with exponential backoff info
+        indicator.classList.add('reconnecting');
+        titleEl.textContent = 'Disconnected';
+        const delaySeconds = Math.round((data.delay || 0) / 1000);
+        messageEl.textContent = `Trying to reconnect... (attempt ${data.attempt}/10, retry in ${delaySeconds}s)`;
+        if (retryBtn) retryBtn.style.display = 'none';
+        showConnectionIndicator();
+    } else if (status === 'failed') {
+        // Show failed state with retry button
+        indicator.classList.add('failed');
+        titleEl.textContent = 'Connection Failed';
+        messageEl.textContent = 'Failed to reconnect to server after multiple attempts';
+        if (retryBtn) retryBtn.style.display = 'block';
+        showConnectionIndicator();
     } else if (status === 'disconnected' || status === 'error') {
-        notificationsBtn.classList.add('ws-disconnected');
-        notificationsBtn.title = 'Notifications (Offline)';
+        // Show disconnected state
+        indicator.classList.add('disconnected');
+        titleEl.textContent = 'Disconnected';
+        messageEl.textContent = 'Connection to server lost';
+        if (retryBtn) retryBtn.style.display = 'none';
+        showConnectionIndicator();
+    }
+}
+
+function showConnectionIndicator() {
+    const indicator = document.getElementById('connection-status-indicator');
+    if (indicator) {
+        indicator.classList.remove('hiding');
+        indicator.style.display = 'block';
+    }
+}
+
+function hideConnectionIndicator() {
+    const indicator = document.getElementById('connection-status-indicator');
+    if (indicator && indicator.style.display !== 'none') {
+        indicator.classList.add('hiding');
+        // Wait for animation to complete before hiding
+        setTimeout(() => {
+            indicator.style.display = 'none';
+            indicator.classList.remove('hiding');
+        }, 300);
     }
 }
 
@@ -717,6 +782,15 @@ function setupNavigation() {
         markAllReadBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             await markAllNotificationsAsRead();
+        });
+    }
+
+    // Connection retry button handler
+    const retryBtn = document.getElementById('connection-retry-btn');
+    if (retryBtn) {
+        retryBtn.addEventListener('click', () => {
+            console.log('Manual refresh requested');
+            window.location.reload();
         });
     }
     
