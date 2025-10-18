@@ -1685,74 +1685,109 @@ tbody tr:last-child td {
     }
 }
 
-/* WebSocket Connection Status Indicators */
-.icon-btn.ws-connecting::before,
-.icon-btn.ws-reconnecting::before,
-.icon-btn.ws-disconnected::before {
-    content: '';
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    z-index: 1;
+/* Connection Status Indicator (lower right corner) */
+.connection-status-indicator {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 10000;
+    max-width: 400px;
+    min-width: 300px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-radius: 8px;
+    overflow: hidden;
+    animation: slideInUp 0.3s ease-out;
 }
 
-.icon-btn.ws-connected::before {
-    content: '';
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #10b981;
-    z-index: 1;
-    animation: pulse-green 2s ease-in-out infinite;
+.connection-status-indicator.disconnected {
+    background: var(--bg);
+    border: 1px solid var(--border-color);
 }
 
-.icon-btn.ws-connecting::before {
-    background: #f59e0b;
-    animation: pulse-orange 1s ease-in-out infinite;
+.connection-status-indicator.reconnecting {
+    background: var(--bg);
+    border: 1px solid var(--warning-color, #f59e0b);
 }
 
-.icon-btn.ws-reconnecting::before {
-    background: #ef4444;
-    animation: pulse-red 1s ease-in-out infinite;
+.connection-status-indicator.failed {
+    background: var(--bg);
+    border: 1px solid var(--error-color, #ef4444);
 }
 
-.icon-btn.ws-disconnected::before {
-    background: #6b7280;
+.connection-status-content {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    gap: 12px;
 }
 
-@keyframes pulse-green {
-    0%, 100% {
+.connection-status-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.connection-status-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.connection-status-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--ink);
+    margin-bottom: 2px;
+}
+
+.connection-status-message {
+    font-size: 12px;
+    color: var(--muted-ink);
+    line-height: 1.4;
+}
+
+.connection-retry-btn {
+    padding: 6px 12px;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+
+.connection-retry-btn:hover {
+    background: var(--primary-hover);
+}
+
+.connection-retry-btn:active {
+    transform: scale(0.95);
+}
+
+@keyframes slideInUp {
+    from {
+        transform: translateY(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
         opacity: 1;
     }
-    50% {
-        opacity: 0.5;
+}
+
+@keyframes slideOutDown {
+    from {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateY(100%);
+        opacity: 0;
     }
 }
 
-@keyframes pulse-orange {
-    0%, 100% {
-        opacity: 1;
-        transform: scale(1);
-    }
-    50% {
-        opacity: 0.7;
-        transform: scale(1.2);
-    }
-}
-
-@keyframes pulse-red {
-    0%, 100% {
-        opacity: 1;
-        transform: scale(1);
-    }
-    50% {
-        opacity: 0.6;
-        transform: scale(1.3);
-    }
+.connection-status-indicator.hiding {
+    animation: slideOutDown 0.3s ease-out forwards;
 }
