@@ -303,8 +303,65 @@ Planned features:
 
 ## Security Considerations
 
-- WebSocket connections currently bypass authentication (for initial implementation)
-- Future: Add token-based authentication for WebSocket connections
-- Use WSS (WebSocket Secure) in production
-- Implement rate limiting for WebSocket messages
-- Validate all client messages on the server
+⚠️ **IMPORTANT**: The current WebSocket implementation does not include authentication.
+
+### Development vs Production
+
+**Development Mode**:
+- WebSocket connections are accepted without authentication
+- Suitable for development and testing environments
+- Should only be used behind a secure network/firewall
+
+**Production Recommendations**:
+
+1. **Add Authentication**: Before deploying to production, implement token-based authentication:
+   ```python
+   # Example: Validate token on WebSocket connection
+   @router.websocket("/ws")
+   async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
+       # Validate token before accepting connection
+       user = await validate_token(token)
+       if not user:
+           await websocket.close(code=1008, reason="Unauthorized")
+           return
+       # ... rest of connection handling
+   ```
+
+2. **Use WSS (WebSocket Secure)**: Always use encrypted WebSocket connections in production
+   - Configure ingress/load balancer for TLS termination
+   - Use `wss://` protocol instead of `ws://`
+
+3. **Implement Rate Limiting**: Protect against abuse
+   ```python
+   # Add rate limiting per client_id
+   rate_limiter.check_rate(client_id)
+   ```
+
+4. **Validate Client Messages**: Always validate and sanitize client input
+   ```python
+   # Current implementation validates message types
+   # Add additional validation as needed
+   ```
+
+5. **Monitor Connections**: Track active connections and implement limits
+   ```python
+   # Set max connections per user/IP
+   if len(connections_per_ip[ip]) > MAX_CONNECTIONS:
+       await websocket.close(code=1008, reason="Too many connections")
+   ```
+
+### Current Security Measures
+
+- Message validation on server side
+- Automatic cleanup of stale connections
+- No sensitive data in WebSocket messages (notifications are already visible in REST API)
+- Session-based authentication still required for REST API endpoints
+
+### Security Roadmap
+
+Priority security enhancements:
+1. ⚠️ **HIGH PRIORITY**: Add authentication token validation for WebSocket connections
+2. Add per-client rate limiting
+3. Implement connection limits per user
+4. Add audit logging for WebSocket events
+5. Implement message encryption for sensitive data
