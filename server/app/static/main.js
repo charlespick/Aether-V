@@ -6,6 +6,104 @@ const authEnabled = configData.auth_enabled;
 let userInfo = null;
 let authCheckInProgress = false;
 
+// WebSocket notification handlers
+function setupWebSocketHandlers() {
+    // Handle connection status changes
+    wsClient.onConnectionStatus((status, data) => {
+        console.log('WebSocket status:', status, data);
+        updateWebSocketIndicator(status, data);
+    });
+
+    // Handle initial state
+    wsClient.on('initial_state', (message) => {
+        console.log('Received initial state via WebSocket');
+        const data = message.data;
+        if (data.notifications) {
+            updateNotificationPanel({
+                notifications: data.notifications,
+                unread_count: data.unread_count || 0,
+                total_count: data.notifications.length
+            });
+        }
+    });
+
+    // Handle new notifications
+    wsClient.on('notification', (message) => {
+        console.log('Received notification update via WebSocket:', message);
+        handleNotificationUpdate(message);
+    });
+
+    // Subscribe to notifications
+    wsClient.subscribe(['notifications', 'all']);
+}
+
+function updateWebSocketIndicator(status, data) {
+    // You can add a visual indicator in the UI here
+    const notificationsBtn = document.getElementById('notifications-btn');
+    if (!notificationsBtn) return;
+
+    // Remove existing status classes
+    notificationsBtn.classList.remove('ws-connected', 'ws-connecting', 'ws-disconnected', 'ws-reconnecting', 'ws-error');
+    
+    // Add current status class
+    if (status === 'connected') {
+        notificationsBtn.classList.add('ws-connected');
+        notificationsBtn.title = 'Notifications (Live)';
+    } else if (status === 'connecting') {
+        notificationsBtn.classList.add('ws-connecting');
+        notificationsBtn.title = 'Notifications (Connecting...)';
+    } else if (status === 'reconnecting') {
+        notificationsBtn.classList.add('ws-reconnecting');
+        notificationsBtn.title = `Notifications (Reconnecting... attempt ${data.attempt})`;
+    } else if (status === 'disconnected' || status === 'error') {
+        notificationsBtn.classList.add('ws-disconnected');
+        notificationsBtn.title = 'Notifications (Offline)';
+    }
+}
+
+function handleNotificationUpdate(message) {
+    const action = message.action;
+    const data = message.data;
+
+    if (action === 'created') {
+        // New notification created
+        console.log('New notification:', data);
+        
+        // Reload notifications to get the updated list
+        loadNotifications();
+        
+        // Optionally show a toast notification
+        showNotificationToast(data);
+    } else if (action === 'updated') {
+        // Notification updated (e.g., marked as read)
+        console.log('Notification updated:', data);
+        
+        // Update the UI without full reload
+        updateNotificationItem(data);
+    }
+}
+
+function showNotificationToast(notification) {
+    // Simple toast notification - you can enhance this
+    console.log('Toast notification:', notification.title);
+    // Could implement a toast UI here
+}
+
+function updateNotificationItem(data) {
+    // Update a specific notification in the list
+    const notificationItem = document.querySelector(`[data-notification-id="${data.id}"]`);
+    if (notificationItem) {
+        if (data.read !== undefined) {
+            if (data.read) {
+                notificationItem.classList.remove('unread');
+            } else {
+                notificationItem.classList.add('unread');
+            }
+        }
+    }
+}
+
+
 // Check authentication status from server session (secure)
 async function checkAuthenticationStatus() {
     if (authCheckInProgress) {
@@ -511,12 +609,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     overlayManager.init();
     viewManager.init('view-container');
     
+    // Setup WebSocket handlers
+    setupWebSocketHandlers();
+    
     await initializeAuth();
     
     // Load initial inventory
     const inventory = await loadInventory();
     
-    // Load initial notifications
+    // Load initial notifications (will also come via WebSocket)
     await loadNotifications();
     
     // Setup navigation handlers

@@ -15,6 +15,7 @@ from .api.routes import router
 from .services.inventory_service import inventory_service
 from .services.job_service import job_service
 from .services.notification_service import notification_service
+from .services.websocket_service import websocket_manager
 
 # Configure logging
 logging.basicConfig(
@@ -35,6 +36,10 @@ async def lifespan(app: FastAPI):
 
     # Start services
     await notification_service.start()
+    
+    # Connect WebSocket manager to notification service
+    notification_service.set_websocket_manager(websocket_manager)
+    
     job_service.start()
     await inventory_service.start()
 

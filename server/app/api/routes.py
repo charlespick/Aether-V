@@ -1,7 +1,8 @@
 """API route handlers."""
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+import uuid
+from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from typing import List, Optional
 from datetime import datetime
@@ -16,6 +17,7 @@ from ..core.config import settings
 from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
 from ..services.notification_service import notification_service
+from ..services.websocket_service import websocket_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -421,3 +423,61 @@ async def logout(request: Request):
     request.session.clear()
 
     return {"message": "Logged out successfully"}
+
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time updates."""
+    client_id = str(uuid.uuid4())
+    
+    try:
+        # Accept the connection
+        connected = await websocket_manager.connect(websocket, client_id)
+        
+        if not connected:
+            return
+        
+        # Send initial state
+        try:
+            # Send current notifications
+            notifications = notification_service.get_all_notifications()
+            await websocket_manager.send_personal_message(client_id, {
+                "type": "initial_state",
+                "data": {
+                    "notifications": [
+                        {
+                            "id": n.id,
+                            "title": n.title,
+                            "message": n.message,
+                            "level": n.level.value,
+                            "category": n.category.value,
+                            "created_at": n.created_at.isoformat(),
+                            "read": n.read,
+                            "related_entity": n.related_entity
+                        }
+                        for n in notifications
+                    ],
+                    "unread_count": notification_service.get_unread_count()
+                }
+            })
+        except Exception as e:
+            logger.error(f"Error sending initial state to {client_id}: {e}")
+        
+        # Listen for messages from client
+        while True:
+            try:
+                data = await websocket.receive_json()
+                await websocket_manager.handle_client_message(client_id, data)
+            except WebSocketDisconnect:
+                logger.info(f"Client {client_id} disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error processing message from {client_id}: {e}")
+                break
+    
+    except Exception as e:
+        logger.error(f"WebSocket error for client {client_id}: {e}")
+    
+    finally:
+        await websocket_manager.disconnect(client_id)
+
