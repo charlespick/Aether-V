@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     # Inventory settings
     inventory_refresh_interval: int = 60  # seconds
 
+    # WebSocket settings
+    # WebSocket connection timeout in seconds (30 minutes)
+    websocket_timeout: int = 1800
+    websocket_ping_interval: int = 30  # Ping interval in seconds
+    # Client refresh time in seconds (25 minutes)
+    websocket_refresh_time: int = 1500
+
     # Development settings
     dummy_data: bool = False  # Enable dummy data for development/testing
 

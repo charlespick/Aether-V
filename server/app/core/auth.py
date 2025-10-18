@@ -232,28 +232,14 @@ async def get_current_user(
                 detail="Development authentication mode not explicitly enabled. Set ALLOW_DEV_AUTH=true in development environments only."
             )
         logger.warning(f"Authentication disabled - dev mode access from {client_ip}")
-        return {"sub": "dev-user", "roles": [settings.oidc_role_name], "auth_type": "dev"}
+        return get_dev_user()
     
     # Check for session-based authentication first (for browser requests)
-    session_user = request.session.get("user_info") if hasattr(request, 'session') else None
-    if session_user and session_user.get("authenticated"):
-        # Validate session is not expired
-        try:
-            auth_timestamp = session_user.get("auth_timestamp")
-            if auth_timestamp:
-                from datetime import datetime, timedelta
-                auth_time = datetime.fromisoformat(auth_timestamp)
-                if datetime.now() - auth_time < timedelta(hours=24):
-                    username = session_user.get("preferred_username", "unknown")
-                    logger.debug(f"Session authentication successful for {username} from {client_ip}")
-                    return {
-                        "sub": session_user.get("sub"),
-                        "preferred_username": session_user.get("preferred_username"),
-                        "roles": session_user.get("roles", []),
-                        "auth_type": "session"
-                    }
-        except Exception as e:
-            logger.warning(f"Session validation failed from {client_ip}: {e}")
+    session_data = request.session.get("user_info") if hasattr(request, 'session') else None
+    if session_data:
+        user = validate_session_data(session_data, client_ip)
+        if user:
+            return user
     
     # Require Bearer token credentials when no valid session
     if not credentials:
@@ -267,51 +253,18 @@ async def get_current_user(
     token = credentials.credentials
     auth_failures = []
     
-    # Try static API token authentication (for automation)
-    if settings.api_token:
-        if token == settings.api_token:
-            logger.info(f"API token authentication successful from {client_ip}")
-            return {
-                "sub": "api-service", 
-                "roles": [settings.oidc_role_name], 
-                "auth_type": "api_token",
-                "preferred_username": "api-service"
-            }
+    # Try token authentication (API token or OIDC JWT)
+    try:
+        user = await authenticate_with_token(token, client_ip)
+        if user:
+            return user
         else:
-            # Don't log the actual tokens for security
-            auth_failures.append("api_token_mismatch")
-    
-    # Try OIDC JWT token validation (for interactive users)
-    if settings.oidc_issuer_url and jwks_cache:
-        try:
-            user_info = await validate_oidc_token(token)
-            
-            # Extract roles from various Azure AD claims
-            user_roles = extract_user_roles(user_info)
-            
-            # Check role requirements
-            if settings.oidc_role_name and settings.oidc_role_name != "*":
-                if settings.oidc_role_name not in user_roles:
-                    username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
-                    logger.warning(f"User {username} from {client_ip} lacks required role '{settings.oidc_role_name}'. Has: {user_roles}")
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Insufficient privileges. Required role: {settings.oidc_role_name}",
-                    )
-            
-            # Add auth metadata
-            user_info["auth_type"] = "oidc"
-            user_info["roles"] = user_roles
-            
-            username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
-            logger.info(f"OIDC authentication successful for {username} from {client_ip}")
-            return user_info
-            
-        except HTTPException:
-            raise  # Re-raise HTTP exceptions (like 403)
-        except Exception as e:
-            auth_failures.append(f"oidc_validation_failed: {type(e).__name__}")
-            logger.error(f"OIDC token validation failed from {client_ip}: {e}")
+            auth_failures.append("token_validation_failed")
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions (like 403 for insufficient roles)
+    except Exception as e:
+        auth_failures.append(f"token_error: {type(e).__name__}")
+        logger.error(f"Token authentication error from {client_ip}: {e}")
     
     # All authentication methods failed
     logger.error(f"Authentication failed from {client_ip} ({user_agent}). Attempts: {', '.join(auth_failures)}")
@@ -509,6 +462,112 @@ def get_optional_user(
         return None
     except:
         return None
+
+
+def validate_session_data(session_data: dict, client_ip: str = "unknown") -> Optional[dict]:
+    """
+    Shared session validation logic for both HTTP and WebSocket.
+    
+    Args:
+        session_data: Session data from request.session or parsed cookies
+        client_ip: Client IP for logging
+        
+    Returns:
+        User info dict if valid session, None otherwise
+    """
+    if not session_data or not session_data.get("authenticated"):
+        return None
+        
+    try:
+        auth_timestamp = session_data.get("auth_timestamp")
+        if auth_timestamp:
+            from datetime import datetime, timedelta
+            auth_time = datetime.fromisoformat(auth_timestamp)
+            if datetime.now() - auth_time < timedelta(hours=24):
+                username = session_data.get("preferred_username", "unknown")
+                logger.debug(f"Session authentication successful for {username} from {client_ip}")
+                return {
+                    "sub": session_data.get("sub"),
+                    "preferred_username": session_data.get("preferred_username"),
+                    "roles": session_data.get("roles", []),
+                    "auth_type": "session"
+                }
+            else:
+                logger.debug(f"Session expired for client from {client_ip}")
+        else:
+            # No timestamp, assume valid for backward compatibility
+            username = session_data.get("preferred_username", "unknown")
+            logger.debug(f"Session authentication (no timestamp) for {username} from {client_ip}")
+            return {
+                "sub": session_data.get("sub"),
+                "preferred_username": session_data.get("preferred_username"), 
+                "roles": session_data.get("roles", []),
+                "auth_type": "session"
+            }
+    except Exception as e:
+        logger.warning(f"Session validation failed from {client_ip}: {e}")
+    
+    return None
+
+
+async def authenticate_with_token(token: str, client_ip: str = "unknown") -> Optional[dict]:
+    """
+    Shared token authentication logic for both HTTP and WebSocket.
+    
+    Args:
+        token: Bearer token (API token or OIDC JWT)
+        client_ip: Client IP for logging
+        
+    Returns:
+        User info dict if valid token, None otherwise
+    """
+    if not token:
+        return None
+        
+    # Try static API token authentication
+    if settings.api_token and token == settings.api_token:
+        logger.info(f"API token authentication successful from {client_ip}")
+        return {
+            "sub": "api-service",
+            "roles": [settings.oidc_role_name],
+            "auth_type": "api_token", 
+            "preferred_username": "api-service"
+        }
+    
+    # Try OIDC JWT token validation
+    if settings.oidc_issuer_url and jwks_cache:
+        try:
+            user_info = await validate_oidc_token(token)
+            user_roles = extract_user_roles(user_info)
+            
+            # Check role requirements
+            if settings.oidc_role_name and settings.oidc_role_name != "*":
+                if settings.oidc_role_name not in user_roles:
+                    username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
+                    logger.warning(f"User {username} from {client_ip} lacks required role '{settings.oidc_role_name}'")
+                    return None
+            
+            user_info["auth_type"] = "oidc"
+            user_info["roles"] = user_roles
+            
+            username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
+            logger.info(f"OIDC authentication successful for {username} from {client_ip}")
+            return user_info
+            
+        except Exception as e:
+            logger.error(f"OIDC token validation failed from {client_ip}: {e}")
+    
+    return None
+
+
+def get_dev_user() -> dict:
+    """
+    Get development mode user info.
+    
+    Returns:
+        Dev user info dict
+    """
+    return {"sub": "dev-user", "roles": [settings.oidc_role_name], "auth_type": "dev"}
 
 
 async def is_authenticated(request) -> bool:

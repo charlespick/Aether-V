@@ -1,7 +1,8 @@
 """API route handlers."""
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+import uuid
+from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from typing import List, Optional
 from datetime import datetime
@@ -16,6 +17,7 @@ from ..core.config import settings
 from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
 from ..services.notification_service import notification_service
+from ..services.websocket_service import websocket_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -421,3 +423,174 @@ async def logout(request: Request):
     request.session.clear()
 
     return {"message": "Logged out successfully"}
+
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time updates with authentication."""
+    client_id = str(uuid.uuid4())
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    connection_start = datetime.utcnow()
+    MAX_CONNECTION_TIME = settings.websocket_timeout
+
+    try:
+        # Authenticate the WebSocket connection
+        user = await authenticate_websocket(websocket)
+
+        if not user:
+            await websocket.close(code=1008, reason="Authentication required")
+            logger.warning(
+                f"WebSocket authentication failed for client from {client_ip}")
+            return
+
+        username = user.get("preferred_username", user.get("sub", "unknown"))
+        logger.info(
+            f"WebSocket authenticated for user {username} from {client_ip}")
+
+        # Accept and register with connection manager
+        connected = await websocket_manager.connect(websocket, client_id)
+
+        if not connected:
+            return
+
+        # Send initial state
+        try:
+            notifications = notification_service.get_all_notifications()
+            await websocket_manager.send_personal_message(client_id, {
+                "type": "initial_state",
+                "data": {
+                    "notifications": [
+                        {
+                            "id": n.id,
+                            "title": n.title,
+                            "message": n.message,
+                            "level": n.level.value,
+                            "category": n.category.value,
+                            "created_at": n.created_at.isoformat(),
+                            "read": n.read,
+                            "related_entity": n.related_entity
+                        }
+                        for n in notifications
+                    ],
+                    "unread_count": notification_service.get_unread_count()
+                }
+            })
+        except Exception as e:
+            logger.error(f"Error sending initial state to {client_id}: {e}")
+
+        # Listen for messages from client
+        while True:
+            try:
+                # Check connection time limit
+                connection_age = (datetime.utcnow() -
+                                  connection_start).total_seconds()
+                if connection_age > MAX_CONNECTION_TIME:
+                    logger.info(
+                        f"WebSocket connection time limit reached for {client_id} ({username})")
+                    await websocket.close(code=1000, reason="Connection time limit reached")
+                    break
+
+                data = await websocket.receive_json()
+                await websocket_manager.handle_client_message(client_id, data)
+            except WebSocketDisconnect:
+                logger.info(f"Client {client_id} ({username}) disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error processing message from {client_id}: {e}")
+                break
+
+    except Exception as e:
+        logger.error(
+            f"WebSocket error for client {client_id} from {client_ip}: {e}")
+
+    finally:
+        await websocket_manager.disconnect(client_id)
+
+
+async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
+    """
+    Authenticate WebSocket using shared authentication logic.
+
+    Since FastAPI's Depends() doesn't work with WebSocket endpoints,
+    we use the shared auth functions from the auth module for consistency.
+    """
+    from ..core.auth import authenticate_with_token, validate_session_data, get_dev_user
+    from http.cookies import SimpleCookie
+
+    client_ip = websocket.client.host if websocket.client else "unknown"
+
+    # Development mode: no authentication required
+    if not settings.auth_enabled:
+        if not settings.allow_dev_auth:
+            logger.error(
+                f"Auth disabled but ALLOW_DEV_AUTH not set - WebSocket denied from {client_ip}")
+            return None
+        logger.warning(
+            f"WebSocket authentication disabled - dev mode access from {client_ip}")
+        return get_dev_user()
+
+    # Try session authentication first (for browser clients)
+    # WebSocket upgrade request includes cookies automatically
+    try:
+        cookie_header = websocket.headers.get("cookie", "")
+        if cookie_header:
+            # Parse cookies properly using SimpleCookie
+            cookies = SimpleCookie()
+            cookies.load(cookie_header)
+
+            # Look for session cookie
+            session_cookie = None
+            for morsel in cookies.values():
+                if morsel.key == "session":
+                    session_cookie = morsel.value
+                    break
+
+            if session_cookie:
+                # Decode session cookie to get session data
+                try:
+                    from itsdangerous import URLSafeTimedSerializer
+
+                    if settings.session_secret_key:
+                        serializer = URLSafeTimedSerializer(
+                            settings.session_secret_key)
+                        # Decode session data (will raise exception if invalid/expired)
+                        session_data = serializer.loads(
+                            session_cookie, max_age=3600*24)
+
+                        # Use shared session validation logic
+                        user = validate_session_data(session_data, client_ip)
+                        if user:
+                            username = user.get(
+                                'preferred_username', 'unknown')
+                            logger.info(
+                                f"WebSocket session authentication successful for {username} from {client_ip}")
+                            return user
+                    else:
+                        logger.warning(
+                            f"Session secret not configured - cannot validate WebSocket session from {client_ip}")
+
+                except Exception as session_error:
+                    logger.debug(
+                        f"WebSocket session validation failed from {client_ip}: {session_error}")
+
+    except Exception as e:
+        logger.debug(f"Error parsing WebSocket cookies from {client_ip}: {e}")
+
+    # Try token from query parameter (for API clients)
+    token = websocket.query_params.get("token")
+    if token:
+        try:
+            # Use shared token authentication logic
+            user = await authenticate_with_token(token, client_ip)
+            if user:
+                username = user.get('preferred_username', 'api-service')
+                logger.info(
+                    f"WebSocket token authentication successful for {username} from {client_ip}")
+                return user
+        except Exception as e:
+            logger.error(
+                f"WebSocket token authentication failed from {client_ip}: {e}")
+
+    logger.warning(
+        f"WebSocket authentication failed: no valid credentials from {client_ip}")
+    return None

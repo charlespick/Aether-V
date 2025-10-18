@@ -1,6 +1,7 @@
 """Notification management service for system events."""
 import logging
 import uuid
+import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
@@ -18,6 +19,12 @@ class NotificationService:
     def __init__(self):
         self.notifications: Dict[str, Notification] = {}
         self._initialized = False
+        self._websocket_manager = None
+
+    def set_websocket_manager(self, manager):
+        """Set the WebSocket manager for broadcasting notifications."""
+        self._websocket_manager = manager
+        logger.info("WebSocket manager set for notification service")
 
     async def start(self):
         """Start the notification service."""
@@ -141,7 +148,45 @@ class NotificationService:
         self.notifications[notification.id] = notification
         logger.info(
             f"Created notification: {notification.title} ({notification.level})")
+
+        # Broadcast notification via WebSocket
+        if self._websocket_manager:
+            # Create a task to broadcast the notification
+            task = asyncio.create_task(
+                self._broadcast_notification(notification)
+            )
+            task.add_done_callback(self._handle_broadcast_task_exception)
+
         return notification
+
+    async def _broadcast_notification(self, notification: Notification):
+        """Broadcast a new notification via WebSocket."""
+        try:
+            await self._websocket_manager.broadcast({
+                "type": "notification",
+                "action": "created",
+                "data": {
+                    "id": notification.id,
+                    "title": notification.title,
+                    "message": notification.message,
+                    "level": notification.level.value,
+                    "category": notification.category.value,
+                    "created_at": notification.created_at.isoformat(),
+                    "read": notification.read,
+                    "related_entity": notification.related_entity
+                }
+            }, topic="notifications")
+        except Exception as e:
+            logger.error(f"Error broadcasting notification via WebSocket: {e}")
+
+    def _handle_broadcast_task_exception(self, task):
+        """Handle exceptions from broadcast tasks."""
+        try:
+            exception = task.exception()
+            if exception:
+                logger.error(f"Exception in broadcast task: {exception}")
+        except Exception as e:
+            logger.error(f"Error handling broadcast task exception: {e}")
 
     def create_host_unreachable_notification(self, hostname: str, error: str) -> Notification:
         """Create a notification for when a host becomes unreachable."""
@@ -215,8 +260,30 @@ class NotificationService:
         if notification:
             notification.read = True
             logger.info(f"Marked notification {notification_id} as read")
+
+            # Broadcast update via WebSocket
+            if self._websocket_manager:
+                task = asyncio.create_task(
+                    self._broadcast_notification_update(notification))
+                task.add_done_callback(self._handle_broadcast_task_exception)
+
             return True
         return False
+
+    async def _broadcast_notification_update(self, notification: Notification):
+        """Broadcast a notification update via WebSocket."""
+        try:
+            await self._websocket_manager.broadcast({
+                "type": "notification",
+                "action": "updated",
+                "data": {
+                    "id": notification.id,
+                    "read": notification.read
+                }
+            }, topic="notifications")
+        except Exception as e:
+            logger.error(
+                f"Error broadcasting notification update via WebSocket: {e}")
 
     def mark_all_read(self) -> int:
         """Mark all notifications as read. Returns count of notifications marked."""
