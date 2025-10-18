@@ -797,6 +797,9 @@ class SearchOverlay {
         this.overlayElement = null;
         this.expandoElement = null;
         this.originRect = null;
+        // Time to wait before resetting suppressNextOpen flag after close
+        // This ensures focus event handlers complete before the flag is reset
+        this.SUPPRESS_RESET_DELAY_MS = 100;
         this.createOverlayDOM();
     }
 
@@ -1238,12 +1241,12 @@ class SearchOverlay {
             // Allow time for focus event handlers to complete before resetting flag
             setTimeout(() => {
                 this.suppressNextOpen = false;
-            }, 100);
+            }, this.SUPPRESS_RESET_DELAY_MS);
         } else {
             // Reset after same delay to maintain consistent behavior
             setTimeout(() => {
                 this.suppressNextOpen = false;
-            }, 100);
+            }, this.SUPPRESS_RESET_DELAY_MS);
         }
     }
 
