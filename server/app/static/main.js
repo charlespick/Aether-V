@@ -37,31 +37,16 @@ function setupWebSocketHandlers() {
     wsClient.subscribe(['notifications', 'all']);
 }
 
+// Track connection status state
+let connectionStatusState = {
+    isShown: false,
+    countdownTimer: null,
+    reconnectDeadline: null
+};
+
 function updateWebSocketIndicator(status, data) {
     const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10; // Fallback if wsClient not available
     
-    // Update notification button indicator
-    const notificationsBtn = document.getElementById('notifications-btn');
-    if (notificationsBtn) {
-        // Remove existing status classes
-        notificationsBtn.classList.remove('ws-connected', 'ws-connecting', 'ws-disconnected', 'ws-reconnecting', 'ws-error');
-        
-        // Add current status class
-        if (status === 'connected') {
-            notificationsBtn.classList.add('ws-connected');
-            notificationsBtn.title = 'Notifications (Live)';
-        } else if (status === 'connecting') {
-            notificationsBtn.classList.add('ws-connecting');
-            notificationsBtn.title = 'Notifications (Connecting...)';
-        } else if (status === 'reconnecting') {
-            notificationsBtn.classList.add('ws-reconnecting');
-            notificationsBtn.title = `Notifications (Reconnecting... attempt ${data.attempt})`;
-        } else if (status === 'disconnected' || status === 'error') {
-            notificationsBtn.classList.add('ws-disconnected');
-            notificationsBtn.title = 'Notifications (Offline)';
-        }
-    }
-
     // Update connection status indicator in lower right corner
     const indicator = document.getElementById('connection-status-indicator');
     const titleEl = indicator?.querySelector('.connection-status-title');
@@ -74,40 +59,94 @@ function updateWebSocketIndicator(status, data) {
     indicator.classList.remove('disconnected', 'reconnecting', 'failed');
 
     if (status === 'connected') {
-        // Hide indicator when connected
+        // Hide indicator when connected and reset state
+        stopCountdownTimer();
         hideConnectionIndicator();
     } else if (status === 'connecting') {
         // Don't show indicator for initial connection to avoid noise on page load
-        hideConnectionIndicator();
+        if (!connectionStatusState.isShown) {
+            hideConnectionIndicator();
+        }
     } else if (status === 'reconnecting') {
-        // Show reconnection attempts with exponential backoff info
+        // Show reconnection attempts with live countdown
         indicator.classList.add('reconnecting');
         titleEl.textContent = 'Disconnected';
-        const delaySeconds = Math.round((data.delay || 0) / 1000);
+        
         const maxAttempts = (wsClient && wsClient.maxReconnectAttempts) || DEFAULT_MAX_RECONNECT_ATTEMPTS;
-        messageEl.textContent = `Trying to reconnect... (attempt ${data.attempt}/${maxAttempts}, retry in ${delaySeconds}s)`;
-        if (retryBtn) retryBtn.style.display = 'none';
+        
+        // Calculate when the next reconnect will happen
+        const delayMs = data.delay || 0;
+        connectionStatusState.reconnectDeadline = Date.now() + delayMs;
+        
+        // Update the message immediately
+        updateCountdownMessage(messageEl, data.attempt, maxAttempts);
+        
+        // Start countdown timer if not already running
+        if (!connectionStatusState.countdownTimer) {
+            connectionStatusState.countdownTimer = setInterval(() => {
+                updateCountdownMessage(messageEl, data.attempt, maxAttempts);
+            }, 1000);
+        }
+        
+        // Change retry button to manual reconnect
+        if (retryBtn) {
+            retryBtn.textContent = 'Reconnect Now';
+            retryBtn.style.display = 'block';
+        }
+        
         showConnectionIndicator();
     } else if (status === 'failed') {
-        // Show failed state with retry button
+        // Show failed state with refresh button
+        stopCountdownTimer();
         indicator.classList.add('failed');
         titleEl.textContent = 'Connection Failed';
         messageEl.textContent = 'Failed to reconnect to server after multiple attempts';
-        if (retryBtn) retryBtn.style.display = 'block';
+        if (retryBtn) {
+            retryBtn.textContent = 'Refresh Page';
+            retryBtn.style.display = 'block';
+        }
         showConnectionIndicator();
     } else if (status === 'disconnected' || status === 'error') {
-        // Show disconnected state
+        // Show initial disconnected state
         indicator.classList.add('disconnected');
         titleEl.textContent = 'Disconnected';
-        messageEl.textContent = 'Connection to server lost';
-        if (retryBtn) retryBtn.style.display = 'none';
+        messageEl.textContent = 'Connection to server lost, attempting to reconnect...';
+        if (retryBtn) {
+            retryBtn.textContent = 'Reconnect Now';
+            retryBtn.style.display = 'block';
+        }
         showConnectionIndicator();
     }
 }
 
+function updateCountdownMessage(messageEl, attempt, maxAttempts) {
+    if (!connectionStatusState.reconnectDeadline) {
+        messageEl.textContent = `Trying to reconnect... (attempt ${attempt}/${maxAttempts})`;
+        return;
+    }
+    
+    const remainingMs = connectionStatusState.reconnectDeadline - Date.now();
+    const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+    
+    if (remainingSeconds > 0) {
+        messageEl.textContent = `Trying to reconnect... (attempt ${attempt}/${maxAttempts}, retry in ${remainingSeconds}s)`;
+    } else {
+        messageEl.textContent = `Reconnecting... (attempt ${attempt}/${maxAttempts})`;
+    }
+}
+
+function stopCountdownTimer() {
+    if (connectionStatusState.countdownTimer) {
+        clearInterval(connectionStatusState.countdownTimer);
+        connectionStatusState.countdownTimer = null;
+    }
+    connectionStatusState.reconnectDeadline = null;
+}
+
 function showConnectionIndicator() {
     const indicator = document.getElementById('connection-status-indicator');
-    if (indicator) {
+    if (indicator && !connectionStatusState.isShown) {
+        connectionStatusState.isShown = true;
         indicator.classList.remove('hiding');
         indicator.style.display = 'block';
     }
@@ -115,7 +154,8 @@ function showConnectionIndicator() {
 
 function hideConnectionIndicator() {
     const indicator = document.getElementById('connection-status-indicator');
-    if (indicator && indicator.style.display !== 'none') {
+    if (indicator && connectionStatusState.isShown) {
+        connectionStatusState.isShown = false;
         indicator.classList.add('hiding');
         // Wait for animation to complete before hiding
         setTimeout(() => {
@@ -788,8 +828,22 @@ function setupNavigation() {
     const retryBtn = document.getElementById('connection-retry-btn');
     if (retryBtn) {
         retryBtn.addEventListener('click', () => {
-            console.log('Manual refresh requested');
-            window.location.reload();
+            const btnText = retryBtn.textContent;
+            if (btnText === 'Refresh Page') {
+                console.log('Manual page refresh requested');
+                window.location.reload();
+            } else if (btnText === 'Reconnect Now') {
+                console.log('Manual reconnect requested');
+                // Stop any existing reconnection timer
+                if (wsClient.reconnectTimer) {
+                    clearTimeout(wsClient.reconnectTimer);
+                    wsClient.reconnectTimer = null;
+                }
+                // Reset attempts to give it more chances
+                wsClient.reconnectAttempts = 0;
+                // Immediately try to reconnect
+                wsClient.connect();
+            }
         });
     }
     
