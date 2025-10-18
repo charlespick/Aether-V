@@ -38,6 +38,8 @@ function setupWebSocketHandlers() {
 }
 
 function updateWebSocketIndicator(status, data) {
+    const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10; // Fallback if wsClient not available
+    
     // Update notification button indicator
     const notificationsBtn = document.getElementById('notifications-btn');
     if (notificationsBtn) {
@@ -82,7 +84,7 @@ function updateWebSocketIndicator(status, data) {
         indicator.classList.add('reconnecting');
         titleEl.textContent = 'Disconnected';
         const delaySeconds = Math.round((data.delay || 0) / 1000);
-        const maxAttempts = (wsClient && wsClient.maxReconnectAttempts) || 10;
+        const maxAttempts = (wsClient && wsClient.maxReconnectAttempts) || DEFAULT_MAX_RECONNECT_ATTEMPTS;
         messageEl.textContent = `Trying to reconnect... (attempt ${data.attempt}/${maxAttempts}, retry in ${delaySeconds}s)`;
         if (retryBtn) retryBtn.style.display = 'none';
         showConnectionIndicator();
