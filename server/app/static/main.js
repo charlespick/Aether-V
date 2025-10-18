@@ -26,12 +26,10 @@ async function checkAuthenticationStatus() {
             if (data.authenticated) {
                 userInfo = data.user;
                 
-                // Show auth controls
-                if (authEnabled) {
-                    const authControls = document.getElementById('auth-controls');
-                    if (authControls) {
-                        authControls.style.display = 'block';
-                    }
+                // Always show logout button, but with tooltip if auth disabled
+                const logoutBtn = document.getElementById('logout-btn');
+                if (logoutBtn) {
+                    logoutBtn.style.display = 'block';
                 }
                 
                 console.log('Authentication validated from server session');
@@ -42,10 +40,10 @@ async function checkAuthenticationStatus() {
                 userInfo = null;
                 localStorage.removeItem('authToken'); // Clean up any old localStorage
                 
-                // Hide auth controls
-                const authControls = document.getElementById('auth-controls');
-                if (authControls) {
-                    authControls.style.display = 'none';
+                // Always show logout button, but with tooltip if auth disabled
+                const logoutBtn = document.getElementById('logout-btn');
+                if (logoutBtn) {
+                    logoutBtn.style.display = 'block';
                 }
                 
                 return false;
@@ -102,6 +100,19 @@ async function initializeAuth() {
             return;
         }
     }
+    
+    // Setup logout button tooltip
+    setupLogoutButtonTooltip();
+}
+
+// Setup logout button tooltip for when auth is disabled
+function setupLogoutButtonTooltip() {
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+        if (!authEnabled) {
+            logoutBtn.setAttribute('data-tooltip', 'Authentication is disabled');
+        }
+    }
 }
 
 // Secure logout function
@@ -124,25 +135,20 @@ async function logout() {
     // Clear local state
     userInfo = null;
     
-    // Hide logout button
-    const authControls = document.getElementById('auth-controls');
-    if (authControls) {
-        authControls.style.display = 'none';
-    }
+    // Keep logout button visible but update tooltip
+    setupLogoutButtonTooltip();
     
     // Redirect to login
     window.location.href = '/auth/login';
 }
 
-// Enhanced loadInventory with better error handling
 async function loadInventory() {
     try {
         const response = await fetch('/api/v1/inventory', { 
-            credentials: 'same-origin'  // Use session cookies for auth
+            credentials: 'same-origin'
         });
         
         if (response.status === 401) {
-            // Token is invalid - try to refresh auth state
             if (authEnabled) {
                 console.log('Token invalid, checking auth state');
                 const isAuthenticated = await checkAuthenticationStatus();
@@ -152,14 +158,13 @@ async function loadInventory() {
                     setTimeout(() => {
                         window.location.href = '/auth/login';
                     }, 1000);
-                    return;
+                    return null;
                 }
                 
-                // If we're authenticated now, retry the request
                 return loadInventory();
             } else {
                 showError('Authentication required. Please configure authentication.');
-                return;
+                return null;
             }
         }
         
@@ -169,111 +174,208 @@ async function loadInventory() {
         
         const data = await response.json();
         
-        // Update stats
-        document.getElementById('total-hosts').textContent = data.total_hosts;
-        document.getElementById('connected-hosts').textContent = 
-            data.hosts.filter(h => h.connected).length;
-        document.getElementById('total-vms').textContent = data.total_vms;
-        document.getElementById('running-vms').textContent = 
-            data.vms.filter(vm => vm.state === 'Running').length;
+        // Update sidebar navigation with hosts and VMs
+        updateSidebarNavigation(data);
         
-        // Update refresh info
-        if (data.last_refresh) {
-            const lastRefresh = new Date(data.last_refresh);
-            document.getElementById('refresh-info').textContent = 
-                `Last updated: ${lastRefresh.toLocaleString()}`;
-        }
-        
-        // Render hosts
-        renderHosts(data.hosts);
-        
-        // Render VMs
-        renderVMs(data.vms);
+        return data;
         
     } catch (error) {
         console.error('Error loading inventory:', error);
         showError('Failed to load inventory: ' + error.message);
+        return null;
     }
+}
+
+// Update sidebar navigation with dynamic host/VM data
+function updateSidebarNavigation(inventory) {
+    const hostsList = document.getElementById('hosts-list');
+    if (!hostsList || !inventory.hosts) return;
+    
+    const hosts = inventory.hosts;
+    const vms = inventory.vms || [];
+    
+    if (hosts.length === 0) {
+        hostsList.innerHTML = '<li class="empty" style="padding: 8px; font-size: 12px; color: var(--muted-ink);">No hosts</li>';
+        return;
+    }
+    
+    // Group VMs by host
+    const vmsByHost = {};
+    vms.forEach(vm => {
+        if (!vmsByHost[vm.host]) {
+            vmsByHost[vm.host] = [];
+        }
+        vmsByHost[vm.host].push(vm);
+    });
+    
+    let navHtml = '';
+    hosts.forEach(host => {
+        const shortName = host.hostname.split('.')[0];
+        const hostVMs = vmsByHost[host.hostname] || [];
+        
+        navHtml += `
+            <li class="nav-group" data-host="${host.hostname}">
+                <div class="sub-sub-item group-header" onclick="viewManager.switchView('host', { hostname: '${host.hostname}' })">
+                    <span class="sub-sub-icon">🖥</span>
+                    <span>${shortName}</span>
+                    ${hostVMs.length > 0 ? '<span class="expand-icon">›</span>' : ''}
+                </div>
+                ${hostVMs.length > 0 ? `
+                    <ul class="vm-list">
+                        ${hostVMs.map(vm => {
+                            const statusEmoji = vm.state === 'Running' ? '🟢' : '⚫';
+                            return `
+                                <li class="vm-item" onclick="event.stopPropagation(); viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
+                                    <span class="vm-status">${statusEmoji}</span>
+                                    <span class="vm-name">${vm.name}</span>
+                                </li>
+                            `;
+                        }).join('')}
+                    </ul>
+                ` : ''}
+            </li>
+        `;
+    });
+    
+    hostsList.innerHTML = navHtml;
+    
+    // Re-attach event listeners for expand/collapse
+    hostsList.querySelectorAll('.group-header .expand-icon').forEach(icon => {
+        icon.parentElement.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const navGroup = e.target.closest('.nav-group');
+            navGroup.classList.toggle('expanded');
+        });
+    });
 }
 
 // Call initializeAuth when page loads
-document.addEventListener('DOMContentLoaded', initializeAuth);
+document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize systems
+    overlayManager.init();
+    viewManager.init('view-container');
+    
+    await initializeAuth();
+    
+    // Load initial inventory
+    const inventory = await loadInventory();
+    
+    // Setup navigation handlers
+    setupNavigation();
+    
+    // Show default view
+    await viewManager.switchView('overview');
+});
 
-function renderHosts(hosts) {
-    const container = document.getElementById('hosts-content');
-    
-    if (hosts.length === 0) {
-        container.innerHTML = '<div class="empty">No hosts configured</div>';
-        return;
+// Setup navigation event handlers
+function setupNavigation() {
+    // Handle nav group expand/collapse
+    document.querySelectorAll('.nav-group .group-header').forEach(header => {
+        header.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const navGroup = header.closest('.nav-group');
+            navGroup.classList.toggle('expanded');
+        });
+    });
+
+    // Handle Aether (overview) click
+    document.querySelector('[data-view="overview"]')?.addEventListener('click', () => {
+        viewManager.switchView('overview');
+    });
+
+    // Handle cluster click
+    document.querySelector('[data-level="cluster"] > .group-header')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const navGroup = e.target.closest('.nav-group');
+        navGroup.classList.toggle('expanded');
+        // Also switch to cluster view
+        viewManager.switchView('cluster');
+    });
+
+    // Handle hosts group click
+    document.querySelector('[data-level="host"] > .group-header')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const navGroup = e.target.closest('.nav-group');
+        navGroup.classList.toggle('expanded');
+    });
+
+    // Settings button handler
+    const settingsBtn = document.getElementById('sidebar-settings');
+    if (settingsBtn) {
+        settingsBtn.addEventListener('click', () => {
+            overlayManager.open('settings');
+        });
+    }
+
+    // Notifications button handler
+    const notificationsBtn = document.getElementById('notifications-btn');
+    if (notificationsBtn) {
+        notificationsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleNotifications();
+        });
     }
     
-    let html = '<table><thead><tr><th>Hostname</th><th>Status</th><th>Last Seen</th></tr></thead><tbody>';
-    
-    for (const host of hosts) {
-        const status = host.connected ? 'connected' : 'disconnected';
-        const statusText = host.connected ? 'Connected' : 'Disconnected';
-        const lastSeen = host.last_seen ? new Date(host.last_seen).toLocaleString() : '-';
+    // Close notifications when clicking outside
+    document.addEventListener('click', (e) => {
+        const notificationsOverlay = document.getElementById('notifications-overlay');
+        const notificationsBtn = document.getElementById('notifications-btn');
         
-        html += `
-            <tr>
-                <td><strong>${host.hostname}</strong></td>
-                <td><span class="status ${status}">${statusText}</span></td>
-                <td>${lastSeen}</td>
-            </tr>
-        `;
-    }
-    
-    html += '</tbody></table>';
-    container.innerHTML = html;
+        if (notificationsOverlay && 
+            !notificationsOverlay.contains(e.target) && 
+            !notificationsBtn.contains(e.target)) {
+            closeNotifications();
+        }
+    });
 }
 
-function renderVMs(vms) {
-    const container = document.getElementById('vms-content');
-    
-    if (vms.length === 0) {
-        container.innerHTML = '<div class="empty">No VMs found</div>';
-        return;
+// Notifications overlay management
+function toggleNotifications() {
+    const overlay = document.getElementById('notifications-overlay');
+    if (overlay) {
+        if (overlay.classList.contains('open')) {
+            closeNotifications();
+        } else {
+            openNotifications();
+        }
     }
-    
-    let html = '<table><thead><tr><th>Name</th><th>Host</th><th>State</th><th>CPU Cores</th><th>Memory (GB)</th></tr></thead><tbody>';
-    
-    for (const vm of vms) {
-        const statusClass = vm.state === 'Running' ? 'running' : 'off';
-        
-        html += `
-            <tr>
-                <td><strong>${vm.name}</strong></td>
-                <td>${vm.host}</td>
-                <td><span class="status ${statusClass}">${vm.state}</span></td>
-                <td>${vm.cpu_cores}</td>
-                <td>${vm.memory_gb.toFixed(2)}</td>
-            </tr>
-        `;
+}
+
+function openNotifications() {
+    const overlay = document.getElementById('notifications-overlay');
+    if (overlay) {
+        overlay.classList.add('open');
     }
-    
-    html += '</tbody></table>';
-    container.innerHTML = html;
+}
+
+function closeNotifications() {
+    const overlay = document.getElementById('notifications-overlay');
+    if (overlay) {
+        overlay.classList.remove('open');
+    }
 }
 
 function showError(message) {
-    const hostsContent = document.getElementById('hosts-content');
-    const vmsContent = document.getElementById('vms-content');
-    
-    const errorHtml = `<div class="error">${message}</div>`;
-    hostsContent.innerHTML = errorHtml;
-    vmsContent.innerHTML = errorHtml;
+    console.error('Error:', message);
+    // Could show a toast notification here
 }
 
 async function refreshInventory() {
-    const btn = event.target;
-    btn.disabled = true;
-    btn.textContent = '⏳ Refreshing...';
+    console.log('Refreshing inventory...');
+    const inventory = await loadInventory();
     
-    await loadInventory();
-    
-    btn.disabled = false;
-    btn.textContent = '🔄 Refresh';
+    // Refresh current view if it needs updated data
+    if (viewManager.currentView && typeof viewManager.currentView.refresh === 'function') {
+        await viewManager.currentView.refresh();
+    } else if (viewManager.currentView) {
+        // Re-render the current view
+        const currentViewName = [...viewManager.views.entries()]
+            .find(([, ViewClass]) => viewManager.currentView instanceof ViewClass)?.[0];
+        if (currentViewName) {
+            await viewManager.switchView(currentViewName, viewManager.currentView.data);
+        }
+    }
 }
 
 // Auto-refresh every 30 seconds
-setInterval(loadInventory, 30000);
+setInterval(refreshInventory, 30000);

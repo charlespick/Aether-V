@@ -3,71 +3,117 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aether-V Orchestrator</title>
+    <title>Aether-V — Dashboard</title>
     <link rel="stylesheet" href="/static/main.css">
 </head>
 <body>
-    <div class="header">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <h1>🚀 Aether-V Orchestrator</h1>
-                <p>Hyper-V Virtual Machine Management</p>
+    <header class="topbar" role="banner">
+        <div class="topbar-left">
+            <div class="decorative-square" aria-hidden="true"></div>
+            <div class="environment-info">
+                <div class="environment-label">Working in</div>
+                <div class="environment-name" id="cluster-name">Production Environment</div>
             </div>
-            <div id="auth-controls" style="display: none;">
-                <button class="btn" onclick="logout()" style="background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3);">
-                    🔓 Logout
+        </div>
+
+        <div class="topbar-center">
+            <div class="search-container">
+                <span class="search-icon">🔍</span>
+                <label class="sr-only" for="global-search">Search</label>
+                <input id="global-search" class="search" placeholder="Search Everywhere" />
+            </div>
+        </div>
+
+        <div class="topbar-right">
+            <button id="notifications-btn" class="icon-btn" title="Notifications" aria-label="Notifications">🔔</button>
+            <button id="logout-btn" class="icon-btn" title="Sign out" aria-label="Sign out" onclick="logout()">⤴</button>
+        </div>
+    </header>
+
+    <div class="app-shell">
+        <nav class="sidebar" aria-label="Primary">
+            <ul class="nav-list">
+                <li class="nav-item active" data-view="overview">
+                    <span class="nav-icon">⚡</span>
+                    <span class="nav-label">Aether</span>
+                </li>
+
+                <li class="nav-separator"></li>
+
+                <li class="nav-group expanded" data-level="cluster">
+                    <div class="nav-item group-header">
+                        <span class="nav-icon">📦</span>
+                        <span class="nav-label">Cluster</span>
+                        <span class="expand-icon">›</span>
+                    </div>
+                    <ul class="sub-list">
+                        <li class="nav-group expanded" data-level="host">
+                            <div class="sub-item group-header">
+                                <span class="sub-icon">🖥️</span>
+                                <span class="sub-label">Hosts</span>
+                                <span class="expand-icon">›</span>
+                            </div>
+                            <ul class="sub-sub-list" id="hosts-list">
+                                <!-- Dynamic host list will be inserted here -->
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+            </ul>
+
+            <div class="sidebar-footer">
+                <button class="settings-btn" id="sidebar-settings" title="Settings">
+                    <span class="settings-icon">⚙️</span>
+                    <span class="settings-label">Settings</span>
                 </button>
             </div>
-        </div>
+        </nav>
+
+        <main class="content" id="main" role="main">
+            <div class="page-inner" id="view-container">
+                <!-- Dynamic view content will be rendered here -->
+                <div class="loading">Loading...</div>
+            </div>
+        </main>
     </div>
-    
-    <div class="container">
-        <div class="stats">
-            <div class="stat-card">
-                <h3>Total Hosts</h3>
-                <div class="value" id="total-hosts">-</div>
+
+    <!-- Notifications Overlay -->
+    <div id="notifications-overlay" class="notifications-overlay">
+        <div class="notifications-card">
+            <div class="notifications-header">
+                <h3>Notifications</h3>
+                <button class="mark-all-read-btn">Mark all as read</button>
             </div>
-            <div class="stat-card">
-                <h3>Connected Hosts</h3>
-                <div class="value" id="connected-hosts">-</div>
-            </div>
-            <div class="stat-card">
-                <h3>Total VMs</h3>
-                <div class="value" id="total-vms">-</div>
-            </div>
-            <div class="stat-card">
-                <h3>Running VMs</h3>
-                <div class="value" id="running-vms">-</div>
-            </div>
-        </div>
-        
-        <div class="section">
-            <div class="section-header">
-                <div>
-                    <h2>Hyper-V Hosts</h2>
-                    <div class="refresh-info" id="refresh-info"></div>
+            <div class="notifications-content">
+                <div class="notifications-list">
+                    <!-- Notifications will be populated here -->
+                    <div class="notification-item">
+                        <div class="notification-icon">📋</div>
+                        <div class="notification-content">
+                            <div class="notification-title">Job completed</div>
+                            <div class="notification-message">VM deployment for "web-server-01" has finished successfully.</div>
+                            <div class="notification-time">2 minutes ago</div>
+                        </div>
+                    </div>
+                    <div class="notification-item unread">
+                        <div class="notification-icon">⚠️</div>
+                        <div class="notification-content">
+                            <div class="notification-title">Host disconnected</div>
+                            <div class="notification-message">Host "hyperv-01.domain.local" has lost connection.</div>
+                            <div class="notification-time">5 minutes ago</div>
+                        </div>
+                    </div>
                 </div>
-                <button class="btn" onclick="refreshInventory()">🔄 Refresh</button>
-            </div>
-            <div id="hosts-content">
-                <div class="loading">Loading hosts...</div>
-            </div>
-        </div>
-        
-        <div class="section">
-            <div class="section-header">
-                <h2>Virtual Machines</h2>
-            </div>
-            <div id="vms-content">
-                <div class="loading">Loading VMs...</div>
             </div>
         </div>
     </div>
-    
+
     <!-- Configuration passed from backend -->
     <script id="config-data" type="application/json">
         {"auth_enabled": {{ auth_enabled | tojson }}}
     </script>
+    <script src="/static/overlay.js"></script>
+    <script src="/static/views.js"></script>
     <script src="/static/main.js"></script>
 </body>
 </html>
