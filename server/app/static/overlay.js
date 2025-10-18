@@ -215,8 +215,8 @@ class SettingsOverlay extends BaseOverlay {
         // Close overlay
         overlayManager.close();
 
-        // Optionally reload the page or update the UI
-        // window.location.reload();
+        // Immediately refresh the navigation tree to apply show hosts setting
+        loadInventory();
     }
 }
 

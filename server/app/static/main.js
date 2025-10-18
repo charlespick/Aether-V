@@ -471,6 +471,16 @@ function updateSidebarNavigation(inventory) {
     // Get user setting for showing hosts
     const showHosts = localStorage.getItem('setting.showHosts') !== 'false';
     
+    // Save current expanded/collapsed state before updating
+    const expandedClusters = new Set();
+    const expandedHosts = new Set();
+    document.querySelectorAll('.nav-group.expanded[data-cluster]').forEach(el => {
+        expandedClusters.add(el.dataset.cluster);
+    });
+    document.querySelectorAll('.nav-group.expanded[data-host]').forEach(el => {
+        expandedHosts.add(el.dataset.host);
+    });
+    
     // Group VMs by host
     const vmsByHost = {};
     vms.forEach(vm => {
@@ -503,16 +513,17 @@ function updateSidebarNavigation(inventory) {
     } else {
         clusters.forEach(cluster => {
             const clusterHosts = hostsByCluster[cluster.name] || [];
+            const isExpanded = expandedClusters.has(cluster.name);
             
             clustersHtml += `
-                <li class="nav-group expanded" data-cluster="${cluster.name}">
+                <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-cluster="${cluster.name}">
                     <div class="nav-item group-header" onclick="viewManager.switchView('cluster', { name: '${cluster.name}' })">
                         <span class="nav-icon">📦</span>
                         <span class="nav-label">${cluster.name}</span>
                         <span class="expand-icon">›</span>
                     </div>
                     <ul class="sub-list">
-                        ${renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts)}
+                        ${renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts, expandedHosts)}
                     </ul>
                 </li>
             `;
@@ -535,15 +546,16 @@ function updateSidebarNavigation(inventory) {
     attachNavigationEventListeners();
 }
 
-function renderClusterContent(cluster, hosts, vmsByHost, showHosts) {
+function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHosts) {
     if (showHosts) {
         // Show hosts as intermediate level
         return hosts.map(host => {
             const shortName = host.hostname.split('.')[0];
             const hostVMs = vmsByHost[host.hostname] || [];
+            const isExpanded = expandedHosts && expandedHosts.has(host.hostname);
             
             return `
-                <li class="nav-group" data-host="${host.hostname}">
+                <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-host="${host.hostname}">
                     <div class="sub-item group-header" onclick="viewManager.switchView('host', { hostname: '${host.hostname}' })">
                         <span class="sub-icon">🖥️</span>
                         <span class="sub-label">${shortName}</span>
@@ -719,3 +731,113 @@ async function refreshInventory() {
 
 // Auto-refresh every 30 seconds
 setInterval(refreshInventory, 30000);
+
+// Search Overlay Management
+class SearchOverlay {
+    constructor() {
+        this.isOpen = false;
+        this.overlayElement = null;
+        this.createOverlayDOM();
+    }
+
+    createOverlayDOM() {
+        const overlay = document.createElement('div');
+        overlay.id = 'search-overlay';
+        overlay.className = 'search-overlay';
+        overlay.innerHTML = `
+            <div class="search-backdrop"></div>
+            <div class="search-panel">
+                <div class="search-panel-header">
+                    <input type="text" class="search-panel-input" id="search-panel-input" placeholder="Search for VMs, Hosts, Clusters..." autofocus />
+                </div>
+                <div class="search-panel-content" id="search-panel-content">
+                    ${this.renderEmptyState()}
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        this.overlayElement = overlay;
+
+        // Setup event listeners
+        overlay.querySelector('.search-backdrop').addEventListener('click', () => this.close());
+        
+        // ESC key to close
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.isOpen) {
+                this.close();
+            }
+        });
+
+        // Search input handler (will be implemented later)
+        const searchInput = overlay.querySelector('#search-panel-input');
+        searchInput.addEventListener('input', (e) => {
+            // Search functionality to be implemented later
+            console.log('Search query:', e.target.value);
+        });
+    }
+
+    renderEmptyState() {
+        return `
+            <div class="search-section">
+                <div class="search-section-header">Virtual Machines</div>
+                <div class="search-no-results">No VMs found</div>
+            </div>
+            <div class="search-section">
+                <div class="search-section-header">Hosts</div>
+                <div class="search-no-results">No hosts found</div>
+            </div>
+            <div class="search-section">
+                <div class="search-section-header">Clusters</div>
+                <div class="search-no-results">No clusters found</div>
+            </div>
+        `;
+    }
+
+    open() {
+        if (this.isOpen) return;
+        this.overlayElement.classList.add('open');
+        this.isOpen = true;
+        document.body.style.overflow = 'hidden';
+        
+        // Focus search input
+        setTimeout(() => {
+            const input = this.overlayElement.querySelector('#search-panel-input');
+            if (input) input.focus();
+        }, 100);
+    }
+
+    close() {
+        if (!this.isOpen) return;
+        this.overlayElement.classList.remove('open');
+        this.isOpen = false;
+        document.body.style.overflow = '';
+        
+        // Clear search input
+        const input = this.overlayElement.querySelector('#search-panel-input');
+        if (input) input.value = '';
+        
+        // Reset content to empty state
+        const content = this.overlayElement.querySelector('#search-panel-content');
+        if (content) content.innerHTML = this.renderEmptyState();
+    }
+}
+
+// Initialize search overlay
+const searchOverlay = new SearchOverlay();
+
+// Connect search box to overlay
+document.addEventListener('DOMContentLoaded', () => {
+    const searchBox = document.getElementById('global-search');
+    if (searchBox) {
+        searchBox.addEventListener('click', (e) => {
+            e.preventDefault();
+            searchOverlay.open();
+        });
+        
+        searchBox.addEventListener('focus', (e) => {
+            e.preventDefault();
+            searchBox.blur();
+            searchOverlay.open();
+        });
+    }
+});

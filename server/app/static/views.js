@@ -406,10 +406,12 @@ class VMView extends BaseView {
                         <span class="action-icon">▶️</span>
                         <span>Start</span>
                     </button>
+                    ${vm.state === 'Running' ? `
                     <button class="action-btn">
                         <span class="action-icon">🔄</span>
                         <span>Restart</span>
                     </button>
+                    ` : ''}
                 </div>
             </div>
         `;
