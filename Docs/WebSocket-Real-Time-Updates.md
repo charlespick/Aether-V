@@ -305,20 +305,30 @@ Planned features:
 
 ### Authentication Implementation
 
-The WebSocket implementation now includes **full authentication support** matching the REST API security model:
+The WebSocket implementation uses **industry-standard authentication** matching the REST API security model:
+
+**Authentication Flow**:
+1. **Browser clients**: Session cookies automatically included in WebSocket upgrade request (standard browser behavior)
+2. **API clients**: OIDC JWT tokens or static API tokens passed via query parameter (`/ws?token=xxx`)
+3. **No custom token system** - uses existing authentication mechanisms directly
 
 **Supported Authentication Methods**:
-1. ✅ **WebSocket-specific tokens** - Short-lived JWT tokens (5 minute expiry) obtained from `/auth/ws-token`
-2. ✅ **OIDC JWT tokens** - Direct OIDC bearer tokens for API access
+1. ✅ **Session-based authentication** - Browser session cookies (same as REST API)
+2. ✅ **OIDC JWT tokens** - Direct OIDC bearer token validation
 3. ✅ **Static API token** - For automation and service accounts
 4. ✅ **Development mode** - Requires explicit `ALLOW_DEV_AUTH=true` flag
 
-**Authentication Flow**:
-1. Frontend requests a WebSocket token from `/auth/ws-token` using session credentials
-2. Server validates the session and issues a short-lived JWT token
-3. Frontend connects to WebSocket with token as query parameter: `/ws?token=xxx`
-4. Server validates token before accepting connection
-5. Invalid or missing tokens result in connection rejection (code 1008)
+### Connection Management
+
+**Server-Side Time Limits**:
+- WebSocket connections automatically close after **30 minutes**
+- Prevents indefinite connections and resource exhaustion
+- Graceful closure with standard WebSocket close code (1000)
+
+**Client-Side Auto-Refresh**:
+- Connections automatically refreshed every **25 minutes** (before server timeout)
+- Seamless reconnection maintains user experience
+- Subscriptions automatically restored after reconnection
 
 ### Development vs Production
 
@@ -331,16 +341,9 @@ The WebSocket implementation now includes **full authentication support** matchi
 - ✅ All WebSocket connections require valid authentication
 - ✅ Supports OIDC JWT tokens for interactive users
 - ✅ Supports static API tokens for automation
-- ✅ Short-lived WebSocket tokens for browser clients
+- ✅ Session-based authentication for browser clients
 - ✅ Role-based access control (respects `OIDC_ROLE_NAME`)
-
-### Security Features
-
-1. **Token Expiration**: WebSocket tokens expire after 5 minutes
-2. **Automatic Token Refresh**: Frontend automatically fetches new tokens on reconnection
-3. **Role Validation**: Tokens are checked for required roles before connection
-4. **Audit Logging**: All authentication attempts are logged with IP and user info
-5. **Secure Protocol Support**: WSS (WebSocket Secure) automatically used with HTTPS
+- ✅ 30-minute connection time limit enforced
 
 ### WSS (WebSocket Secure) Support
 
@@ -366,16 +369,16 @@ WebSocket authentication respects all existing authentication environment variab
 - `OIDC_CLIENT_SECRET` - OIDC client secret
 - `OIDC_ROLE_NAME` - Required role for access
 - `API_TOKEN` - Static token for automation
-- `SESSION_SECRET_KEY` - Secret for signing WebSocket tokens
+- `SESSION_SECRET_KEY` - Secret for session cookies
 
-### Rate Limiting Recommendations
+### Security Features
 
-For production deployments, consider implementing:
-1. **Connection limits** - Max connections per user/IP
-2. **Message rate limiting** - Limit messages per second per connection
-3. **Token rate limiting** - Limit token requests to prevent abuse
-
-Example implementation location: `app/services/websocket_service.py`
+1. **Standard Authentication**: Uses existing REST API authentication mechanisms
+2. **Connection Time Limits**: 30-minute server-side timeout prevents resource exhaustion
+3. **Automatic Refresh**: Client refreshes connection before timeout
+4. **Role Validation**: Tokens checked for required roles before connection
+5. **Audit Logging**: All authentication attempts logged with IP and user info
+6. **Secure Protocol Support**: WSS (WebSocket Secure) automatically used with HTTPS
 
 ### Monitoring and Audit
 
@@ -383,11 +386,13 @@ All WebSocket events are logged:
 - Connection attempts (successful and failed)
 - Authentication failures with reason
 - User disconnections
+- Connection time limit enforced
 - Message processing errors
 
 Example log entries:
 ```
 INFO - WebSocket authenticated for user john.doe from 192.168.1.100
-WARNING - WebSocket authentication failed: invalid token from 192.168.1.200
+WARNING - WebSocket authentication failed: no valid credentials from 192.168.1.200
+INFO - WebSocket connection time limit reached for client123 (john.doe)
 INFO - Client abc123 (john.doe) disconnected
 ```
