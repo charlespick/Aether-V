@@ -434,6 +434,23 @@ async function markNotificationAsRead(notificationId) {
     }
 }
 
+// Mark all notifications as read
+async function markAllNotificationsAsRead() {
+    try {
+        const response = await fetch('/api/v1/notifications/mark-all-read', {
+            method: 'PUT',
+            credentials: 'same-origin'
+        });
+        
+        if (response.ok) {
+            // Reload notifications to update UI
+            await loadNotifications();
+        }
+    } catch (error) {
+        console.error('Error marking all notifications as read:', error);
+    }
+}
+
 // Update notification button badge
 function updateNotificationBadge(unreadCount) {
     const notificationsBtn = document.getElementById('notifications-btn');
@@ -471,6 +488,16 @@ function updateSidebarNavigation(inventory) {
     // Get user setting for showing hosts
     const showHosts = localStorage.getItem('setting.showHosts') !== 'false';
     
+    // Save current expanded/collapsed state before updating
+    const expandedClusters = new Set();
+    const expandedHosts = new Set();
+    document.querySelectorAll('.nav-group.expanded[data-cluster]').forEach(el => {
+        expandedClusters.add(el.dataset.cluster);
+    });
+    document.querySelectorAll('.nav-group.expanded[data-host]').forEach(el => {
+        expandedHosts.add(el.dataset.host);
+    });
+    
     // Group VMs by host
     const vmsByHost = {};
     vms.forEach(vm => {
@@ -503,16 +530,17 @@ function updateSidebarNavigation(inventory) {
     } else {
         clusters.forEach(cluster => {
             const clusterHosts = hostsByCluster[cluster.name] || [];
+            const isExpanded = expandedClusters.has(cluster.name);
             
             clustersHtml += `
-                <li class="nav-group expanded" data-cluster="${cluster.name}">
+                <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-cluster="${cluster.name}">
                     <div class="nav-item group-header" onclick="viewManager.switchView('cluster', { name: '${cluster.name}' })">
                         <span class="nav-icon">📦</span>
                         <span class="nav-label">${cluster.name}</span>
                         <span class="expand-icon">›</span>
                     </div>
                     <ul class="sub-list">
-                        ${renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts)}
+                        ${renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts, expandedHosts)}
                     </ul>
                 </li>
             `;
@@ -535,15 +563,16 @@ function updateSidebarNavigation(inventory) {
     attachNavigationEventListeners();
 }
 
-function renderClusterContent(cluster, hosts, vmsByHost, showHosts) {
+function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHosts = new Set()) {
     if (showHosts) {
         // Show hosts as intermediate level
         return hosts.map(host => {
             const shortName = host.hostname.split('.')[0];
             const hostVMs = vmsByHost[host.hostname] || [];
+            const isExpanded = expandedHosts.has(host.hostname);
             
             return `
-                <li class="nav-group" data-host="${host.hostname}">
+                <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-host="${host.hostname}">
                     <div class="sub-item group-header" onclick="viewManager.switchView('host', { hostname: '${host.hostname}' })">
                         <span class="sub-icon">🖥️</span>
                         <span class="sub-label">${shortName}</span>
@@ -588,12 +617,14 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts) {
 }
 
 function attachNavigationEventListeners() {
-    // Handle nav group expand/collapse
-    document.querySelectorAll('.nav-group .group-header').forEach(header => {
-        header.addEventListener('click', (e) => {
+    // Handle expand icon clicks separately from navigation
+    document.querySelectorAll('.expand-icon').forEach(icon => {
+        icon.addEventListener('click', (e) => {
             e.stopPropagation();
-            const navGroup = header.closest('.nav-group');
-            navGroup.classList.toggle('expanded');
+            const navGroup = icon.closest('.nav-group');
+            if (navGroup) {
+                navGroup.classList.toggle('expanded');
+            }
         });
     });
     
@@ -603,8 +634,37 @@ function attachNavigationEventListeners() {
     });
 }
 
+// Theme management
+function applyTheme(themeMode) {
+    const html = document.documentElement;
+    
+    if (themeMode === 'system') {
+        // Use system preference
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+    } else {
+        html.setAttribute('data-theme', themeMode);
+    }
+}
+
+function initializeTheme() {
+    const themeMode = localStorage.getItem('setting.themeMode') || 'system';
+    applyTheme(themeMode);
+    
+    // Listen for system theme changes if in system mode
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+        const currentMode = localStorage.getItem('setting.themeMode') || 'system';
+        if (currentMode === 'system') {
+            applyTheme('system');
+        }
+    });
+}
+
 // Call initializeAuth when page loads
 document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize theme first
+    initializeTheme();
+    
     // Initialize systems
     overlayManager.init();
     viewManager.init('view-container');
@@ -648,6 +708,15 @@ function setupNavigation() {
         notificationsBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             await toggleNotifications();
+        });
+    }
+    
+    // Mark all as read button handler
+    const markAllReadBtn = document.querySelector('.mark-all-read-btn');
+    if (markAllReadBtn) {
+        markAllReadBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await markAllNotificationsAsRead();
         });
     }
     
@@ -719,3 +788,113 @@ async function refreshInventory() {
 
 // Auto-refresh every 30 seconds
 setInterval(refreshInventory, 30000);
+
+// Search Overlay Management
+class SearchOverlay {
+    constructor() {
+        this.isOpen = false;
+        this.overlayElement = null;
+        this.createOverlayDOM();
+    }
+
+    createOverlayDOM() {
+        const overlay = document.createElement('div');
+        overlay.id = 'search-overlay';
+        overlay.className = 'search-overlay';
+        overlay.innerHTML = `
+            <div class="search-backdrop"></div>
+            <div class="search-panel">
+                <div class="search-panel-header">
+                    <input type="text" class="search-panel-input" id="search-panel-input" placeholder="Search for VMs, Hosts, Clusters..." autofocus />
+                </div>
+                <div class="search-panel-content" id="search-panel-content">
+                    ${this.renderEmptyState()}
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        this.overlayElement = overlay;
+
+        // Setup event listeners
+        overlay.querySelector('.search-backdrop').addEventListener('click', () => this.close());
+        
+        // ESC key to close
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.isOpen) {
+                this.close();
+            }
+        });
+
+        // Search input handler
+        const searchInput = overlay.querySelector('#search-panel-input');
+        searchInput.addEventListener('input', (e) => {
+            // TODO: Implement search functionality - filter VMs, Hosts, and Clusters
+            // This is a placeholder for future search implementation
+        });
+    }
+
+    renderEmptyState() {
+        return `
+            <div class="search-section">
+                <div class="search-section-header">Virtual Machines</div>
+                <div class="search-no-results">No VMs found</div>
+            </div>
+            <div class="search-section">
+                <div class="search-section-header">Hosts</div>
+                <div class="search-no-results">No hosts found</div>
+            </div>
+            <div class="search-section">
+                <div class="search-section-header">Clusters</div>
+                <div class="search-no-results">No clusters found</div>
+            </div>
+        `;
+    }
+
+    open() {
+        if (this.isOpen) return;
+        this.overlayElement.classList.add('open');
+        this.isOpen = true;
+        document.body.style.overflow = 'hidden';
+        
+        // Focus search input
+        setTimeout(() => {
+            const input = this.overlayElement.querySelector('#search-panel-input');
+            if (input) input.focus();
+        }, 100);
+    }
+
+    close() {
+        if (!this.isOpen) return;
+        this.overlayElement.classList.remove('open');
+        this.isOpen = false;
+        document.body.style.overflow = '';
+        
+        // Clear search input
+        const input = this.overlayElement.querySelector('#search-panel-input');
+        if (input) input.value = '';
+        
+        // Reset content to empty state
+        const content = this.overlayElement.querySelector('#search-panel-content');
+        if (content) content.innerHTML = this.renderEmptyState();
+    }
+}
+
+// Initialize search overlay
+const searchOverlay = new SearchOverlay();
+
+// Connect search box to overlay
+document.addEventListener('DOMContentLoaded', () => {
+    const searchBox = document.getElementById('global-search');
+    if (searchBox) {
+        searchBox.addEventListener('click', (e) => {
+            e.preventDefault();
+            searchOverlay.open();
+        });
+        
+        searchBox.addEventListener('focus', (e) => {
+            e.preventDefault();
+            searchBox.blur();
+            searchOverlay.open();
+        });
+    }
+});

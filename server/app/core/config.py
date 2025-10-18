@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     app_name: str = "Aether-V Orchestrator"
     app_version: str = "0.1.0"
     debug: bool = False
+    environment_name: str = "Production Environment"
 
     # Authentication settings
     auth_enabled: bool = True

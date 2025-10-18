@@ -167,9 +167,11 @@ async def root(request: Request):
 
         # Always serve the page - let the frontend handle authentication state
         # This prevents redirect loops and allows graceful token handling
+        environment_name = "Imaginary Datacenter" if settings.dummy_data else settings.environment_name
         response = templates.TemplateResponse("index.html", {
             "request": request,
             "auth_enabled": settings.auth_enabled,
+            "environment_name": environment_name,
             # Convert to milliseconds
             "websocket_refresh_time": settings.websocket_refresh_time * 1000,
             # Convert to milliseconds
