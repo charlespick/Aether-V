@@ -75,18 +75,15 @@ function updateWebSocketIndicator(status, data) {
         // Hide indicator when connected
         hideConnectionIndicator();
     } else if (status === 'connecting') {
-        // Show initial connection attempt (optional, can be skipped for less noise)
-        indicator.classList.add('reconnecting');
-        titleEl.textContent = 'Connecting...';
-        messageEl.textContent = 'Establishing connection to server';
-        if (retryBtn) retryBtn.style.display = 'none';
-        showConnectionIndicator();
+        // Don't show indicator for initial connection to avoid noise on page load
+        hideConnectionIndicator();
     } else if (status === 'reconnecting') {
         // Show reconnection attempts with exponential backoff info
         indicator.classList.add('reconnecting');
         titleEl.textContent = 'Disconnected';
         const delaySeconds = Math.round((data.delay || 0) / 1000);
-        messageEl.textContent = `Trying to reconnect... (attempt ${data.attempt}/10, retry in ${delaySeconds}s)`;
+        const maxAttempts = wsClient.maxReconnectAttempts || 10;
+        messageEl.textContent = `Trying to reconnect... (attempt ${data.attempt}/${maxAttempts}, retry in ${delaySeconds}s)`;
         if (retryBtn) retryBtn.style.display = 'none';
         showConnectionIndicator();
     } else if (status === 'failed') {
