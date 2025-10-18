@@ -303,65 +303,91 @@ Planned features:
 
 ## Security Considerations
 
-⚠️ **IMPORTANT**: The current WebSocket implementation does not include authentication.
+### Authentication Implementation
+
+The WebSocket implementation now includes **full authentication support** matching the REST API security model:
+
+**Supported Authentication Methods**:
+1. ✅ **WebSocket-specific tokens** - Short-lived JWT tokens (5 minute expiry) obtained from `/auth/ws-token`
+2. ✅ **OIDC JWT tokens** - Direct OIDC bearer tokens for API access
+3. ✅ **Static API token** - For automation and service accounts
+4. ✅ **Development mode** - Requires explicit `ALLOW_DEV_AUTH=true` flag
+
+**Authentication Flow**:
+1. Frontend requests a WebSocket token from `/auth/ws-token` using session credentials
+2. Server validates the session and issues a short-lived JWT token
+3. Frontend connects to WebSocket with token as query parameter: `/ws?token=xxx`
+4. Server validates token before accepting connection
+5. Invalid or missing tokens result in connection rejection (code 1008)
 
 ### Development vs Production
 
-**Development Mode**:
-- WebSocket connections are accepted without authentication
-- Suitable for development and testing environments
-- Should only be used behind a secure network/firewall
+**Development Mode** (AUTH_ENABLED=false, ALLOW_DEV_AUTH=true):
+- WebSocket connections allowed without authentication
+- Suitable for local development and testing
+- Should only be used behind secure networks
 
-**Production Recommendations**:
+**Production Mode** (AUTH_ENABLED=true):
+- ✅ All WebSocket connections require valid authentication
+- ✅ Supports OIDC JWT tokens for interactive users
+- ✅ Supports static API tokens for automation
+- ✅ Short-lived WebSocket tokens for browser clients
+- ✅ Role-based access control (respects `OIDC_ROLE_NAME`)
 
-1. **Add Authentication**: Before deploying to production, implement token-based authentication:
-   ```python
-   # Example: Validate token on WebSocket connection
-   @router.websocket("/ws")
-   async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
-       # Validate token before accepting connection
-       user = await validate_token(token)
-       if not user:
-           await websocket.close(code=1008, reason="Unauthorized")
-           return
-       # ... rest of connection handling
-   ```
+### Security Features
 
-2. **Use WSS (WebSocket Secure)**: Always use encrypted WebSocket connections in production
-   - Configure ingress/load balancer for TLS termination
-   - Use `wss://` protocol instead of `ws://`
+1. **Token Expiration**: WebSocket tokens expire after 5 minutes
+2. **Automatic Token Refresh**: Frontend automatically fetches new tokens on reconnection
+3. **Role Validation**: Tokens are checked for required roles before connection
+4. **Audit Logging**: All authentication attempts are logged with IP and user info
+5. **Secure Protocol Support**: WSS (WebSocket Secure) automatically used with HTTPS
 
-3. **Implement Rate Limiting**: Protect against abuse
-   ```python
-   # Add rate limiting per client_id
-   rate_limiter.check_rate(client_id)
-   ```
+### WSS (WebSocket Secure) Support
 
-4. **Validate Client Messages**: Always validate and sanitize client input
-   ```python
-   # Current implementation validates message types
-   # Add additional validation as needed
-   ```
+The WebSocket client automatically uses WSS when the page is served over HTTPS:
 
-5. **Monitor Connections**: Track active connections and implement limits
-   ```python
-   # Set max connections per user/IP
-   if len(connections_per_ip[ip]) > MAX_CONNECTIONS:
-       await websocket.close(code=1008, reason="Too many connections")
-   ```
+```javascript
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = `${protocol}//${window.location.host}/ws`;
+```
 
-### Current Security Measures
+**For Production Deployment**:
+- Configure ingress/load balancer for TLS termination
+- Application automatically detects HTTPS and uses WSS
+- No additional configuration required
 
-- Message validation on server side
-- Automatic cleanup of stale connections
-- No sensitive data in WebSocket messages (notifications are already visible in REST API)
-- Session-based authentication still required for REST API endpoints
+### Configuration
 
-### Security Roadmap
+WebSocket authentication respects all existing authentication environment variables:
+- `AUTH_ENABLED` - Enable/disable authentication
+- `ALLOW_DEV_AUTH` - Explicitly allow development mode
+- `OIDC_ISSUER_URL` - OIDC provider URL
+- `OIDC_CLIENT_ID` - OIDC client ID
+- `OIDC_CLIENT_SECRET` - OIDC client secret
+- `OIDC_ROLE_NAME` - Required role for access
+- `API_TOKEN` - Static token for automation
+- `SESSION_SECRET_KEY` - Secret for signing WebSocket tokens
 
-Priority security enhancements:
-1. ⚠️ **HIGH PRIORITY**: Add authentication token validation for WebSocket connections
-2. Add per-client rate limiting
-3. Implement connection limits per user
-4. Add audit logging for WebSocket events
-5. Implement message encryption for sensitive data
+### Rate Limiting Recommendations
+
+For production deployments, consider implementing:
+1. **Connection limits** - Max connections per user/IP
+2. **Message rate limiting** - Limit messages per second per connection
+3. **Token rate limiting** - Limit token requests to prevent abuse
+
+Example implementation location: `app/services/websocket_service.py`
+
+### Monitoring and Audit
+
+All WebSocket events are logged:
+- Connection attempts (successful and failed)
+- Authentication failures with reason
+- User disconnections
+- Message processing errors
+
+Example log entries:
+```
+INFO - WebSocket authenticated for user john.doe from 192.168.1.100
+WARNING - WebSocket authentication failed: invalid token from 192.168.1.200
+INFO - Client abc123 (john.doe) disconnected
+```

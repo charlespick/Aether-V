@@ -13,18 +13,34 @@ class WebSocketClient {
         this.messageHandlers = new Map();
         this.connectionStatusCallbacks = [];
         this.subscriptions = new Set();
+        this.wsToken = null; // Store WebSocket token
     }
 
-    connect() {
+    async connect() {
         if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
             console.log('WebSocket already connected or connecting');
             return;
         }
 
+        // Get WebSocket token if authentication is enabled
+        try {
+            await this.fetchWebSocketToken();
+        } catch (error) {
+            console.error('Failed to get WebSocket token:', error);
+            this.updateConnectionStatus('error');
+            this.scheduleReconnect();
+            return;
+        }
+
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        let wsUrl = `${protocol}//${window.location.host}/ws`;
         
-        console.log('Connecting to WebSocket:', wsUrl);
+        // Add token to URL if we have one
+        if (this.wsToken) {
+            wsUrl += `?token=${encodeURIComponent(this.wsToken)}`;
+        }
+        
+        console.log('Connecting to WebSocket:', wsUrl.replace(/token=[^&]+/, 'token=***'));
         this.updateConnectionStatus('connecting');
 
         try {
@@ -60,11 +76,20 @@ class WebSocketClient {
                 this.updateConnectionStatus('error');
             };
 
-            this.ws.onclose = () => {
-                console.log('WebSocket disconnected');
+            this.ws.onclose = (event) => {
+                console.log('WebSocket disconnected', event.code, event.reason);
                 this.connected = false;
                 this.stopPingInterval();
-                this.updateConnectionStatus('disconnected');
+                
+                // Check if this was an authentication failure (code 1008)
+                if (event.code === 1008) {
+                    console.error('WebSocket authentication failed');
+                    this.updateConnectionStatus('auth_failed');
+                    // Clear the token and try to reconnect (will fetch a new token)
+                    this.wsToken = null;
+                } else {
+                    this.updateConnectionStatus('disconnected');
+                }
                 
                 // Attempt to reconnect
                 this.scheduleReconnect();
@@ -235,6 +260,39 @@ class WebSocketClient {
 
     getClientId() {
         return this.clientId;
+    }
+
+    async fetchWebSocketToken() {
+        /**
+         * Fetch a WebSocket authentication token from the server.
+         * This token is used to authenticate the WebSocket connection.
+         */
+        try {
+            const response = await fetch('/auth/ws-token', {
+                method: 'GET',
+                credentials: 'same-origin' // Include session cookies
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                this.wsToken = data.token;
+                console.log('WebSocket token obtained successfully');
+                return true;
+            } else if (response.status === 401) {
+                // Not authenticated - this is OK for dev mode
+                console.log('No authentication token available (dev mode or not logged in)');
+                this.wsToken = null;
+                return true;
+            } else {
+                console.error('Failed to get WebSocket token:', response.status);
+                return false;
+            }
+        } catch (error) {
+            console.error('Error fetching WebSocket token:', error);
+            // In dev mode, we can still connect without a token
+            this.wsToken = null;
+            return true;
+        }
     }
 }
 
