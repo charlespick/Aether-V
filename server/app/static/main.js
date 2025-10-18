@@ -82,7 +82,8 @@ function updateWebSocketIndicator(status, data) {
         indicator.classList.add('reconnecting');
         titleEl.textContent = 'Disconnected';
         const delaySeconds = Math.round((data.delay || 0) / 1000);
-        messageEl.textContent = `Trying to reconnect... (attempt ${data.attempt}/${wsClient.maxReconnectAttempts}, retry in ${delaySeconds}s)`;
+        const maxAttempts = (wsClient && wsClient.maxReconnectAttempts) || 10;
+        messageEl.textContent = `Trying to reconnect... (attempt ${data.attempt}/${maxAttempts}, retry in ${delaySeconds}s)`;
         if (retryBtn) retryBtn.style.display = 'none';
         showConnectionIndicator();
     } else if (status === 'failed') {
