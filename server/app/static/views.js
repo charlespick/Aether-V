@@ -204,17 +204,34 @@ class OverviewView extends BaseView {
 // Cluster View
 class ClusterView extends BaseView {
     async render() {
+        const clusterName = this.data.name || 'Unknown Cluster';
         const inventory = await this.fetchInventory();
         
+        // Filter hosts and VMs for this specific cluster
+        const clusterHosts = inventory.hosts.filter(h => h.cluster === clusterName);
+        const clusterVMs = inventory.vms.filter(vm => {
+            const vmHost = inventory.hosts.find(h => h.hostname === vm.host);
+            return vmHost && vmHost.cluster === clusterName;
+        });
+        
         return `
-            <h1 class="page-title">Cluster Details</h1>
+            <h1 class="page-title">${clusterName}</h1>
 
             <div class="view-section">
                 <div class="section-header">
                     <h2>Hosts in Cluster</h2>
                 </div>
                 <div class="host-grid">
-                    ${this.renderHostCards(inventory.hosts)}
+                    ${this.renderHostCards(clusterHosts)}
+                </div>
+            </div>
+
+            <div class="view-section">
+                <div class="section-header">
+                    <h2>Virtual Machines</h2>
+                </div>
+                <div class="vm-grid">
+                    ${this.renderVMCards(clusterVMs)}
                 </div>
             </div>
 
@@ -223,8 +240,8 @@ class ClusterView extends BaseView {
                     <h2>Cluster Resources</h2>
                 </div>
                 <div class="resource-summary">
-                    <p>Total CPU Cores: ${this.calculateTotalCPU(inventory.vms)}</p>
-                    <p>Total Memory: ${this.calculateTotalMemory(inventory.vms)} GB</p>
+                    <p>Total CPU Cores: ${this.calculateTotalCPU(clusterVMs)}</p>
+                    <p>Total Memory: ${this.calculateTotalMemory(clusterVMs)} GB</p>
                 </div>
             </div>
         `;
@@ -245,6 +262,29 @@ class ClusterView extends BaseView {
                     <span class="status ${host.connected ? 'connected' : 'disconnected'}">
                         ${host.connected ? 'Connected' : 'Disconnected'}
                     </span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    renderVMCards(vms) {
+        if (vms.length === 0) {
+            return '<p class="empty">No virtual machines</p>';
+        }
+
+        return vms.map(vm => `
+            <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
+                <div class="vm-card-header">
+                    <span class="vm-status-icon">${vm.state === 'Running' ? '🟢' : '⚫'}</span>
+                    <span class="vm-card-name">${vm.name}</span>
+                </div>
+                <div class="vm-card-details">
+                    <div class="vm-card-spec">${vm.cpu_cores} vCPU</div>
+                    <div class="vm-card-spec">${vm.memory_gb.toFixed(2)} GB RAM</div>
+                    <div class="vm-card-host">Host: ${vm.host.split('.')[0]}</div>
+                </div>
+                <div class="vm-card-status">
+                    <span class="status ${vm.state === 'Running' ? 'running' : 'off'}">${vm.state.toUpperCase()}</span>
                 </div>
             </div>
         `).join('');

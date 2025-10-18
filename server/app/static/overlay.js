@@ -151,11 +151,15 @@ class SettingsOverlay extends BaseOverlay {
                 <div class="setting-item">
                     <div class="setting-header">
                         <div class="setting-info">
-                            <div class="setting-title">Dark mode</div>
-                            <div class="setting-description">Enable dark theme (coming soon)</div>
+                            <div class="setting-title">Theme</div>
+                            <div class="setting-description">Choose your preferred color theme</div>
                         </div>
                         <div class="setting-control">
-                            <input type="checkbox" id="dark-mode">
+                            <select id="theme-mode" class="setting-select">
+                                <option value="light">Light</option>
+                                <option value="dark">Dark</option>
+                                <option value="system">Match System</option>
+                            </select>
                         </div>
                     </div>
                 </div>
@@ -200,17 +204,25 @@ class SettingsOverlay extends BaseOverlay {
 
         const refreshInterval = localStorage.getItem('setting.refreshInterval') || '30';
         document.getElementById('refresh-interval').value = refreshInterval;
+        
+        const themeMode = localStorage.getItem('setting.themeMode') || 'system';
+        document.getElementById('theme-mode').value = themeMode;
     }
 
     save() {
         const showHosts = document.getElementById('show-hosts').checked;
         const refreshInterval = document.getElementById('refresh-interval').value;
+        const themeMode = document.getElementById('theme-mode').value;
 
         localStorage.setItem('setting.showHosts', showHosts);
         localStorage.setItem('setting.refreshInterval', refreshInterval);
+        localStorage.setItem('setting.themeMode', themeMode);
 
         // Apply settings
-        console.log('Settings saved:', { showHosts, refreshInterval });
+        console.log('Settings saved:', { showHosts, refreshInterval, themeMode });
+        
+        // Apply theme immediately
+        applyTheme(themeMode);
         
         // Close overlay
         overlayManager.close();

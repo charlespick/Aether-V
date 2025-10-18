@@ -434,6 +434,23 @@ async function markNotificationAsRead(notificationId) {
     }
 }
 
+// Mark all notifications as read
+async function markAllNotificationsAsRead() {
+    try {
+        const response = await fetch('/api/v1/notifications/read-all', {
+            method: 'PUT',
+            credentials: 'same-origin'
+        });
+        
+        if (response.ok) {
+            // Reload notifications to update UI
+            await loadNotifications();
+        }
+    } catch (error) {
+        console.error('Error marking all notifications as read:', error);
+    }
+}
+
 // Update notification button badge
 function updateNotificationBadge(unreadCount) {
     const notificationsBtn = document.getElementById('notifications-btn');
@@ -600,12 +617,14 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
 }
 
 function attachNavigationEventListeners() {
-    // Handle nav group expand/collapse
-    document.querySelectorAll('.nav-group .group-header').forEach(header => {
-        header.addEventListener('click', (e) => {
+    // Handle expand icon clicks separately from navigation
+    document.querySelectorAll('.expand-icon').forEach(icon => {
+        icon.addEventListener('click', (e) => {
             e.stopPropagation();
-            const navGroup = header.closest('.nav-group');
-            navGroup.classList.toggle('expanded');
+            const navGroup = icon.closest('.nav-group');
+            if (navGroup) {
+                navGroup.classList.toggle('expanded');
+            }
         });
     });
     
@@ -615,8 +634,37 @@ function attachNavigationEventListeners() {
     });
 }
 
+// Theme management
+function applyTheme(themeMode) {
+    const html = document.documentElement;
+    
+    if (themeMode === 'system') {
+        // Use system preference
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        html.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+    } else {
+        html.setAttribute('data-theme', themeMode);
+    }
+}
+
+function initializeTheme() {
+    const themeMode = localStorage.getItem('setting.themeMode') || 'system';
+    applyTheme(themeMode);
+    
+    // Listen for system theme changes if in system mode
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+        const currentMode = localStorage.getItem('setting.themeMode') || 'system';
+        if (currentMode === 'system') {
+            applyTheme('system');
+        }
+    });
+}
+
 // Call initializeAuth when page loads
 document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize theme first
+    initializeTheme();
+    
     // Initialize systems
     overlayManager.init();
     viewManager.init('view-container');
@@ -660,6 +708,15 @@ function setupNavigation() {
         notificationsBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             await toggleNotifications();
+        });
+    }
+    
+    // Mark all as read button handler
+    const markAllReadBtn = document.querySelector('.mark-all-read-btn');
+    if (markAllReadBtn) {
+        markAllReadBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await markAllNotificationsAsRead();
         });
     }
     
