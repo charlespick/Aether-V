@@ -546,13 +546,13 @@ function updateSidebarNavigation(inventory) {
     attachNavigationEventListeners();
 }
 
-function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHosts) {
+function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHosts = new Set()) {
     if (showHosts) {
         // Show hosts as intermediate level
         return hosts.map(host => {
             const shortName = host.hostname.split('.')[0];
             const hostVMs = vmsByHost[host.hostname] || [];
-            const isExpanded = expandedHosts && expandedHosts.has(host.hostname);
+            const isExpanded = expandedHosts.has(host.hostname);
             
             return `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-host="${host.hostname}">
@@ -768,11 +768,11 @@ class SearchOverlay {
             }
         });
 
-        // Search input handler (will be implemented later)
+        // Search input handler
         const searchInput = overlay.querySelector('#search-panel-input');
         searchInput.addEventListener('input', (e) => {
-            // Search functionality to be implemented later
-            console.log('Search query:', e.target.value);
+            // TODO: Implement search functionality - filter VMs, Hosts, and Clusters
+            // This is a placeholder for future search implementation
         });
     }
 
