@@ -35,16 +35,9 @@ class ConnectionManager:
                 "timestamp": datetime.utcnow().isoformat()
             })
             return True
-        except ConnectionError as e:
-            logger.error(
-                f"WebSocket connection error for client {client_id}: {e}")
-            return False
-        except ValueError as e:
-            logger.error(f"WebSocket value error for client {client_id}: {e}")
-            return False
         except Exception as e:
             logger.error(
-                f"Unexpected error connecting WebSocket client {client_id}: {e}")
+                f"Error connecting WebSocket client {client_id} [{type(e).__name__}]: {e}")
             return False
 
     async def disconnect(self, client_id: str):

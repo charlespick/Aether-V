@@ -151,9 +151,13 @@ class NotificationService:
 
         # Broadcast notification via WebSocket
         if self._websocket_manager:
-            task = asyncio.create_task(
-                self._broadcast_notification(notification))
-            task.add_done_callback(self._handle_broadcast_task_exception)
+            # Use asyncio.TaskGroup for better task management (Python 3.11+)
+            try:
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(self._broadcast_notification(notification))
+            except* Exception as eg:
+                for exc in eg.exceptions:
+                    logger.error(f"Error broadcasting notification via WebSocket: {exc}")
 
         return notification
 
