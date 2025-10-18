@@ -789,11 +789,13 @@ async function refreshInventory() {
 // Auto-refresh every 30 seconds
 setInterval(refreshInventory, 30000);
 
-// Search Overlay Management
+// Search Overlay Management - Proper extrude pattern
 class SearchOverlay {
     constructor() {
         this.isOpen = false;
         this.overlayElement = null;
+        this.expandoElement = null;
+        this.originRect = null;
         this.createOverlayDOM();
     }
 
@@ -801,81 +803,416 @@ class SearchOverlay {
         const overlay = document.createElement('div');
         overlay.id = 'search-overlay';
         overlay.className = 'search-overlay';
+        overlay.setAttribute('aria-hidden', 'true');
         overlay.innerHTML = `
             <div class="search-backdrop"></div>
-            <div class="search-panel">
-                <div class="search-panel-header">
-                    <input type="text" class="search-panel-input" id="search-panel-input" placeholder="Search for VMs, Hosts, Clusters..." autofocus />
+            <div class="search-expando" role="dialog" aria-modal="true" aria-label="Search results">
+                <button class="search-close-btn" aria-label="Close">✕</button>
+                <div class="search-expando-header">
+                    <div class="search-expando-inner">
+                        <input class="search-expando-input" type="text" placeholder="Search Everywhere" aria-label="Search input" />
+                    </div>
                 </div>
-                <div class="search-panel-content" id="search-panel-content">
+                <div class="search-expando-results">
                     ${this.renderEmptyState()}
                 </div>
             </div>
         `;
         document.body.appendChild(overlay);
         this.overlayElement = overlay;
+        this.expandoElement = overlay.querySelector('.search-expando');
 
         // Setup event listeners
-        overlay.querySelector('.search-backdrop').addEventListener('click', () => this.close());
-        
-        // ESC key to close
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.isOpen) {
+        const backdrop = overlay.querySelector('.search-backdrop');
+        backdrop.addEventListener('click', (e) => {
+            // Close when clicking the backdrop directly
+            if (e.target === backdrop) {
                 this.close();
             }
         });
+        
+        // Also close when clicking anywhere in the overlay but outside the expando
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                this.close();
+            }
+        });
+        
+        const closeBtn = overlay.querySelector('.search-close-btn');
+        closeBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.close();
+        });
+        
+        // ESC key to close - use a bound method to ensure proper this context
+        this.escapeHandler = (e) => {
+            if (e.key === 'Escape' && this.isOpen) {
+                e.preventDefault();
+                this.close();
+            }
+        };
+        document.addEventListener('keydown', this.escapeHandler);
 
         // Search input handler
-        const searchInput = overlay.querySelector('#search-panel-input');
+        const searchInput = overlay.querySelector('.search-expando-input');
         searchInput.addEventListener('input', (e) => {
-            // TODO: Implement search functionality - filter VMs, Hosts, and Clusters
-            // This is a placeholder for future search implementation
+            this.performSearch(e.target.value);
         });
+
+        // Prevent expando clicks from closing overlay
+        this.expandoElement.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+
+        // Handle resize/scroll to keep overlay aligned
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                if (this.isOpen) {
+                    this.calcOrigin();
+                    this.updateExpandedPosition();
+                }
+            }, 80);
+        });
+
+        window.addEventListener('scroll', () => {
+            if (this.isOpen) {
+                this.calcOrigin();
+                this.updateExpandedPosition();
+            }
+        });
+    }
+
+    calcOrigin() {
+        const pill = document.querySelector('.search-container .search');
+        if (pill) {
+            this.originRect = pill.getBoundingClientRect();
+        } else {
+            // Fallback to search container if search input not found
+            const container = document.querySelector('.search-container');
+            if (container) {
+                this.originRect = container.getBoundingClientRect();
+            }
+        }
+    }
+
+    updateExpandedPosition() {
+        if (!this.originRect) return;
+        
+        // Get CSS variables
+        const rootStyles = getComputedStyle(document.documentElement);
+        const paddingRem = parseFloat(rootStyles.getPropertyValue('--overlay-padding')) || 1.5;
+        const paddingPx = paddingRem * 16; // Convert rem to px
+        
+        // Calculate target dimensions based on original search box
+        const extraWidth = paddingPx * 2; // Padding on both sides
+        const minWidth = Math.min(this.originRect.width + extraWidth, window.innerWidth - 32);
+        const maxWidth = Math.min(600, window.innerWidth - 32); // Max width for larger screens
+        const targetWidth = Math.max(minWidth, maxWidth);
+        
+        // Center horizontally over the original search box
+        let targetLeft = this.originRect.left + (this.originRect.width / 2) - (targetWidth / 2);
+        
+        // Ensure we don't go off-screen
+        targetLeft = Math.max(16, Math.min(targetLeft, window.innerWidth - targetWidth - 16));
+        
+        // Height calculation - should hug content
+        const maxViewportHeight = window.innerHeight * 0.6;
+        const headerHeight = 36 + (paddingPx * 2); // Header + top/bottom padding
+        const resultsElement = this.expandoElement.querySelector('.search-expando-results');
+        let contentHeight = 80; // Minimum height for empty state
+        
+        if (resultsElement) {
+            // Get the actual content height
+            const children = Array.from(resultsElement.children);
+            if (children.length > 0) {
+                // Calculate total height of all child elements
+                contentHeight = children.reduce((total, child) => {
+                    const rect = child.getBoundingClientRect();
+                    return total + rect.height;
+                }, 0) + (paddingPx * 2); // Add padding
+                
+                // Add some margin between sections
+                contentHeight += (children.length - 1) * 8;
+            }
+        }
+        
+        const targetHeight = Math.min(maxViewportHeight, headerHeight + contentHeight);
+
+        // Calculate concentric border radius
+        const originalInput = document.querySelector('.search-container .search');
+        let borderRadius = 20; // fallback
+        if (originalInput) {
+            const computed = getComputedStyle(originalInput);
+            borderRadius = parseFloat(computed.borderRadius) || 20;
+        }
+        const concentricRadius = borderRadius + paddingPx;
+
+        this.expandoElement.style.left = targetLeft + 'px';
+        this.expandoElement.style.width = targetWidth + 'px';
+        this.expandoElement.style.top = this.originRect.top + 'px';
+        this.expandoElement.style.height = targetHeight + 'px';
+        this.expandoElement.style.borderRadius = concentricRadius + 'px';
     }
 
     renderEmptyState() {
         return `
             <div class="search-section">
                 <div class="search-section-header">Virtual Machines</div>
-                <div class="search-no-results">No VMs found</div>
+                <div class="search-no-results">Start typing to search...</div>
             </div>
             <div class="search-section">
                 <div class="search-section-header">Hosts</div>
-                <div class="search-no-results">No hosts found</div>
+                <div class="search-no-results">Start typing to search...</div>
             </div>
             <div class="search-section">
                 <div class="search-section-header">Clusters</div>
-                <div class="search-no-results">No clusters found</div>
+                <div class="search-no-results">Start typing to search...</div>
             </div>
         `;
     }
 
+    async performSearch(query) {
+        if (!query.trim()) {
+            const content = this.overlayElement.querySelector('.search-expando-results');
+            if (content) content.innerHTML = this.renderEmptyState();
+            return;
+        }
+
+        // Get inventory data for searching
+        try {
+            const response = await fetch('/api/v1/inventory', { 
+                credentials: 'same-origin'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const inventory = await response.json();
+            this.renderSearchResults(query, inventory);
+        } catch (error) {
+            console.error('Error searching inventory:', error);
+        }
+    }
+
+    renderSearchResults(query, inventory) {
+        const content = this.overlayElement.querySelector('.search-expando-results');
+        if (!content) return;
+
+        const queryLower = query.toLowerCase();
+        
+        // Filter VMs
+        const vms = (inventory.vms || []).filter(vm => 
+            vm.name.toLowerCase().includes(queryLower) || 
+            vm.host.toLowerCase().includes(queryLower)
+        );
+
+        // Filter Hosts
+        const hosts = (inventory.hosts || []).filter(host => 
+            host.hostname.toLowerCase().includes(queryLower) ||
+            (host.cluster && host.cluster.toLowerCase().includes(queryLower))
+        );
+
+        // Filter Clusters
+        const clusters = (inventory.clusters || []).filter(cluster => 
+            cluster.name.toLowerCase().includes(queryLower)
+        );
+
+        let html = '';
+
+        // VMs section
+        html += `<div class="search-section">
+            <div class="search-section-header">Virtual Machines</div>`;
+        if (vms.length > 0) {
+            html += '<ul class="search-results-list">';
+            vms.forEach(vm => {
+                const statusEmoji = vm.state === 'Running' ? '🟢' : '⚫';
+                const hostShort = vm.host.split('.')[0];
+                html += `
+                    <li class="search-result-item" onclick="searchOverlay.close(); viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
+                        <span class="search-result-icon">${statusEmoji}</span>
+                        <div class="search-result-details">
+                            <div class="search-result-title">${vm.name}</div>
+                            <div class="search-result-subtitle">on ${hostShort} • ${vm.state}</div>
+                        </div>
+                    </li>
+                `;
+            });
+            html += '</ul>';
+        } else {
+            html += '<div class="search-no-results">No VMs found</div>';
+        }
+        html += '</div>';
+
+        // Hosts section
+        html += `<div class="search-section">
+            <div class="search-section-header">Hosts</div>`;
+        if (hosts.length > 0) {
+            html += '<ul class="search-results-list">';
+            hosts.forEach(host => {
+                const shortName = host.hostname.split('.')[0];
+                const statusEmoji = host.status === 'connected' ? '🟢' : '🔴';
+                html += `
+                    <li class="search-result-item" onclick="searchOverlay.close(); viewManager.switchView('host', { hostname: '${host.hostname}' })">
+                        <span class="search-result-icon">🖥️</span>
+                        <div class="search-result-details">
+                            <div class="search-result-title">${shortName}</div>
+                            <div class="search-result-subtitle">${host.cluster || 'Default'} • ${host.status}</div>
+                        </div>
+                    </li>
+                `;
+            });
+            html += '</ul>';
+        } else {
+            html += '<div class="search-no-results">No hosts found</div>';
+        }
+        html += '</div>';
+
+        // Clusters section
+        html += `<div class="search-section">
+            <div class="search-section-header">Clusters</div>`;
+        if (clusters.length > 0) {
+            html += '<ul class="search-results-list">';
+            clusters.forEach(cluster => {
+                html += `
+                    <li class="search-result-item" onclick="searchOverlay.close(); viewManager.switchView('cluster', { name: '${cluster.name}' })">
+                        <span class="search-result-icon">📦</span>
+                        <div class="search-result-details">
+                            <div class="search-result-title">${cluster.name}</div>
+                            <div class="search-result-subtitle">Cluster</div>
+                        </div>
+                    </li>
+                `;
+            });
+            html += '</ul>';
+        } else {
+            html += '<div class="search-no-results">No clusters found</div>';
+        }
+        html += '</div>';
+
+        content.innerHTML = html;
+    }
+
     open() {
         if (this.isOpen) return;
-        this.overlayElement.classList.add('open');
         this.isOpen = true;
-        document.body.style.overflow = 'hidden';
         
-        // Focus search input
-        setTimeout(() => {
-            const input = this.overlayElement.querySelector('#search-panel-input');
-            if (input) input.focus();
-        }, 100);
+        const originalInput = document.querySelector('#global-search');
+        const expandoInput = this.overlayElement.querySelector('.search-expando-input');
+        
+        // Set aria-expanded on original search container
+        const searchContainer = document.querySelector('.search-container');
+        if (searchContainer) {
+            searchContainer.setAttribute('aria-expanded', 'true');
+        }
+
+        // Calculate position of original pill
+        this.calcOrigin();
+
+        // Start the expando exactly over the pill
+        const searchInput = document.querySelector('.search-container .search');
+        let initialBorderRadius = 20; // fallback
+        if (searchInput) {
+            const computed = getComputedStyle(searchInput);
+            initialBorderRadius = parseFloat(computed.borderRadius) || 20;
+        }
+        
+        this.expandoElement.style.left = this.originRect.left + 'px';
+        this.expandoElement.style.top = this.originRect.top + 'px';
+        this.expandoElement.style.width = this.originRect.width + 'px';
+        this.expandoElement.style.height = this.originRect.height + 'px';
+        this.expandoElement.style.borderRadius = initialBorderRadius + 'px';
+
+        // Copy placeholder and value to make it seamless
+        if (originalInput && expandoInput) {
+            expandoInput.placeholder = originalInput.placeholder;
+            expandoInput.value = originalInput.value || '';
+            if (originalInput.value) {
+                this.performSearch(originalInput.value);
+            }
+        }
+
+        // Show backdrop
+        this.overlayElement.classList.add('active');
+        this.overlayElement.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+
+        // Force layout pass then animate to expanded size
+        requestAnimationFrame(() => {
+            this.expandoElement.classList.add('open');
+            this.updateExpandedPosition();
+
+            // Move focus into overlay input after transition starts
+            setTimeout(() => {
+                if (expandoInput) {
+                    expandoInput.focus();
+                    expandoInput.setSelectionRange(expandoInput.value.length, expandoInput.value.length);
+                }
+            }, 220);
+        });
     }
 
     close() {
         if (!this.isOpen) return;
-        this.overlayElement.classList.remove('open');
         this.isOpen = false;
-        document.body.style.overflow = '';
+
+        const originalInput = document.querySelector('#global-search');
+        const expandoInput = this.overlayElement.querySelector('.search-expando-input');
         
-        // Clear search input
-        const input = this.overlayElement.querySelector('#search-panel-input');
-        if (input) input.value = '';
+        // Set aria-expanded on original search container
+        const searchContainer = document.querySelector('.search-container');
+        if (searchContainer) {
+            searchContainer.setAttribute('aria-expanded', 'false');
+        }
+
+        // Revert expando back to pill size and position
+        this.expandoElement.classList.remove('open');
+        this.calcOrigin();
         
-        // Reset content to empty state
-        const content = this.overlayElement.querySelector('#search-panel-content');
+        // Reset to original search box dimensions and border radius
+        const searchInput = document.querySelector('.search-container .search');
+        let borderRadius = 20; // fallback
+        if (searchInput) {
+            const computed = getComputedStyle(searchInput);
+            borderRadius = parseFloat(computed.borderRadius) || 20;
+        }
+        
+        this.expandoElement.style.left = this.originRect.left + 'px';
+        this.expandoElement.style.top = this.originRect.top + 'px';
+        this.expandoElement.style.width = this.originRect.width + 'px';
+        this.expandoElement.style.height = this.originRect.height + 'px';
+        this.expandoElement.style.borderRadius = borderRadius + 'px';
+
+        // After closing transition, hide backdrop
+        const onTransitionEnd = (e) => {
+            if (e.target !== this.expandoElement) return;
+            this.overlayElement.classList.remove('active');
+            this.overlayElement.setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+            this.expandoElement.removeEventListener('transitionend', onTransitionEnd);
+        };
+        this.expandoElement.addEventListener('transitionend', onTransitionEnd);
+
+        // Clear search input and reset content
+        if (expandoInput) expandoInput.value = '';
+        const content = this.overlayElement.querySelector('.search-expando-results');
         if (content) content.innerHTML = this.renderEmptyState();
+
+        // Return focus to original input
+        if (originalInput) originalInput.focus();
+    }
+
+    destroy() {
+        // Clean up event listeners to prevent memory leaks
+        if (this.escapeHandler) {
+            document.removeEventListener('keydown', this.escapeHandler);
+        }
+        if (this.overlayElement) {
+            this.overlayElement.remove();
+        }
     }
 }
 
@@ -884,17 +1221,66 @@ const searchOverlay = new SearchOverlay();
 
 // Connect search box to overlay
 document.addEventListener('DOMContentLoaded', () => {
+    const searchContainer = document.querySelector('.search-container');
     const searchBox = document.getElementById('global-search');
-    if (searchBox) {
-        searchBox.addEventListener('click', (e) => {
+    
+    if (searchContainer && searchBox) {
+        // Set initial aria-expanded
+        searchContainer.setAttribute('aria-expanded', 'false');
+        
+        // Handle clicks on search container
+        searchContainer.addEventListener('click', (e) => {
             e.preventDefault();
             searchOverlay.open();
         });
         
+        // Handle Enter/Space on search container
+        searchContainer.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                searchOverlay.open();
+            }
+        });
+        
+        // Handle focus on search input - redirect to overlay
         searchBox.addEventListener('focus', (e) => {
             e.preventDefault();
             searchBox.blur();
             searchOverlay.open();
         });
+
+        // Handle typing in original search box - redirect to overlay
+        searchBox.addEventListener('keydown', (e) => {
+            e.preventDefault();
+            searchOverlay.open();
+            // After opening, transfer the typed character to the overlay input
+            setTimeout(() => {
+                const overlayInput = document.querySelector('.search-expando-input');
+                if (overlayInput && e.key.length === 1) {
+                    overlayInput.value = e.key;
+                    overlayInput.focus();
+                    searchOverlay.performSearch(e.key);
+                }
+            }, 250);
+        });
+
+        // Keep text in sync both ways
+        const syncInputs = () => {
+            const expandoInput = document.querySelector('.search-expando-input');
+            if (expandoInput) {
+                expandoInput.addEventListener('input', () => {
+                    searchBox.value = expandoInput.value;
+                });
+                
+                searchBox.addEventListener('input', () => {
+                    if (!searchOverlay.isOpen) {
+                        expandoInput.value = searchBox.value;
+                    }
+                });
+            }
+        };
+        
+        // Set up input syncing after a brief delay to ensure DOM is ready
+        setTimeout(syncInputs, 100);
     }
 });
