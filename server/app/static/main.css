@@ -1117,10 +1117,10 @@ tbody tr:last-child td {
 }
 
 .search-panel {
-    position: absolute;
-    top: calc(var(--topbar-h) - 8px);
+    position: fixed;
+    top: 60px;
     left: 50%;
-    transform: translateX(-50%) translateY(-20px) scale(0.95);
+    transform: translateX(-50%) translateY(-10px) scale(0.98);
     width: 90%;
     max-width: 700px;
     background: white;

@@ -437,7 +437,7 @@ async function markNotificationAsRead(notificationId) {
 // Mark all notifications as read
 async function markAllNotificationsAsRead() {
     try {
-        const response = await fetch('/api/v1/notifications/read-all', {
+        const response = await fetch('/api/v1/notifications/mark-all-read', {
             method: 'PUT',
             credentials: 'same-origin'
         });
