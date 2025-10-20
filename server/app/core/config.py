@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # Security settings
     jwks_cache_ttl: int = 300  # JWKS cache TTL in seconds
     max_token_age: int = 3600  # Maximum token age in seconds
+    session_max_age: int = 3600  # Session cookie max age in seconds (1 hour)
 
     # Cookie security settings (when using session-based auth)
     cookie_secure: bool = True  # Require HTTPS for cookies
@@ -91,3 +92,35 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# Module-level storage for the actual session secret being used
+# This is set by main.py during application initialization
+_actual_session_secret: Optional[str] = None
+
+
+def set_session_secret(secret: str) -> None:
+    """
+    Set the actual session secret being used by the application.
+    
+    This should be called once during application initialization in main.py
+    with either the configured secret or a generated temporary secret.
+    
+    Args:
+        secret: The session secret string
+    """
+    global _actual_session_secret
+    _actual_session_secret = secret
+
+
+def get_session_secret() -> Optional[str]:
+    """
+    Get the actual session secret being used by the application.
+    
+    This allows WebSocket authentication to decrypt session cookies using the same
+    secret as the session middleware, whether it's from configuration or generated.
+    
+    Returns:
+        The session secret string, or None if not yet initialized
+    """
+    return _actual_session_secret

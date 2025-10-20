@@ -128,6 +128,7 @@ async def security_and_audit_middleware(request: Request, call_next):
 
 # Add session middleware with enhanced security
 # Use secure session configuration for production
+# Store the actual session secret so it can be accessed by WebSocket auth
 session_secret = settings.session_secret_key
 if not session_secret:
     # Generate a secure random secret for this session (will require re-login on restart)
@@ -135,10 +136,14 @@ if not session_secret:
     logger.warning(
         "Generated temporary session secret - set SESSION_SECRET_KEY environment variable for production")
 
+# Store the session secret in the config module so it can be accessed elsewhere
+from .core.config import set_session_secret
+set_session_secret(session_secret)
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret,
-    max_age=3600,  # 1 hour session timeout
+    max_age=settings.session_max_age,
     same_site="lax",  # CSRF protection
     https_only=False,  # Disable for debugging - ingress may terminate HTTPS
     domain=None,  # Don't restrict domain for debugging
