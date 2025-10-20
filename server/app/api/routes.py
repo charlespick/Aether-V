@@ -523,7 +523,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
     we use the shared auth functions from the auth module for consistency.
     """
     from ..core.auth import authenticate_with_token, validate_session_data, get_dev_user
-    from ..main import get_session_secret
+    from ..core.config import get_session_secret
     from http.cookies import SimpleCookie
 
     client_ip = websocket.client.host if websocket.client else "unknown"
@@ -562,11 +562,16 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
 
                     # Get the actual session secret being used (may be generated or from config)
                     actual_secret = get_session_secret()
+                    if not actual_secret:
+                        logger.warning(f"Session secret not yet initialized from {client_ip}")
+                        return None
+                        
                     serializer = URLSafeTimedSerializer(actual_secret)
                     
                     # Decode session data (will raise exception if invalid/expired)
+                    # Use same max_age as session middleware for consistency
                     session_data = serializer.loads(
-                        session_cookie, max_age=3600*24)
+                        session_cookie, max_age=settings.session_max_age)
 
                     # Use shared session validation logic
                     user = validate_session_data(session_data, client_ip)
