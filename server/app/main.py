@@ -128,16 +128,17 @@ async def security_and_audit_middleware(request: Request, call_next):
 
 # Add session middleware with enhanced security
 # Use secure session configuration for production
-session_secret = settings.session_secret_key
-if not session_secret:
+# Store the actual session secret at module level so it can be accessed by WebSocket auth
+_session_secret = settings.session_secret_key
+if not _session_secret:
     # Generate a secure random secret for this session (will require re-login on restart)
-    session_secret = secrets.token_urlsafe(32)
+    _session_secret = secrets.token_urlsafe(32)
     logger.warning(
         "Generated temporary session secret - set SESSION_SECRET_KEY environment variable for production")
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key=session_secret,
+    secret_key=_session_secret,
     max_age=3600,  # 1 hour session timeout
     same_site="lax",  # CSRF protection
     https_only=False,  # Disable for debugging - ingress may terminate HTTPS
@@ -145,6 +146,19 @@ app.add_middleware(
     path="/"  # Ensure cookies work for all paths
     # Note: httponly is always True by default in SessionMiddleware for security
 )
+
+
+def get_session_secret() -> str:
+    """
+    Get the actual session secret being used by the application.
+    
+    This allows WebSocket authentication to decrypt session cookies using the same
+    secret as the session middleware, whether it's from configuration or generated.
+    
+    Returns:
+        The session secret string
+    """
+    return _session_secret
 
 # Include API routes
 app.include_router(router)

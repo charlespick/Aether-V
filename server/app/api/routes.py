@@ -427,17 +427,25 @@ async def logout(request: Request):
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates with authentication."""
+    """
+    WebSocket endpoint for real-time updates with authentication.
+    
+    Security: Authentication is performed before accepting the connection,
+    ensuring only valid clients complete the WebSocket protocol upgrade.
+    """
     client_id = str(uuid.uuid4())
     client_ip = websocket.client.host if websocket.client else "unknown"
     connection_start = datetime.utcnow()
     MAX_CONNECTION_TIME = settings.websocket_timeout
 
     try:
-        # Authenticate the WebSocket connection
+        # Authenticate BEFORE accepting the WebSocket connection
+        # This creates a proper security boundary - only authenticated clients complete the upgrade
         user = await authenticate_websocket(websocket)
 
         if not user:
+            # Reject the connection by closing without accepting
+            # This prevents the WebSocket upgrade from completing
             await websocket.close(code=1008, reason="Authentication required")
             logger.warning(
                 f"WebSocket authentication failed for client from {client_ip}")
@@ -447,7 +455,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(
             f"WebSocket authenticated for user {username} from {client_ip}")
 
-        # Accept and register with connection manager
+        # Accept and register with connection manager (only after successful authentication)
         connected = await websocket_manager.connect(websocket, client_id)
 
         if not connected:
@@ -515,6 +523,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
     we use the shared auth functions from the auth module for consistency.
     """
     from ..core.auth import authenticate_with_token, validate_session_data, get_dev_user
+    from ..main import get_session_secret
     from http.cookies import SimpleCookie
 
     client_ip = websocket.client.host if websocket.client else "unknown"
@@ -547,27 +556,26 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
 
             if session_cookie:
                 # Decode session cookie to get session data
+                # Use the ACTUAL session secret from the middleware, not just the config
                 try:
                     from itsdangerous import URLSafeTimedSerializer
 
-                    if settings.session_secret_key:
-                        serializer = URLSafeTimedSerializer(
-                            settings.session_secret_key)
-                        # Decode session data (will raise exception if invalid/expired)
-                        session_data = serializer.loads(
-                            session_cookie, max_age=3600*24)
+                    # Get the actual session secret being used (may be generated or from config)
+                    actual_secret = get_session_secret()
+                    serializer = URLSafeTimedSerializer(actual_secret)
+                    
+                    # Decode session data (will raise exception if invalid/expired)
+                    session_data = serializer.loads(
+                        session_cookie, max_age=3600*24)
 
-                        # Use shared session validation logic
-                        user = validate_session_data(session_data, client_ip)
-                        if user:
-                            username = user.get(
-                                'preferred_username', 'unknown')
-                            logger.info(
-                                f"WebSocket session authentication successful for {username} from {client_ip}")
-                            return user
-                    else:
-                        logger.warning(
-                            f"Session secret not configured - cannot validate WebSocket session from {client_ip}")
+                    # Use shared session validation logic
+                    user = validate_session_data(session_data, client_ip)
+                    if user:
+                        username = user.get(
+                            'preferred_username', 'unknown')
+                        logger.info(
+                            f"WebSocket session authentication successful for {username} from {client_ip}")
+                        return user
 
                 except Exception as session_error:
                     logger.debug(
