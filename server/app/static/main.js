@@ -693,7 +693,7 @@ function updateSidebarNavigation(inventory) {
                     <div class="nav-item group-header" onclick="viewManager.switchView('cluster', { name: '${cluster.name}' })">
                         <span class="nav-icon">📦</span>
                         <span class="nav-label">${cluster.name}</span>
-                        <span class="expand-icon">›</span>
+                        <span class="expand-icon"></span>
                     </div>
                     <ul class="sub-list">
                         ${renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts, expandedHosts)}
@@ -732,7 +732,7 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
                     <div class="sub-item group-header" onclick="viewManager.switchView('host', { hostname: '${host.hostname}' })">
                         <span class="sub-icon">🖥️</span>
                         <span class="sub-label">${shortName}</span>
-                        ${hostVMs.length > 0 ? '<span class="expand-icon">›</span>' : ''}
+                        ${hostVMs.length > 0 ? '<span class="expand-icon"></span>' : ''}
                     </div>
                     ${hostVMs.length > 0 ? `
                         <ul class="sub-sub-list">
