@@ -690,10 +690,10 @@ function updateSidebarNavigation(inventory) {
             
             clustersHtml += `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-cluster="${cluster.name}">
-                    <div class="nav-item group-header" onclick="viewManager.switchView('cluster', { name: '${cluster.name}' })">
+                    <div class="nav-item group-header" data-nav-type="cluster" data-cluster-name="${cluster.name}">
                         <span class="nav-icon">📦</span>
                         <span class="nav-label">${cluster.name}</span>
-                        <span class="expand-icon">›</span>
+                        <span class="expand-icon"></span>
                     </div>
                     <ul class="sub-list">
                         ${renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts, expandedHosts)}
@@ -729,17 +729,17 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
             
             return `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-host="${host.hostname}">
-                    <div class="sub-item group-header" onclick="viewManager.switchView('host', { hostname: '${host.hostname}' })">
+                    <div class="sub-item group-header" data-nav-type="host" data-hostname="${host.hostname}">
                         <span class="sub-icon">🖥️</span>
                         <span class="sub-label">${shortName}</span>
-                        ${hostVMs.length > 0 ? '<span class="expand-icon">›</span>' : ''}
+                        ${hostVMs.length > 0 ? '<span class="expand-icon"></span>' : ''}
                     </div>
                     ${hostVMs.length > 0 ? `
                         <ul class="sub-sub-list">
                             ${hostVMs.map(vm => {
                                 const statusEmoji = vm.state === 'Running' ? '🟢' : '⚫';
                                 return `
-                                    <li class="vm-item" onclick="event.stopPropagation(); viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
+                                    <li class="vm-item" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
                                         <span class="vm-status">${statusEmoji}</span>
                                         <span class="vm-name">${vm.name}</span>
                                     </li>
@@ -762,7 +762,7 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
             const statusEmoji = vm.state === 'Running' ? '🟢' : '⚫';
             const hostShort = vm.host.split('.')[0];
             return `
-                <li class="vm-item direct" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
+                <li class="vm-item direct" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
                     <span class="vm-status">${statusEmoji}</span>
                     <span class="vm-name">${vm.name}</span>
                     <span class="vm-host">(${hostShort})</span>
@@ -773,16 +773,55 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
 }
 
 function attachNavigationEventListeners() {
-    // Handle expand icon clicks separately from navigation
-    document.querySelectorAll('.expand-icon').forEach(icon => {
-        icon.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const navGroup = icon.closest('.nav-group');
-            if (navGroup) {
-                navGroup.classList.toggle('expanded');
+    // Use event delegation for expand icons and navigation to handle dynamically created elements
+    // Attach to clusters-container which persists across updates
+    const clustersContainer = document.getElementById('clusters-container');
+    if (clustersContainer) {
+        // Remove any existing listener to avoid duplicates
+        const oldListener = clustersContainer._navListener;
+        if (oldListener) {
+            clustersContainer.removeEventListener('click', oldListener);
+        }
+        
+        // Create new listener
+        const navListener = (e) => {
+            // Check if click was on expand icon
+            const expandIcon = e.target.closest('.expand-icon');
+            
+            if (expandIcon) {
+                e.stopPropagation();
+                e.preventDefault();
+                const navGroup = expandIcon.closest('.nav-group');
+                
+                if (navGroup) {
+                    navGroup.classList.toggle('expanded');
+                }
+                return;
             }
-        });
-    });
+            
+            // Handle navigation clicks
+            const navItem = e.target.closest('[data-nav-type]');
+            if (navItem) {
+                const navType = navItem.dataset.navType;
+                
+                if (navType === 'cluster') {
+                    const clusterName = navItem.dataset.clusterName;
+                    viewManager.switchView('cluster', { name: clusterName });
+                } else if (navType === 'host') {
+                    const hostname = navItem.dataset.hostname;
+                    viewManager.switchView('host', { hostname: hostname });
+                } else if (navType === 'vm') {
+                    const vmName = navItem.dataset.vmName;
+                    const vmHost = navItem.dataset.vmHost;
+                    viewManager.switchView('vm', { name: vmName, host: vmHost });
+                }
+            }
+        };
+        
+        clustersContainer.addEventListener('click', navListener);
+        // Store reference for cleanup
+        clustersContainer._navListener = navListener;
+    }
     
     // Handle disconnected hosts click
     document.querySelector('.disconnected-hosts')?.addEventListener('click', () => {
@@ -991,8 +1030,8 @@ class SearchOverlay {
         overlay.innerHTML = `
             <div class="search-backdrop"></div>
             <div class="search-expando" role="dialog" aria-modal="true" aria-label="Search results">
-                <button class="search-close-btn" aria-label="Close">✕</button>
                 <div class="search-expando-header">
+                    <button class="search-close-btn" aria-label="Close">✕</button>
                     <div class="search-expando-inner">
                         <input class="search-expando-input" type="text" placeholder="Search Everywhere" aria-label="Search input" />
                     </div>
