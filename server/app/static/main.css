@@ -353,15 +353,22 @@ body {
 }
 
 .nav-group.expanded .expand-icon::before {
-    content: '›';
-    display: inline-block;
+    content: '▸';
+    display: block;
+    line-height: 1;
+    text-align: center;
     transform: rotate(90deg);
+    transform-origin: 50% 50%;
     transition: transform 0.2s;
 }
 
 .nav-group:not(.expanded) .expand-icon::before {
-    content: '›';
-    display: inline-block;
+    content: '▸';
+    display: block;
+    line-height: 1;
+    text-align: center;
+    transform: rotate(0deg);
+    transform-origin: 50% 50%;
     transition: transform 0.2s;
 }
 
@@ -1302,6 +1309,7 @@ tbody tr:last-child td {
     box-sizing: border-box;
     background: transparent;
     flex-shrink: 0;
+    position: relative;
 }
 
 .search-expando-inner {
@@ -1351,7 +1359,7 @@ tbody tr:last-child td {
 /* Close button */
 .search-close-btn {
     position: absolute;
-    right: calc(var(--search-overlay-gap) + 8px);
+    right: 4px;
     top: 50%;
     transform: translateY(-50%);
     background: none;
