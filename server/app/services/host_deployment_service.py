@@ -245,7 +245,11 @@ class HostDeploymentService:
 
     def _build_download_url(self, artifact_name: str) -> str:
         """Build a download URL for an artifact exposed by the FastAPI static mount."""
-        base_url = settings.agent_download_base_url.rstrip('/')
+        try:
+            base_url = settings.get_agent_download_base_url()
+        except ValueError as exc:
+            raise RuntimeError("AGENT_DOWNLOAD_BASE_URL is not configured") from exc
+
         return f"{base_url}/{quote(artifact_name)}"
     
     async def deploy_to_all_hosts(self, hostnames: List[str]) -> Tuple[int, int]:

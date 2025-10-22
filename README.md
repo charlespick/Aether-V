@@ -59,6 +59,7 @@ All settings are managed via environment variables (ConfigMap/Secrets):
 - `HYPERV_HOSTS`, `WINRM_USERNAME`, `WINRM_PASSWORD`, `WINRM_TRANSPORT`, `WINRM_PORT`
 - `INVENTORY_REFRESH_INTERVAL`
 - `HOST_INSTALL_DIRECTORY`
+- `AGENT_DOWNLOAD_BASE_URL`
 
 See [Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details.
 

@@ -44,6 +44,7 @@ data:
 
   # Deployment
   HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Home Lab Virtual Machine Manager"
+  AGENT_DOWNLOAD_BASE_URL: "https://aetherv.example.com/agent"
 
   # Development
   DUMMY_DATA: "false"

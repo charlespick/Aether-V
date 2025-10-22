@@ -1,6 +1,8 @@
 """Configuration management using Pydantic settings."""
-from pydantic_settings import BaseSettings
 from typing import List, Optional, TYPE_CHECKING
+
+from pydantic import AnyHttpUrl
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -65,7 +67,18 @@ class Settings(BaseSettings):
     # Agent artifact settings
     agent_artifacts_path: str = "/app/agent"
     agent_http_mount_path: str = "/agent"
-    agent_download_base_url: str = "http://localhost:8000/agent"
+    agent_download_base_url: Optional[AnyHttpUrl] = None
+
+    def get_agent_download_base_url(self) -> str:
+        """Return the configured agent download base URL, ensuring it is set."""
+
+        if not self.agent_download_base_url:
+            raise ValueError(
+                "AGENT_DOWNLOAD_BASE_URL must be configured with the external "
+                "HTTP endpoint used by Hyper-V hosts."
+            )
+
+        return str(self.agent_download_base_url).rstrip("/")
 
     @property
     def version_file_path(self) -> str:
