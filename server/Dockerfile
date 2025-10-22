@@ -35,18 +35,21 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 # Copy application code
 COPY server/app /app/app
 
-# Create directories for ISO and script storage
-RUN mkdir -p /app/artifacts/isos /app/artifacts/scripts
+# Prepare unified agent artifact directory
+RUN mkdir -p /app/agent
 
-# Copy pre-built ISOs (built by GitHub Actions)
-COPY ISOs/WindowsProvisioning.iso /app/artifacts/isos/
-COPY ISOs/LinuxProvisioning.iso /app/artifacts/isos/
+# Copy artifact sources and gather scripts/ISOs dynamically
+COPY Powershell /tmp/agent-src/Powershell
+COPY Scripts /tmp/agent-src/Scripts
+COPY Windows /tmp/agent-src/Windows
+COPY Linux /tmp/agent-src/Linux
+COPY version /tmp/agent-src/version
 
-# Copy PowerShell scripts for deployment to hosts
-COPY Powershell /app/artifacts/scripts/
-
-# Copy version file
-COPY version /app/artifacts/version
+RUN set -eux; \
+    find /tmp/agent-src -type f -name '*.ps1' -exec cp {} /app/agent/ \; && \
+    find /tmp/agent-src -type f -name '*.iso' -exec cp {} /app/agent/ \; && \
+    if [ -f /tmp/agent-src/version ]; then cp /tmp/agent-src/version /app/agent/version; fi && \
+    rm -rf /tmp/agent-src
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \

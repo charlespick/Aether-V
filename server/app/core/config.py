@@ -62,23 +62,15 @@ class Settings(BaseSettings):
     # Host deployment settings
     host_install_directory: str = "C:\\Program Files\\Home Lab Virtual Machine Manager"
 
-    # Artifact paths (ISOs and scripts bundled in container)
-    artifacts_base_path: str = "/app/artifacts"
-
-    @property
-    def iso_path(self) -> str:
-        """Get path to ISOs in container."""
-        return f"{self.artifacts_base_path}/isos"
-
-    @property
-    def script_path(self) -> str:
-        """Get path to scripts in container."""
-        return f"{self.artifacts_base_path}/scripts"
+    # Agent artifact settings
+    agent_artifacts_path: str = "/app/agent"
+    agent_http_mount_path: str = "/agent"
+    agent_download_base_url: str = "http://localhost:8000/agent"
 
     @property
     def version_file_path(self) -> str:
         """Get path to version file in container."""
-        return f"{self.artifacts_base_path}/version"
+        return f"{self.agent_artifacts_path}/version"
 
     class Config:
         env_file = ".env"

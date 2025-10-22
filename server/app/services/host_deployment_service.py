@@ -1,9 +1,8 @@
 """Service for deploying scripts and ISOs to Hyper-V hosts."""
 import logging
-import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import List, Tuple
-import base64
+from urllib.parse import quote
 
 from ..core.config import settings
 from .winrm_service import winrm_service
@@ -145,29 +144,27 @@ class HostDeploymentService:
         """Deploy PowerShell scripts to host."""
         logger.info(f"Deploying scripts to {hostname}")
         
-        script_dir = settings.script_path
-        install_dir = settings.host_install_directory
-        
+        script_dir = Path(settings.agent_artifacts_path)
+
         try:
             # Get list of script files
-            script_files = [f for f in os.listdir(script_dir) if f.endswith('.ps1')]
-            
+            script_files = sorted(p for p in script_dir.glob('*.ps1') if p.is_file())
+
             if not script_files:
                 logger.warning(f"No script files found in {script_dir}")
                 return True
-            
+
             logger.info(f"Found {len(script_files)} scripts to deploy")
-            
+
             for script_file in script_files:
-                local_path = os.path.join(script_dir, script_file)
-                remote_path = f"{install_dir}\\{script_file}"
-                
-                if not self._copy_file_to_host(hostname, local_path, remote_path):
-                    logger.error(f"Failed to deploy script {script_file} to {hostname}")
+                remote_path = self._build_remote_path(script_file.name)
+
+                if not self._download_file_to_host(hostname, script_file.name, remote_path):
+                    logger.error(f"Failed to deploy script {script_file.name} to {hostname}")
                     return False
-                
-                logger.debug(f"Deployed {script_file} to {hostname}")
-            
+
+                logger.debug(f"Deployed {script_file.name} to {hostname}")
+
             logger.info(f"All scripts deployed to {hostname}")
             return True
             
@@ -179,29 +176,27 @@ class HostDeploymentService:
         """Deploy ISO files to host."""
         logger.info(f"Deploying ISOs to {hostname}")
         
-        iso_dir = settings.iso_path
-        install_dir = settings.host_install_directory
-        
+        iso_dir = Path(settings.agent_artifacts_path)
+
         try:
             # Get list of ISO files
-            iso_files = [f for f in os.listdir(iso_dir) if f.endswith('.iso')]
-            
+            iso_files = sorted(p for p in iso_dir.glob('*.iso') if p.is_file())
+
             if not iso_files:
                 logger.warning(f"No ISO files found in {iso_dir}")
                 return False
-            
+
             logger.info(f"Found {len(iso_files)} ISOs to deploy")
-            
+
             for iso_file in iso_files:
-                local_path = os.path.join(iso_dir, iso_file)
-                remote_path = f"{install_dir}\\{iso_file}"
-                
-                if not self._copy_file_to_host(hostname, local_path, remote_path):
-                    logger.error(f"Failed to deploy ISO {iso_file} to {hostname}")
+                remote_path = self._build_remote_path(iso_file.name)
+
+                if not self._download_file_to_host(hostname, iso_file.name, remote_path):
+                    logger.error(f"Failed to deploy ISO {iso_file.name} to {hostname}")
                     return False
-                
-                logger.info(f"Deployed {iso_file} to {hostname}")
-            
+
+                logger.info(f"Deployed {iso_file.name} to {hostname}")
+
             logger.info(f"All ISOs deployed to {hostname}")
             return True
             
@@ -213,61 +208,45 @@ class HostDeploymentService:
         """Deploy version file to host."""
         logger.info(f"Deploying version file to {hostname}")
         
-        version_file = settings.version_file_path
-        remote_path = f"{settings.host_install_directory}\\version"
-        
+        version_path = Path(settings.version_file_path)
+        if not version_path.exists():
+            logger.error(f"Version file not found at {version_path}")
+            return False
+
+        remote_path = self._build_remote_path(version_path.name)
+
         try:
-            return self._copy_file_to_host(hostname, version_file, remote_path)
+            return self._download_file_to_host(hostname, version_path.name, remote_path)
         except Exception as e:
             logger.error(f"Failed to deploy version file to {hostname}: {e}")
             return False
-    
-    def _copy_file_to_host(self, hostname: str, local_path: str, remote_path: str) -> bool:
-        """
-        Copy a file from the container to a remote host via WinRM.
-        
-        This uses base64 encoding to transfer the file content.
-        """
-        try:
-            # Read file content
-            with open(local_path, 'rb') as f:
-                file_content = f.read()
-            
-            # Encode content to base64
-            encoded_content = base64.b64encode(file_content).decode('utf-8')
-            
-            # Build PowerShell command to decode and write file
-            # Split into chunks to avoid command length limits
-            chunk_size = 8000  # Safe chunk size for WinRM
-            chunks = [encoded_content[i:i+chunk_size] for i in range(0, len(encoded_content), chunk_size)]
-            
-            logger.debug(f"Copying {local_path} to {hostname}:{remote_path} in {len(chunks)} chunk(s)")
-            
-            # First, initialize the file (delete if exists)
-            init_command = f"Remove-Item -Path '{remote_path}' -Force -ErrorAction SilentlyContinue"
-            winrm_service.execute_ps_command(hostname, init_command)
-            
-            # Write each chunk
-            for i, chunk in enumerate(chunks):
-                if i == 0:
-                    # First chunk: create new file
-                    command = f"$bytes = [Convert]::FromBase64String('{chunk}'); [IO.File]::WriteAllBytes('{remote_path}', $bytes)"
-                else:
-                    # Subsequent chunks: append to file
-                    command = f"$bytes = [Convert]::FromBase64String('{chunk}'); $existing = [IO.File]::ReadAllBytes('{remote_path}'); [IO.File]::WriteAllBytes('{remote_path}', $existing + $bytes)"
-                
-                _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
-                
-                if exit_code != 0:
-                    logger.error(f"Failed to copy file chunk {i+1}/{len(chunks)} to {hostname}: {stderr}")
-                    return False
-            
-            logger.debug(f"Successfully copied {local_path} to {hostname}:{remote_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to copy file {local_path} to {hostname}:{remote_path}: {e}")
+
+    def _build_remote_path(self, filename: str) -> str:
+        """Construct the remote path inside the host install directory."""
+        return str(PureWindowsPath(settings.host_install_directory) / filename)
+
+    def _download_file_to_host(self, hostname: str, artifact_name: str, remote_path: str) -> bool:
+        """Download an artifact from the web server to the host using HTTP."""
+        download_url = self._build_download_url(artifact_name)
+        command = (
+            "$ProgressPreference = 'SilentlyContinue'; "
+            f"Invoke-WebRequest -Uri '{download_url}' -OutFile '{remote_path}' -UseBasicParsing"
+        )
+
+        logger.info(f"Downloading {artifact_name} to {hostname}:{remote_path} from {download_url}")
+
+        _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
+
+        if exit_code != 0:
+            logger.error(f"Failed to download {artifact_name} to {hostname}: {stderr}")
             return False
+
+        return True
+
+    def _build_download_url(self, artifact_name: str) -> str:
+        """Build a download URL for an artifact exposed by the FastAPI static mount."""
+        base_url = settings.agent_download_base_url.rstrip('/')
+        return f"{base_url}/{quote(artifact_name)}"
     
     async def deploy_to_all_hosts(self, hostnames: List[str]) -> Tuple[int, int]:
         """
