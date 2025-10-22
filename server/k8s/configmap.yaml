@@ -4,36 +4,46 @@ metadata:
   name: aetherv-config
   namespace: aetherv
 data:
-  # Application settings
-  DEBUG: "false"
-  
-  # Authentication settings
+  # Application
+  DEBUG: "false"  # Enable verbose logging
+  APP_VERSION: "0.1.0"
+  ENVIRONMENT_NAME: "Production Environment"
+
+  # Authentication
   AUTH_ENABLED: "true"
-  ALLOW_DEV_AUTH: "false"  # NEVER set to true in production
-  
-  # OIDC settings (for interactive authentication)
+  ALLOW_DEV_AUTH: "false"  # Dev-only auth bypass
+
+  # OIDC
   OIDC_ISSUER_URL: "https://login.microsoftonline.com/<tenant-id>/v2.0"
   OIDC_CLIENT_ID: "<client-id>"
-  OIDC_ROLE_NAME: "vm-admin"
+  OIDC_ROLE_NAME: "vm-admin"  # Required role or "*"
   OIDC_REDIRECT_URI: "https://aetherv.example.com/auth/callback"
   OIDC_FORCE_HTTPS: "true"
-  
-  # Security settings
-  JWKS_CACHE_TTL: "300"
-  MAX_TOKEN_AGE: "3600"
+
+  # Security
+  JWKS_CACHE_TTL: "300"  # Seconds
+  MAX_TOKEN_AGE: "3600"  # Seconds
+  SESSION_MAX_AGE: "3600"  # Seconds
   COOKIE_SECURE: "true"
   COOKIE_SAMESITE: "lax"
-  # Note: Cookie httponly is always enabled by default in SessionMiddleware
-  
-  # Hyper-V hosts (comma-separated)
+
+  # Hyper-V hosts
   HYPERV_HOSTS: "hyperv01.example.com,hyperv02.example.com"
-  
-  # WinRM settings
+
+  # WinRM
   WINRM_TRANSPORT: "ntlm"
   WINRM_PORT: "5985"
-  
-  # Inventory refresh interval (seconds)
+
+  # Inventory
   INVENTORY_REFRESH_INTERVAL: "60"
-  
-  # Development settings
-  DUMMY_DATA: "false"  # Set to true for development with dummy data
+
+  # WebSockets
+  WEBSOCKET_TIMEOUT: "1800"
+  WEBSOCKET_PING_INTERVAL: "30"
+  WEBSOCKET_REFRESH_TIME: "1500"
+
+  # Deployment
+  HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Home Lab Virtual Machine Manager"
+
+  # Development
+  DUMMY_DATA: "false"
