@@ -3,12 +3,15 @@ import logging
 import uuid
 import asyncio
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
 
 from ..core.models import (
     Notification, NotificationLevel, NotificationCategory
 )
 from ..core.config import settings
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    from ..core.config_validation import ConfigValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,7 @@ class NotificationService:
         self.notifications: Dict[str, Notification] = {}
         self._initialized = False
         self._websocket_manager = None
+        self._startup_config_notified = False
 
     def set_websocket_manager(self, manager):
         """Set the WebSocket manager for broadcasting notifications."""
@@ -39,6 +43,55 @@ class NotificationService:
 
         self._initialized = True
         logger.info("Notification service started successfully")
+
+    def publish_startup_configuration_result(self, result: "ConfigValidationResult"):
+        """Publish a consolidated notification for configuration issues."""
+
+        if not self._initialized:
+            logger.warning(
+                "Notification service not initialized, skipping configuration notification"
+            )
+            return None
+
+        if self._startup_config_notified:
+            logger.debug("Startup configuration notification already sent; skipping")
+            return None
+
+        if not result or (not getattr(result, "has_errors", False) and not getattr(result, "has_warnings", False)):
+            return None
+
+        # Build a readable message for the overlay
+        lines: List[str] = []
+        if getattr(result, "errors", None):
+            lines.append("Configuration errors detected:")
+            for issue in result.errors:
+                message = f"- {issue.message}"
+                if getattr(issue, "hint", None):
+                    message += f" ({issue.hint})"
+                lines.append(message)
+
+        if getattr(result, "warnings", None):
+            lines.append("Configuration warnings detected:")
+            for issue in result.warnings:
+                message = f"- {issue.message}"
+                if getattr(issue, "hint", None):
+                    message += f" ({issue.hint})"
+                lines.append(message)
+
+        notification_message = "\n".join(lines)
+        level = NotificationLevel.ERROR if getattr(result, "has_errors", False) else NotificationLevel.WARNING
+
+        notification = self.create_notification(
+            title="Configuration warnings on startup",
+            message=notification_message,
+            level=level,
+            category=NotificationCategory.SYSTEM,
+        )
+
+        if notification:
+            self._startup_config_notified = True
+
+        return notification
 
     async def stop(self):
         """Stop the notification service."""

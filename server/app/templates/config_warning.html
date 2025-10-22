@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Configuration warnings detected</title>
+    <link rel="stylesheet" href="/static/css/main.css" />
+    <style>
+        body {
+            background: #111827;
+            color: #f9fafb;
+            font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 860px;
+            margin: 4rem auto;
+            padding: 2.5rem 3rem;
+            background: rgba(17, 24, 39, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            box-shadow: 0 20px 45px rgba(0, 0, 0, 0.45);
+        }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        p.subtitle {
+            margin-top: 0;
+            margin-bottom: 1.5rem;
+            color: #9ca3af;
+        }
+        .issues {
+            margin: 1.5rem 0;
+            padding: 0;
+            list-style: none;
+        }
+        .issue {
+            margin-bottom: 1.25rem;
+            padding: 1rem 1.25rem;
+            border-radius: 10px;
+            background: rgba(251, 191, 36, 0.08);
+            border-left: 4px solid #fbbf24;
+        }
+        .issue.error {
+            background: rgba(239, 68, 68, 0.12);
+            border-left-color: #f87171;
+        }
+        .issue h3 {
+            margin: 0 0 0.5rem 0;
+            font-size: 1.05rem;
+            font-weight: 600;
+        }
+        .issue p {
+            margin: 0;
+            color: #d1d5db;
+        }
+        .meta {
+            margin-top: 2rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            font-size: 0.95rem;
+            color: #9ca3af;
+        }
+        .actions {
+            margin-top: 2.5rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        .actions a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+        .actions a.primary {
+            background: #fbbf24;
+            color: #111827;
+            box-shadow: 0 10px 25px rgba(251, 191, 36, 0.35);
+        }
+        .actions a.primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 30px rgba(251, 191, 36, 0.45);
+        }
+        .actions a.secondary {
+            color: #f9fafb;
+            border: 1px solid rgba(249, 250, 251, 0.3);
+        }
+        .actions a.secondary:hover {
+            border-color: rgba(249, 250, 251, 0.6);
+        }
+        .issues-empty {
+            padding: 1rem 0;
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Configuration attention required</h1>
+        <p class="subtitle">
+            {{ environment_name }} is running with configuration issues detected during startup.
+            Review the details below before attempting normal operations.
+        </p>
+
+        {% if result and result.has_errors %}
+            <h2>Blocking issues</h2>
+            <ul class="issues">
+                {% for issue in result.errors %}
+                    <li class="issue error">
+                        <h3>{{ issue.message }}</h3>
+                        {% if issue.hint %}
+                            <p>{{ issue.hint }}</p>
+                        {% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        {% if result and result.has_warnings %}
+            <h2>Warnings</h2>
+            <ul class="issues">
+                {% for issue in result.warnings %}
+                    <li class="issue">
+                        <h3>{{ issue.message }}</h3>
+                        {% if issue.hint %}
+                            <p>{{ issue.hint }}</p>
+                        {% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        {% if (not result.has_errors) and (not result.has_warnings) %}
+            <div class="issues-empty">No configuration issues detected.</div>
+        {% endif %}
+
+        <div class="meta">
+            <div>Checked at: {{ checked_at or 'unknown' }}</div>
+            <div>Application version: {{ app_version }}</div>
+        </div>
+
+        <div class="actions">
+            <a class="primary" href="/">Re-check configuration</a>
+            <a class="secondary" href="/docs" target="_blank" rel="noopener">Open API docs</a>
+        </div>
+    </div>
+</body>
+</html>

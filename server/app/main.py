@@ -10,7 +10,8 @@ from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 import secrets
 
-from .core.config import settings
+from .core.config import settings, get_config_validation_result, set_session_secret
+from .core.config_validation import run_config_checks
 from .api.routes import router
 from .services.inventory_service import inventory_service
 from .services.job_service import job_service
@@ -34,25 +35,55 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
 
-    # Start services
+    config_result = run_config_checks()
+
+    if config_result.has_errors:
+        for issue in config_result.errors:
+            logger.error("Configuration error: %s", issue.message)
+            if issue.hint:
+                logger.error("Hint: %s", issue.hint)
+
+    if config_result.has_warnings:
+        for issue in config_result.warnings:
+            logger.warning("Configuration warning: %s", issue.message)
+            if issue.hint:
+                logger.warning("Hint: %s", issue.hint)
+
+    notifications_started = False
+    job_started = False
+    inventory_started = False
+
     await notification_service.start()
+    notifications_started = True
 
     # Connect WebSocket manager to notification service
     notification_service.set_websocket_manager(websocket_manager)
 
-    job_service.start()
-    await inventory_service.start()
+    notification_service.publish_startup_configuration_result(config_result)
 
-    logger.info("Application started successfully")
+    if not config_result.has_errors:
+        job_service.start()
+        job_started = True
+        await inventory_service.start()
+        inventory_started = True
+        logger.info("Application started successfully")
+    else:
+        logger.error(
+            "Skipping job and inventory service startup because configuration errors were detected."
+        )
+        logger.info("Application started in configuration warning mode")
 
-    yield
-
-    # Shutdown services
-    logger.info("Shutting down application")
-    await inventory_service.stop()
-    job_service.stop()
-    await notification_service.stop()
-    logger.info("Application stopped")
+    try:
+        yield
+    finally:
+        logger.info("Shutting down application")
+        if inventory_started:
+            await inventory_service.stop()
+        if job_started:
+            job_service.stop()
+        if notifications_started:
+            await notification_service.stop()
+        logger.info("Application stopped")
 
 
 # Create FastAPI app
@@ -137,7 +168,6 @@ if not session_secret:
         "Generated temporary session secret - set SESSION_SECRET_KEY environment variable for production")
 
 # Store the session secret in the config module so it can be accessed elsewhere
-from .core.config import set_session_secret
 set_session_secret(session_secret)
 
 app.add_middleware(
@@ -162,26 +192,53 @@ templates = Jinja2Templates(directory="app/templates")
 async def root(request: Request):
     """Serve the web UI."""
     try:
-        # Check authentication status
-        auth_param = request.query_params.get("auth")
-        session_user = request.session.get("user_info")
+        config_result = get_config_validation_result()
+        environment_name = (
+            "Imaginary Datacenter" if settings.dummy_data else settings.environment_name
+        )
 
-        if session_user and session_user.get("authenticated"):
-            username = session_user.get("preferred_username", "unknown")
-            logger.info(f"Authenticated request from user: {username}")
+        if config_result and config_result.has_errors:
+            checked_at = (
+                config_result.checked_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                if config_result and config_result.checked_at
+                else None
+            )
+            response = templates.TemplateResponse(
+                "config_warning.html",
+                {
+                    "request": request,
+                    "environment_name": environment_name,
+                    "result": config_result,
+                    "app_version": settings.app_version,
+                    "checked_at": checked_at,
+                },
+                status_code=status.HTTP_200_OK,
+            )
+        else:
+            if config_result and config_result.has_warnings:
+                logger.info(
+                    "Startup configuration warnings detected, but proceeding with standard UI."
+                )
 
-        # Always serve the page - let the frontend handle authentication state
-        # This prevents redirect loops and allows graceful token handling
-        environment_name = "Imaginary Datacenter" if settings.dummy_data else settings.environment_name
-        response = templates.TemplateResponse("index.html", {
-            "request": request,
-            "auth_enabled": settings.auth_enabled,
-            "environment_name": environment_name,
-            # Convert to milliseconds
-            "websocket_refresh_time": settings.websocket_refresh_time * 1000,
-            # Convert to milliseconds
-            "websocket_ping_interval": settings.websocket_ping_interval * 1000
-        })
+            # Check authentication status for logging purposes only
+            session_user = request.session.get("user_info")
+
+            if session_user and session_user.get("authenticated"):
+                username = session_user.get("preferred_username", "unknown")
+                logger.info(f"Authenticated request from user: {username}")
+
+            response = templates.TemplateResponse(
+                "index.html",
+                {
+                    "request": request,
+                    "auth_enabled": settings.auth_enabled,
+                    "environment_name": environment_name,
+                    # Convert to milliseconds
+                    "websocket_refresh_time": settings.websocket_refresh_time * 1000,
+                    # Convert to milliseconds
+                    "websocket_ping_interval": settings.websocket_ping_interval * 1000,
+                },
+            )
 
         # Add cache headers to prevent caching issues
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
