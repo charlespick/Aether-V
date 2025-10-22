@@ -1,6 +1,6 @@
 """Configuration management using Pydantic settings."""
 from pydantic_settings import BaseSettings
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 
 class Settings(BaseSettings):
@@ -98,6 +98,12 @@ settings = Settings()
 # This is set by main.py during application initialization
 _actual_session_secret: Optional[str] = None
 
+if TYPE_CHECKING:  # pragma: no cover - only for type hints
+    from .config_validation import ConfigValidationResult
+
+# Cache of the configuration validation result so it can be reused across modules
+_config_validation_result: Optional["ConfigValidationResult"] = None
+
 
 def set_session_secret(secret: str) -> None:
     """
@@ -124,3 +130,16 @@ def get_session_secret() -> Optional[str]:
         The session secret string, or None if not yet initialized
     """
     return _actual_session_secret
+
+
+def set_config_validation_result(result: "ConfigValidationResult") -> None:
+    """Persist the configuration validation result for reuse."""
+
+    global _config_validation_result
+    _config_validation_result = result
+
+
+def get_config_validation_result() -> Optional["ConfigValidationResult"]:
+    """Return the cached configuration validation result, if available."""
+
+    return _config_validation_result
