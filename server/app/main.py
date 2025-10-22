@@ -197,7 +197,7 @@ async def root(request: Request):
             "Imaginary Datacenter" if settings.dummy_data else settings.environment_name
         )
 
-        if config_result and (config_result.has_errors or config_result.has_warnings):
+        if config_result and config_result.has_errors:
             checked_at = (
                 config_result.checked_at.strftime("%Y-%m-%d %H:%M:%S UTC")
                 if config_result and config_result.checked_at
@@ -215,6 +215,11 @@ async def root(request: Request):
                 status_code=status.HTTP_200_OK,
             )
         else:
+            if config_result and config_result.has_warnings:
+                logger.info(
+                    "Startup configuration warnings detected, but proceeding with standard UI."
+                )
+
             # Check authentication status for logging purposes only
             session_user = request.session.get("user_info")
 
