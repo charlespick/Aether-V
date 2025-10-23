@@ -5,7 +5,7 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make dev      - Start development server with hot reload"
-	@echo "  make test     - Run tests (when implemented)"
+	@echo "  make test     - Run test suite"
 	@echo ""
 	@echo "Docker:"
 	@echo "  make build    - Build Docker container"
@@ -27,9 +27,11 @@ build:
 run:
 	docker run -p 8000:8000 --env-file .env aetherv:latest
 
+PYTEST_ARGS ?=
+
+
 test:
-	@echo "Tests not yet implemented"
-	# pytest tests/
+	python -m pytest tests $(PYTEST_ARGS)
 
 deploy:
 	kubectl apply -k k8s/
