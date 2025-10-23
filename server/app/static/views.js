@@ -410,11 +410,12 @@ class VMView extends BaseView {
 
         const meta = getVmStateMeta(vm.state);
         const osName = this.formatOsFamily(vm);
+        const hostInfo = this.findHost(inventory, vm.host);
         const overviewItems = [
-            { label: 'Hyper-V Host', value: this.formatValue(vm.host, 'Unknown host') },
+            { label: 'Hyper-V Host', value: this.formatHostname(vm.host) },
             { label: 'IP Address(es)', value: this.extractIpAddresses(vm) },
             { label: 'Operating System', value: osName },
-            { label: 'Power State', value: meta.label },
+            { label: 'Clustered', value: this.formatClusterState(vm, hostInfo) },
             { label: 'Created', value: this.formatDate(vm.created_at) }
         ];
 
@@ -513,7 +514,7 @@ class VMView extends BaseView {
                     `).join('')}
                 </div>
                 <div class="vm-tab-panels">
-                    <div class="vm-tab-panel active" data-tab="hardware" role="tabpanel" aria-labelledby="vm-tab-hardware">
+                    <div class="vm-tab-panel vm-tab-panel--hardware active" data-tab="hardware" role="tabpanel" aria-labelledby="vm-tab-hardware">
                         <div class="vm-hardware-grid">
                             ${hardwareItems.map(item => `
                                 <div class="vm-hardware-item">
@@ -523,7 +524,7 @@ class VMView extends BaseView {
                             `).join('')}
                         </div>
                     </div>
-                    <div class="vm-tab-panel" data-tab="disks" role="tabpanel" aria-labelledby="vm-tab-disks" hidden>
+                    <div class="vm-tab-panel vm-tab-panel--table" data-tab="disks" role="tabpanel" aria-labelledby="vm-tab-disks" hidden>
                         <div class="vm-table-wrapper">
                             <table class="vm-data-table">
                                 <thead>
@@ -540,7 +541,7 @@ class VMView extends BaseView {
                             </table>
                         </div>
                     </div>
-                    <div class="vm-tab-panel" data-tab="networks" role="tabpanel" aria-labelledby="vm-tab-networks" hidden>
+                    <div class="vm-tab-panel vm-tab-panel--table" data-tab="networks" role="tabpanel" aria-labelledby="vm-tab-networks" hidden>
                         <div class="vm-table-wrapper">
                             <table class="vm-data-table">
                                 <thead>
@@ -557,7 +558,7 @@ class VMView extends BaseView {
                             </table>
                         </div>
                     </div>
-                    <div class="vm-tab-panel" data-tab="notes" role="tabpanel" aria-labelledby="vm-tab-notes" hidden>
+                    <div class="vm-tab-panel vm-tab-panel--notes" data-tab="notes" role="tabpanel" aria-labelledby="vm-tab-notes" hidden>
                         <div class="vm-notes" aria-live="polite">
                             <div class="vm-notes-content" role="textbox" aria-readonly="true">${notesContent}</div>
                         </div>
@@ -641,6 +642,59 @@ class VMView extends BaseView {
             return `${disk.size}`;
         }
         return '—';
+    }
+
+    formatHostname(hostname) {
+        if (!hostname) {
+            return 'Unknown host';
+        }
+        const hostText = String(hostname).trim();
+        if (!hostText) {
+            return 'Unknown host';
+        }
+        const dotIndex = hostText.indexOf('.');
+        return dotIndex === -1 ? hostText : hostText.slice(0, dotIndex);
+    }
+
+    findHost(inventory, hostname) {
+        if (!inventory || !hostname) {
+            return null;
+        }
+        const hosts = Array.isArray(inventory.hosts) ? inventory.hosts : [];
+        return hosts.find(host => host && host.hostname === hostname) || null;
+    }
+
+    formatClusterState(vm, hostInfo) {
+        const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
+        if (typeof rawClustered !== 'undefined' && rawClustered !== null) {
+            if (typeof rawClustered === 'boolean') {
+                if (rawClustered) {
+                    const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
+                    return `Yes${clusterName}`;
+                }
+                return 'No';
+            }
+
+            const normalized = String(rawClustered).trim().toLowerCase();
+            if (['yes', 'true', '1'].includes(normalized)) {
+                const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
+                return `Yes${clusterName}`;
+            }
+            if (['no', 'false', '0'].includes(normalized)) {
+                return 'No';
+            }
+            if (normalized.length > 0) {
+                return this.formatValue(rawClustered, 'Unknown');
+            }
+        }
+
+        if (hostInfo && hostInfo.cluster) {
+            return `Yes (${hostInfo.cluster})`;
+        }
+        if (hostInfo) {
+            return 'No';
+        }
+        return 'Unknown';
     }
 
     extractIpAddresses(vm) {

@@ -8,6 +8,7 @@
     --topbar-h: 64px;
     --radius: 12px;
     --card-bg: #f5f5f5;
+    --card-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
     /* Connection status colors */
     --border-color: rgba(0, 0, 0, 0.12);
     --warning-color: #f59e0b;
@@ -31,6 +32,7 @@
     --muted-ink: #999;
     --primary: #6366f1;
     --card-bg: #242424;
+    --card-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
     /* Dark theme connection status colors */
     --border-color: rgba(255, 255, 255, 0.16);
     --warning-color: #fbbf24;
@@ -544,13 +546,9 @@ body {
 .section {
     background: var(--bg);
     border-radius: 12px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    box-shadow: var(--card-shadow);
     margin-bottom: 2rem;
     overflow: hidden;
-}
-
-[data-theme="dark"] .section {
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .section-header {
@@ -2106,15 +2104,14 @@ tbody tr:last-child td {
 .vm-overview-panel {
     border: 1px solid var(--border-color);
     border-radius: 16px;
-    padding: 18px 22px;
+    padding: 16px 20px;
     margin-bottom: 24px;
     background: var(--bg);
-    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+    box-shadow: var(--card-shadow);
 }
 
 [data-theme="dark"] .vm-overview-panel {
     background: rgba(15, 23, 42, 0.35);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
 }
 
 .vm-overview-grid {
@@ -2153,15 +2150,14 @@ tbody tr:last-child td {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 4px;
+    margin-bottom: 4px;
 }
 
 .vm-tab {
     border: none;
     background: transparent;
-    padding: 10px 14px;
-    border-radius: 10px 10px 0 0;
+    padding: 8px 14px;
+    border-radius: 10px;
     font-size: 14px;
     color: var(--muted-ink);
     font-weight: 600;
@@ -2175,25 +2171,33 @@ tbody tr:last-child td {
 
 .vm-tab.active {
     color: var(--ink);
-    background: rgba(59, 130, 246, 0.1);
+    background: rgba(59, 130, 246, 0.12);
 }
 
 .vm-tab-panels {
     border: 1px solid var(--border-color);
     border-radius: 14px;
     background: var(--bg);
-    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+    box-shadow: var(--card-shadow);
+    overflow: hidden;
 }
 
 [data-theme="dark"] .vm-tab-panels {
     background: rgba(15, 23, 42, 0.5);
     border-color: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.45);
 }
 
 .vm-tab-panel {
     display: none;
-    padding: 22px 24px;
+    padding: 24px;
+}
+
+.vm-tab-panel--table {
+    padding: 0;
+}
+
+.vm-tab-panel--table .vm-table-wrapper {
+    padding: 0 0 12px;
 }
 
 .vm-tab-panel.active {
@@ -2211,15 +2215,6 @@ tbody tr:last-child td {
     flex-direction: column;
     gap: 6px;
     padding: 8px 0;
-    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-}
-
-.vm-hardware-item:last-child {
-    border-bottom: none;
-}
-
-[data-theme="dark"] .vm-hardware-item {
-    border-bottom-color: rgba(255, 255, 255, 0.12);
 }
 
 .vm-property-label {
@@ -2252,7 +2247,7 @@ tbody tr:last-child td {
 
 .vm-data-table th,
 .vm-data-table td {
-    padding: 12px 14px;
+    padding: 10px 18px;
     text-align: left;
     border-bottom: 1px solid rgba(15, 23, 42, 0.08);
 }
