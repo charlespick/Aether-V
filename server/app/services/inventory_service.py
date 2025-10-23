@@ -370,6 +370,7 @@ class InventoryService:
         command = textwrap.dedent(
             """
             $ErrorActionPreference = 'Stop'
+            Import-Module Hyper-V -ErrorAction Stop
             $properties = @(
                 'Name'
                 'State'
@@ -381,7 +382,11 @@ class InventoryService:
                 @{Name='OperatingSystem';Expression={$_.OperatingSystem}}
             )
             $vms = Get-VM | Select-Object -Property $properties
-            $vms | ConvertTo-Json -Depth 3
+            if (-not $vms) {
+                '[]'
+            } else {
+                $vms | ConvertTo-Json -Depth 3
+            }
             """
         )
 
@@ -394,8 +399,20 @@ class InventoryService:
 
         raw_output = stdout.strip().lstrip("\ufeff")
         if not raw_output:
+            if stdout:
+                logger.debug("Whitespace-only VM payload from %s: %r", hostname, stdout)
+            else:
+                logger.debug("VM command returned zero-length payload for host %s", hostname)
             logger.info(f"Host {hostname} returned no VM data")
             return []
+
+        trimmed_output = raw_output if len(raw_output) <= 500 else raw_output[:497] + "..."
+        logger.debug(
+            "Raw VM payload from %s (%d chars): %s",
+            hostname,
+            len(raw_output),
+            trimmed_output,
+        )
 
         try:
             data = json.loads(raw_output)
@@ -460,6 +477,8 @@ class InventoryService:
         ps_candidates = ", ".join(self._ps_string_literal(candidate) for candidate in candidates)
         command = textwrap.dedent(
             f"""
+            $ErrorActionPreference = 'Stop'
+            Import-Module FailoverClusters -ErrorAction Stop
             foreach ($candidate in @({ps_candidates})) {{
                 if ([string]::IsNullOrWhiteSpace($candidate)) {{
                     continue
