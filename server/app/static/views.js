@@ -173,6 +173,10 @@ class OverviewView extends BaseView {
                     <h2>Quick Actions</h2>
                 </div>
                 <div class="quick-actions">
+                    <button class="action-btn" onclick="overlayManager.open('provision-job')">
+                        <span class="action-icon">🆕</span>
+                        <span>Create VM</span>
+                    </button>
                     <button class="action-btn" onclick="overlayManager.open('settings')">
                         <span class="action-icon">⚙️</span>
                         <span>Settings</span>

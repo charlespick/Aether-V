@@ -95,6 +95,7 @@ class OverlayManager {
 
     registerDefaultOverlays() {
         this.registerOverlay('settings', SettingsOverlay);
+        this.registerOverlay('provision-job', ProvisionJobOverlay);
         this.registerOverlay('job-details', JobDetailsOverlay);
         this.registerOverlay('notifications', NotificationsOverlay);
     }
@@ -229,6 +230,311 @@ class SettingsOverlay extends BaseOverlay {
 
         // Immediately refresh the navigation tree to apply show hosts setting
         loadInventory();
+    }
+}
+
+class ProvisionJobOverlay extends BaseOverlay {
+    getTitle() {
+        return 'Create Virtual Machine';
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="provision-job-root">
+                <div class="form-loading">Loading schema...</div>
+            </div>
+        `;
+    }
+
+    init() {
+        this.schema = (this.data?.schema) || window.jobSchema || (window.appConfig?.job_schema) || null;
+        this.rootEl = document.getElementById('provision-job-root');
+        if (!this.rootEl) {
+            console.error('Provision job root element missing');
+            return;
+        }
+
+        if (this.schema) {
+            this.renderForm();
+        } else {
+            this.loadSchema();
+        }
+    }
+
+    async loadSchema() {
+        try {
+            const response = await fetch('/api/v1/schema/job-inputs', { credentials: 'same-origin' });
+            if (!response.ok) {
+                throw new Error(`Schema request failed: ${response.status}`);
+            }
+            this.schema = await response.json();
+            window.jobSchema = this.schema;
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load job schema:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load job schema. Please try again later.</div>
+            `;
+        }
+    }
+
+    renderForm() {
+        if (!this.schema) {
+            return;
+        }
+
+        const fieldSetMap = this.buildParameterSetMap();
+        const fieldsHtml = this.schema.fields
+            .map(field => this.renderField(field, fieldSetMap.get(field.id) || []))
+            .join('');
+
+        const parameterSetHtml = this.renderParameterSets();
+
+        this.rootEl.innerHTML = `
+            <form id="provision-job-form" class="schema-form-body">
+                <div id="provision-job-messages" class="form-messages" role="alert"></div>
+                <div class="schema-fields">${fieldsHtml}</div>
+                ${parameterSetHtml}
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="provision-job-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="provision-job-submit">Submit Job</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('provision-job-form');
+        this.messagesEl = document.getElementById('provision-job-messages');
+        const cancelBtn = document.getElementById('provision-job-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    buildParameterSetMap() {
+        const map = new Map();
+        const sets = this.schema?.parameter_sets || [];
+        sets.forEach((set) => {
+            (set.members || []).forEach((member) => {
+                const existing = map.get(member) || [];
+                existing.push(set);
+                map.set(member, existing);
+            });
+        });
+        return map;
+    }
+
+    renderField(field, parameterSets) {
+        const fieldId = `schema-${field.id}`;
+        const isRequired = field.required ? '<span class="field-required" aria-hidden="true">*</span>' : '<span class="field-optional">Optional</span>';
+        const description = field.description ? `<p class="field-description">${field.description}</p>` : '';
+        const tags = this.renderFieldTags(field, parameterSets);
+        const inputControl = this.renderInputControl(field, fieldId);
+
+        return `
+            <div class="schema-field" data-field-id="${field.id}">
+                <div class="field-header">
+                    <label for="${fieldId}" class="field-label">${field.label || field.id}${isRequired}</label>
+                    ${tags}
+                </div>
+                <div class="field-control">${inputControl}</div>
+                ${description}
+            </div>
+        `;
+    }
+
+    renderFieldTags(field, parameterSets) {
+        const tags = [];
+        if (parameterSets.length > 0) {
+            parameterSets.forEach((set) => {
+                tags.push(`<span class="field-tag">${set.label || set.id}</span>`);
+            });
+        }
+
+        const applicability = field.applicability;
+        if (applicability?.os_family) {
+            const families = applicability.os_family.map((fam) => fam.charAt(0).toUpperCase() + fam.slice(1));
+            tags.push(`<span class="field-tag field-tag-muted">${families.join(', ')} only</span>`);
+        }
+
+        if (!tags.length) {
+            return '';
+        }
+
+        return `<div class="field-tags">${tags.join('')}</div>`;
+    }
+
+    renderInputControl(field, fieldId) {
+        const type = (field.type || 'string').toLowerCase();
+        const defaultValue = field.default ?? '';
+        const validations = field.validations || {};
+        const requiredAttr = field.required ? 'required' : '';
+
+        if (type === 'boolean') {
+            const checked = defaultValue === true ? 'checked' : '';
+            return `
+                <label class="checkbox-field">
+                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
+                    <span>Enable</span>
+                </label>
+            `;
+        }
+
+        if (type === 'integer') {
+            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
+            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
+            const valueAttr = defaultValue !== '' ? `value="${defaultValue}"` : '';
+            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${valueAttr} ${requiredAttr} />`;
+        }
+
+        if (type === 'multiline') {
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${requiredAttr}>${defaultValue}</textarea>`;
+        }
+
+        const inputType = type === 'secret' ? 'password' : 'text';
+        const pattern = type === 'ipv4' ? 'pattern="^(?:\\d{1,3}\\.){3}\\d{1,3}$"' : '';
+        const valueAttr = defaultValue !== '' ? `value="${defaultValue}"` : '';
+        const placeholder = type === 'ipv4' ? 'placeholder="192.0.2.10"' : '';
+        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+    }
+
+    renderParameterSets() {
+        const parameterSets = this.schema?.parameter_sets || [];
+        if (!parameterSets.length) {
+            return '';
+        }
+
+        const rows = parameterSets.map((set) => `
+            <div class="parameter-set">
+                <div class="parameter-set-title">${set.label || set.id}</div>
+                <div class="parameter-set-mode">Mode: ${set.mode || 'unspecified'}</div>
+                <div class="parameter-set-description">${set.description || ''}</div>
+                <div class="parameter-set-members">Fields: ${(set.members || []).join(', ')}</div>
+            </div>
+        `).join('');
+
+        return `
+            <div class="parameter-set-summary">
+                <h3>Parameter Sets</h3>
+                ${rows}
+            </div>
+        `;
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+        if (!this.formEl || !this.schema) {
+            return;
+        }
+
+        const submitBtn = document.getElementById('provision-job-submit');
+        submitBtn?.setAttribute('disabled', 'disabled');
+        this.showMessage('', '');
+
+        const payload = this.collectValues();
+
+        try {
+            const response = await fetch('/api/v1/jobs/provision', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    schema_version: this.schema.version,
+                    values: payload
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                const errorMessages = this.extractErrorMessages(error);
+                this.showMessage(errorMessages.join('<br>') || 'Failed to submit job.', 'error');
+                return;
+            }
+
+            const job = await response.json();
+            this.showMessage(`Job ${job.job_id} queued successfully.`, 'success');
+            setTimeout(() => overlayManager.close(), 1500);
+        } catch (error) {
+            console.error('Failed to submit provisioning job:', error);
+            this.showMessage('Unexpected error submitting job.', 'error');
+        } finally {
+            submitBtn?.removeAttribute('disabled');
+        }
+    }
+
+    collectValues() {
+        const values = {};
+        this.schema.fields.forEach((field) => {
+            const control = this.formEl.elements[field.id];
+            if (!control) {
+                values[field.id] = null;
+                return;
+            }
+
+            const type = (field.type || 'string').toLowerCase();
+            if (type === 'boolean') {
+                values[field.id] = control.checked;
+                return;
+            }
+
+            const rawValue = control.value;
+            if (rawValue === '') {
+                values[field.id] = null;
+                return;
+            }
+
+            if (type === 'integer') {
+                values[field.id] = Number.parseInt(rawValue, 10);
+            } else {
+                values[field.id] = rawValue;
+            }
+        });
+
+        return values;
+    }
+
+    extractErrorMessages(errorPayload) {
+        if (!errorPayload) {
+            return [];
+        }
+        if (Array.isArray(errorPayload?.detail)) {
+            return errorPayload.detail.map((item) => item.msg || JSON.stringify(item));
+        }
+        if (typeof errorPayload.detail === 'string') {
+            return [errorPayload.detail];
+        }
+        if (Array.isArray(errorPayload.errors)) {
+            return errorPayload.errors;
+        }
+        if (Array.isArray(errorPayload?.detail?.errors)) {
+            return errorPayload.detail.errors;
+        }
+        if (errorPayload.detail?.message) {
+            return [errorPayload.detail.message];
+        }
+        return [];
+    }
+
+    showMessage(message, level) {
+        if (!this.messagesEl) {
+            return;
+        }
+
+        this.messagesEl.classList.remove('error', 'success');
+        if (!message) {
+            this.messagesEl.innerHTML = '';
+            return;
+        }
+
+        if (level === 'error') {
+            this.messagesEl.classList.add('error');
+        }
+        if (level === 'success') {
+            this.messagesEl.classList.add('success');
+        }
+
+        this.messagesEl.innerHTML = message;
     }
 }
 

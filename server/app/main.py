@@ -17,6 +17,7 @@ from .services.inventory_service import inventory_service
 from .services.job_service import job_service
 from .services.notification_service import notification_service
 from .services.websocket_service import websocket_manager
+from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
 
 # Configure logging
 logging.basicConfig(
@@ -34,6 +35,12 @@ async def lifespan(app: FastAPI):
     logger.info(f"Version: {settings.app_version}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
+
+    try:
+        load_job_schema()
+    except SchemaValidationError as exc:
+        logger.error("Failed to load job schema: %s", "; ".join(exc.errors))
+        raise
 
     config_result = run_config_checks()
 
@@ -242,6 +249,7 @@ async def root(request: Request):
                     "websocket_refresh_time": settings.websocket_refresh_time * 1000,
                     # Convert to milliseconds
                     "websocket_ping_interval": settings.websocket_ping_interval * 1000,
+                    "job_schema": get_job_schema(),
                 },
             )
 
