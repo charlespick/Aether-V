@@ -124,7 +124,7 @@ class OverviewView extends BaseView {
             </section>
 
             ${(inventory.hosts || []).length === 0 ? `
-                <div class="view-section">
+                <div class="view-section surface-card">
                     <div class="section-header">
                         <h2>${(inventory.disconnected_hosts || []).length > 0 ? 'Connection Issues' : 'Getting Started'}</h2>
                     </div>
@@ -158,7 +158,7 @@ class OverviewView extends BaseView {
                     </div>
                 </div>
             ` : `
-                <div class="view-section">
+                <div class="view-section surface-card">
                     <div class="section-header">
                         <h2>Recent Activity</h2>
                     </div>
@@ -168,7 +168,7 @@ class OverviewView extends BaseView {
                 </div>
             `}
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Quick Actions</h2>
                 </div>
@@ -221,7 +221,7 @@ class ClusterView extends BaseView {
         return `
             <h1 class="page-title">${clusterName}</h1>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Hosts in Cluster</h2>
                 </div>
@@ -230,7 +230,7 @@ class ClusterView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Virtual Machines</h2>
                 </div>
@@ -239,7 +239,7 @@ class ClusterView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Cluster Resources</h2>
                 </div>
@@ -327,7 +327,7 @@ class HostView extends BaseView {
         return `
             <h1 class="page-title">${hostname}</h1>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Host Information</h2>
                 </div>
@@ -349,7 +349,7 @@ class HostView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Virtual Machines</h2>
                 </div>
@@ -409,63 +409,356 @@ class VMView extends BaseView {
         }
 
         const meta = getVmStateMeta(vm.state);
+        const osName = this.formatOsFamily(vm);
+        const hostInfo = this.findHost(inventory, vm.host);
+        const overviewItems = [
+            { label: 'Hyper-V Host', value: this.formatHostname(vm.host) },
+            { label: 'IP Address(es)', value: this.extractIpAddresses(vm) },
+            { label: 'Operating System', value: osName },
+            { label: 'Clustered', value: this.formatClusterState(vm, hostInfo) },
+            { label: 'Created', value: this.formatDate(vm.created_at) }
+        ];
+
+        const hardwareItems = [
+            { label: 'CPU Cores', value: this.formatValue(vm.cpu_cores, '—') },
+            { label: 'Memory', value: this.formatMemory(vm.memory_gb) },
+            { label: 'Generation', value: this.formatValue(vm.generation, '—') },
+            { label: 'Configuration Version', value: this.formatValue(vm.version, '—') }
+        ];
+
+        const disks = Array.isArray(vm.disks) ? vm.disks : [];
+        const networks = Array.isArray(vm.networks) ? vm.networks : [];
+        const diskRows = disks.length
+            ? disks.map(disk => `
+                <tr>
+                    <td>${this.escapeHtml(disk.name || 'Disk')}</td>
+                    <td>${this.escapeHtml(disk.type || '—')}</td>
+                    <td>${this.escapeHtml(this.formatDiskCapacity(disk))}</td>
+                    <td>${this.escapeHtml(disk.path || disk.location || '—')}</td>
+                </tr>
+            `).join('')
+            : `
+                <tr class="vm-empty-row">
+                    <td colspan="4">Disk information not available yet.</td>
+                </tr>
+            `;
+
+        const networkRows = networks.length
+            ? networks.map(adapter => `
+                <tr>
+                    <td>${this.escapeHtml(adapter.adapter_name || adapter.name || 'Adapter')}</td>
+                    <td>${this.escapeHtml(this.extractAdapterAddresses(adapter))}</td>
+                    <td>${this.escapeHtml(adapter.vlan || '—')}</td>
+                    <td>${this.escapeHtml(adapter.network || adapter.virtual_switch || '—')}</td>
+                </tr>
+            `).join('')
+            : `
+                <tr class="vm-empty-row">
+                    <td colspan="4">Network details not available yet.</td>
+                </tr>
+            `;
+
+        const notesContent = this.escapeHtml(this.getNotesContent(vm));
+
+        const tabs = [
+            { id: 'hardware', label: 'VM Hardware' },
+            { id: 'disks', label: 'Disks' },
+            { id: 'networks', label: 'Networks' },
+            { id: 'notes', label: 'Notes' }
+        ];
+
         return `
-            <h1 class="page-title">${vm.name}</h1>
-
-            <div class="view-section">
-                <div class="section-header">
-                    <h2>VM Details</h2>
+            <div class="vm-header">
+                <div class="vm-title-group">
+                    <h1 class="page-title">${vm.name}</h1>
+                    <span class="status ${meta.badgeClass}">${meta.label}</span>
                 </div>
-                <div class="info-grid">
-                    <div class="info-item">
-                        <span class="info-label">State:</span>
-                        <span class="status ${meta.badgeClass}">${meta.label}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Host:</span>
-                        <span>${vm.host}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">CPU Cores:</span>
-                        <span>${vm.cpu_cores ?? 0}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Memory:</span>
-                        <span>${Number(vm.memory_gb ?? 0).toFixed(2)} GB</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Version:</span>
-                        <span>${vm.version || 'Unknown'}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Generation:</span>
-                        <span>${vm.generation || 'Unknown'}</span>
-                    </div>
+                <div class="vm-action-bar" role="toolbar" aria-label="Virtual machine controls">
+                    <button class="vm-action-btn ${vm.state === 'Running' ? '' : 'disabled'}" ${vm.state !== 'Running' ? 'disabled' : ''}
+                        data-tooltip="Stop" aria-label="Stop virtual machine">
+                        <span aria-hidden="true">⏸️</span>
+                    </button>
+                    <button class="vm-action-btn ${vm.state !== 'Running' ? '' : 'disabled'}" ${vm.state === 'Running' ? 'disabled' : ''}
+                        data-tooltip="Start" aria-label="Start virtual machine">
+                        <span aria-hidden="true">▶️</span>
+                    </button>
+                    <button class="vm-action-btn ${vm.state === 'Running' ? '' : 'disabled'}" ${vm.state === 'Running' ? '' : 'disabled'}
+                        data-tooltip="Restart" aria-label="Restart virtual machine">
+                        <span aria-hidden="true">🔄</span>
+                    </button>
                 </div>
             </div>
 
-            <div class="view-section">
-                <div class="section-header">
-                    <h2>Actions</h2>
+            <section class="vm-overview-panel surface-card" aria-label="Virtual machine overview">
+                <div class="vm-overview-grid">
+                    ${overviewItems.map(item => `
+                        <div class="vm-overview-item">
+                            <span class="vm-overview-label">${item.label}</span>
+                            <span class="vm-overview-value">${this.escapeHtml(item.value)}</span>
+                        </div>
+                    `).join('')}
                 </div>
-                <div class="vm-actions">
-                    <button class="action-btn ${vm.state === 'Running' ? '' : 'disabled'}" ${vm.state !== 'Running' ? 'disabled' : ''}>
-                        <span class="action-icon">⏸️</span>
-                        <span>Stop</span>
-                    </button>
-                    <button class="action-btn ${vm.state !== 'Running' ? '' : 'disabled'}" ${vm.state === 'Running' ? 'disabled' : ''}>
-                        <span class="action-icon">▶️</span>
-                        <span>Start</span>
-                    </button>
-                    ${vm.state === 'Running' ? `
-                    <button class="action-btn">
-                        <span class="action-icon">🔄</span>
-                        <span>Restart</span>
-                    </button>
-                    ` : ''}
+            </section>
+
+            <section class="vm-detail-tabs" aria-label="Virtual machine details">
+                <div class="vm-tab-list" role="tablist" aria-label="Virtual machine detail tabs">
+                    ${tabs.map((tab, index) => `
+                        <button class="vm-tab ${index === 0 ? 'active' : ''}"
+                            role="tab"
+                            id="vm-tab-${tab.id}"
+                            data-tab="${tab.id}"
+                            aria-selected="${index === 0 ? 'true' : 'false'}"
+                            tabindex="${index === 0 ? '0' : '-1'}">
+                            ${tab.label}
+                        </button>
+                    `).join('')}
                 </div>
-            </div>
+                <div class="vm-tab-panels surface-card">
+                    <div class="vm-tab-panel vm-tab-panel--hardware active" data-tab="hardware" role="tabpanel" aria-labelledby="vm-tab-hardware">
+                        <div class="vm-hardware-grid">
+                            ${hardwareItems.map(item => `
+                                <div class="vm-hardware-item">
+                                    <span class="vm-property-label">${item.label}</span>
+                                    <span class="vm-property-value">${this.escapeHtml(item.value)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    <div class="vm-tab-panel vm-tab-panel--table" data-tab="disks" role="tabpanel" aria-labelledby="vm-tab-disks" hidden>
+                        <div class="vm-table-wrapper">
+                            <table class="vm-data-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Disk</th>
+                                        <th scope="col">Type</th>
+                                        <th scope="col">Capacity</th>
+                                        <th scope="col">Location</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${diskRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="vm-tab-panel vm-tab-panel--table" data-tab="networks" role="tabpanel" aria-labelledby="vm-tab-networks" hidden>
+                        <div class="vm-table-wrapper">
+                            <table class="vm-data-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Adapter</th>
+                                        <th scope="col">IP Address</th>
+                                        <th scope="col">VLAN</th>
+                                        <th scope="col">Connected Network</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${networkRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="vm-tab-panel vm-tab-panel--notes" data-tab="notes" role="tabpanel" aria-labelledby="vm-tab-notes" hidden>
+                        <div class="vm-notes" aria-live="polite">
+                            <div class="vm-notes-content" role="textbox" aria-readonly="true">${notesContent}</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
         `;
+    }
+
+    init() {
+        this.setupTabs();
+    }
+
+    setupTabs() {
+        const tabButtons = document.querySelectorAll('.vm-tab');
+        const panels = document.querySelectorAll('.vm-tab-panel');
+
+        if (!tabButtons.length || !panels.length) {
+            return;
+        }
+
+        tabButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                const targetId = button.dataset.tab;
+
+                tabButtons.forEach(tab => {
+                    const isActive = tab === button;
+                    tab.classList.toggle('active', isActive);
+                    tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+                    tab.setAttribute('tabindex', isActive ? '0' : '-1');
+                });
+
+                panels.forEach(panel => {
+                    const isMatch = panel.dataset.tab === targetId;
+                    panel.classList.toggle('active', isMatch);
+                    panel.hidden = !isMatch;
+                });
+            });
+        });
+    }
+
+    formatOsFamily(vm) {
+        if (vm.os_name) {
+            return vm.os_name;
+        }
+
+        if (!vm.os_family) {
+            return 'Unknown';
+        }
+
+        const family = String(vm.os_family).toLowerCase();
+        if (family.includes('windows')) {
+            return 'Windows';
+        }
+        if (family.includes('linux')) {
+            return 'Linux';
+        }
+        return this.formatValue(vm.os_family, 'Unknown');
+    }
+
+    formatMemory(memoryGb) {
+        const value = Number(memoryGb);
+        if (Number.isFinite(value) && value > 0) {
+            return `${value.toFixed(2)} GB`;
+        }
+        if (Number.isFinite(value) && value === 0) {
+            return '0 GB';
+        }
+        return '—';
+    }
+
+    formatDiskCapacity(disk) {
+        if (disk && typeof disk.capacity !== 'undefined') {
+            return `${disk.capacity}`;
+        }
+        if (disk && typeof disk.size_gb !== 'undefined') {
+            const size = Number(disk.size_gb);
+            return Number.isFinite(size) ? `${size.toFixed(2)} GB` : `${disk.size_gb}`;
+        }
+        if (disk && typeof disk.size !== 'undefined') {
+            return `${disk.size}`;
+        }
+        return '—';
+    }
+
+    formatHostname(hostname) {
+        if (!hostname) {
+            return 'Unknown host';
+        }
+        const hostText = String(hostname).trim();
+        if (!hostText) {
+            return 'Unknown host';
+        }
+        const dotIndex = hostText.indexOf('.');
+        return dotIndex === -1 ? hostText : hostText.slice(0, dotIndex);
+    }
+
+    findHost(inventory, hostname) {
+        if (!inventory || !hostname) {
+            return null;
+        }
+        const hosts = Array.isArray(inventory.hosts) ? inventory.hosts : [];
+        return hosts.find(host => host && host.hostname === hostname) || null;
+    }
+
+    formatClusterState(vm, hostInfo) {
+        const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
+        if (typeof rawClustered !== 'undefined' && rawClustered !== null) {
+            if (typeof rawClustered === 'boolean') {
+                if (rawClustered) {
+                    const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
+                    return `Yes${clusterName}`;
+                }
+                return 'No';
+            }
+
+            const normalized = String(rawClustered).trim().toLowerCase();
+            if (['yes', 'true', '1'].includes(normalized)) {
+                const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
+                return `Yes${clusterName}`;
+            }
+            if (['no', 'false', '0'].includes(normalized)) {
+                return 'No';
+            }
+            if (normalized.length > 0) {
+                return this.formatValue(rawClustered, 'Unknown');
+            }
+        }
+
+        if (hostInfo && hostInfo.cluster) {
+            return `Yes (${hostInfo.cluster})`;
+        }
+        if (hostInfo) {
+            return 'No';
+        }
+        return 'Unknown';
+    }
+
+    extractIpAddresses(vm) {
+        if (Array.isArray(vm.ip_addresses) && vm.ip_addresses.length > 0) {
+            return vm.ip_addresses.join(', ');
+        }
+        if (vm.ip_address) {
+            return vm.ip_address;
+        }
+        return 'Not available';
+    }
+
+    extractAdapterAddresses(adapter) {
+        if (!adapter) {
+            return '—';
+        }
+        if (Array.isArray(adapter.ip_addresses) && adapter.ip_addresses.length > 0) {
+            return adapter.ip_addresses.join(', ');
+        }
+        if (adapter.ip_address) {
+            return adapter.ip_address;
+        }
+        return '—';
+    }
+
+    getNotesContent(vm) {
+        if (Array.isArray(vm.notes) && vm.notes.length > 0) {
+            return vm.notes.join('\n');
+        }
+        if (typeof vm.notes === 'string' && vm.notes.trim().length > 0) {
+            return vm.notes;
+        }
+        return 'No notes have been recorded for this virtual machine.';
+    }
+
+    formatValue(value, fallback = '—') {
+        if (value === null || typeof value === 'undefined') {
+            return fallback;
+        }
+        const text = String(value).trim();
+        return text.length > 0 ? text : fallback;
+    }
+
+    formatDate(value) {
+        if (!value) {
+            return 'Not available';
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return 'Not available';
+        }
+        return date.toLocaleString();
+    }
+
+    escapeHtml(value) {
+        if (value === null || typeof value === 'undefined') {
+            return '';
+        }
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     async fetchInventory() {
@@ -488,7 +781,7 @@ class DisconnectedHostsView extends BaseView {
         return `
             <h1 class="page-title">Disconnected Hosts</h1>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Hosts Not Currently Connected</h2>
                     <p class="section-description">
