@@ -297,10 +297,7 @@ class HostDeploymentService:
             "if (-not (Test-Path -LiteralPath $installDir)) {"
             "    New-Item -ItemType Directory -Path $installDir -Force | Out-Null"
             "} "
-            "$items = Get-ChildItem -LiteralPath $installDir -Force -ErrorAction Stop; "
-            "foreach ($item in $items) {"
-            "    Remove-Item -LiteralPath $item.FullName -Force -Recurse -ErrorAction Stop"
-            "}"
+            "Get-ChildItem -LiteralPath $installDir -Force -ErrorAction Stop | Remove-Item -Force -Recurse -ErrorAction Stop"
         )
 
         _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
@@ -320,7 +317,7 @@ class HostDeploymentService:
             "$ErrorActionPreference = 'Stop'; "
             f"$installDir = {self._ps_literal(install_dir)}; "
             "$items = Get-ChildItem -LiteralPath $installDir -Force -ErrorAction Stop; "
-            "if ($items.Count -gt 0) {"
+            "if ($items -and $items.Count -gt 0) {"
             "    $names = $items | Select-Object -ExpandProperty FullName; "
             "    Write-Error (\"Install directory cleanup failed; remaining items: \" + ($names -join ', '))"
             "} else { Write-Output 'EMPTY' }"
