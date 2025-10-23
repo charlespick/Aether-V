@@ -13,7 +13,7 @@ from ..core.models import (
     InventoryResponse, HealthResponse, NotificationsResponse
 )
 from ..core.auth import get_current_user, oauth
-from ..core.config import settings
+from ..core.config import settings, get_config_validation_result
 from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
 from ..services.notification_service import notification_service
@@ -36,7 +36,20 @@ async def health_check():
 @router.get("/readyz", response_model=HealthResponse, tags=["Health"])
 async def readiness_check():
     """Readiness check endpoint."""
-    # Check if inventory has been initialized
+
+    # When startup detected configuration errors we still want the
+    # readiness probe to succeed so that ingress routes requests to the
+    # application and the user can see the configuration warning page.
+    config_result = get_config_validation_result()
+    if config_result and config_result.has_errors:
+        return HealthResponse(
+            status="config_error",
+            version=settings.app_version,
+            timestamp=datetime.utcnow(),
+        )
+
+    # Otherwise ensure the inventory service has successfully completed
+    # an initial refresh before reporting ready.
     if not inventory_service.last_refresh:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
