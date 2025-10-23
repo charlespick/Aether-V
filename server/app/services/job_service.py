@@ -6,7 +6,6 @@ import base64
 import logging
 import uuid
 from datetime import datetime
-from functools import partial
 from pathlib import PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
 
