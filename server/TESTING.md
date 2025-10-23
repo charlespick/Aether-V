@@ -25,23 +25,23 @@ application is initialised with:
 
 ## Running the tests locally
 
-Install the test dependencies and run the suite:
+The `server/Makefile` provisions an isolated virtual environment for you. Run:
 
 ```bash
 cd server
-python -m pip install -r requirements-test.txt
 make test
 ```
 
-`make test` simply runs `pytest` from the `server` directory. You can pass
-additional pytest flags via `PYTEST_ARGS`, for example
-`make test PYTEST_ARGS="-vv --maxfail=1"`.
+The first invocation creates `.venv/`, installs both `requirements.txt` and
+`requirements-test.txt`, and then executes `pytest`. Subsequent runs reuse the
+existing environment unless the requirements change. You can pass additional
+pytest flags via `PYTEST_ARGS`, for example `make test PYTEST_ARGS="-vv"`.
 
 > [!NOTE]
-> The tests rely on FastAPI and related runtime dependencies. If they are not
-> installed (for example, in an offline environment), the suite will be marked
-> as skipped rather than failing. Installing the requirements listed above
-> enables the full test run.
+> The tests rely on FastAPI and related runtime dependencies. If package
+> installation fails (for example, due to offline mirrors), `make test` emits a
+> warning and skips execution until the dependencies can be installed
+> successfully.
 
 ## Continuous integration
 

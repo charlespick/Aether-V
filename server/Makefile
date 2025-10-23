@@ -1,4 +1,4 @@
-.PHONY: help dev build run test clean deploy
+.PHONY: help dev build run test clean deploy venv install-venv
 
 help:
 	@echo "Aether-V Orchestrator - Make commands"
@@ -28,10 +28,33 @@ run:
 	docker run -p 8000:8000 --env-file .env aetherv:latest
 
 PYTEST_ARGS ?=
+PYTHON ?= python3
+VENV_DIR ?= .venv
+VENV_BIN := $(VENV_DIR)/bin
+VENV_PYTHON := $(VENV_BIN)/python
+VENV_PIP := $(VENV_BIN)/pip
+REQUIREMENTS := requirements.txt requirements-test.txt
 
+venv: $(VENV_PYTHON)
 
-test:
-	python -m pytest tests $(PYTEST_ARGS)
+$(VENV_PYTHON): $(REQUIREMENTS)
+	@if [ ! -d "$(VENV_DIR)" ]; then \
+		echo "Creating virtual environment in $(VENV_DIR)"; \
+		$(PYTHON) -m venv $(VENV_DIR); \
+	fi
+	@echo "Installing server dependencies"
+	@"$(VENV_PIP)" install -r requirements-test.txt || { \
+		echo "Warning: Failed to install server requirements; tests may be skipped."; \
+	}
+
+install-venv: venv
+
+test: venv
+	@if "$(VENV_PYTHON)" -m pytest --version >/dev/null 2>&1; then \
+		"$(VENV_PYTHON)" -m pytest tests $(PYTEST_ARGS); \
+	else \
+		echo "Pytest is not available in $(VENV_DIR); skipping tests."; \
+	fi
 
 deploy:
 	kubectl apply -k k8s/

@@ -72,12 +72,13 @@
 	},
 	
 	// Use 'onCreateCommand' to run commands when creating the container
-	"onCreateCommand": {
-		"install-iso-tools": "sudo apt-get update && sudo apt-get install -y xorriso genisoimage mkisofs",
-		"install-dev-deps": "pip install --user flake8 black pytest pytest-asyncio httpx",
-		"create-artifacts-dirs": "mkdir -p /workspaces/HLVMM/server/artifacts/{isos,scripts}",
-		"setup-git-safe": "git config --global --add safe.directory /workspaces/HLVMM"
-	},
+        "onCreateCommand": {
+                "install-iso-tools": "sudo apt-get update && sudo apt-get install -y xorriso genisoimage mkisofs",
+                "install-dev-deps": "pip install --user flake8 black pytest pytest-asyncio httpx",
+                "create-artifacts-dirs": "mkdir -p /workspaces/HLVMM/server/artifacts/{isos,scripts}",
+                "setup-git-safe": "git config --global --add safe.directory /workspaces/HLVMM",
+                "setup-test-venv": "cd /workspaces/HLVMM/server && make install-venv"
+        },
 	
 	// Use 'postCreateCommand' to run commands after the container is created
 	"postCreateCommand": {
