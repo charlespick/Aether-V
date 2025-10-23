@@ -17,6 +17,7 @@ from .host_deployment_service import host_deployment_service
 from .notification_service import notification_service
 from .websocket_service import websocket_manager
 from .winrm_service import winrm_service
+from .inventory_service import inventory_service
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,14 @@ class JobService:
         status_changed = "status" in changes and job.status != previous_status
         if status_changed:
             await self._sync_job_notification(job)
+
+            if job.job_type == "provision_vm":
+                vm_name = self._extract_vm_name(job)
+                target_host = (job.target_host or "").strip()
+                if job.status == JobStatus.RUNNING and vm_name and target_host:
+                    inventory_service.track_job_vm(job.job_id, vm_name, target_host)
+                elif job.status in {JobStatus.COMPLETED, JobStatus.FAILED}:
+                    inventory_service.clear_job_vm(job.job_id)
 
         await self._broadcast_job_status(job)
 

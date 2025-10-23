@@ -57,6 +57,30 @@ function emitJobUpdate(jobId, message) {
 window.subscribeToJobUpdates = subscribeToJobUpdates;
 window.unsubscribeFromJobUpdates = unsubscribeFromJobUpdates;
 
+const VM_STATE_META = {
+    Running: { emoji: '🟢', badgeClass: 'running', dotClass: 'running' },
+    Creating: { emoji: '🟡', badgeClass: 'creating', dotClass: 'creating' },
+    Starting: { emoji: '🟡', badgeClass: 'creating', dotClass: 'creating' },
+    Off: { emoji: '⚫', badgeClass: 'off', dotClass: 'off' },
+    Paused: { emoji: '⏸️', badgeClass: 'off', dotClass: 'off' },
+    Saved: { emoji: '💾', badgeClass: 'off', dotClass: 'off' },
+    Stopping: { emoji: '🟠', badgeClass: 'off', dotClass: 'off' },
+    Unknown: { emoji: '❔', badgeClass: 'off', dotClass: 'off' }
+};
+
+function getVmStateMeta(state) {
+    const normalized = typeof state === 'string' && state.trim() ? state.trim() : 'Unknown';
+    const meta = VM_STATE_META[normalized] || VM_STATE_META.Unknown;
+    return {
+        emoji: meta.emoji,
+        badgeClass: meta.badgeClass,
+        dotClass: meta.dotClass,
+        label: normalized
+    };
+}
+
+window.getVmStateMeta = getVmStateMeta;
+
 // WebSocket notification handlers
 function setupWebSocketHandlers() {
     // Handle connection status changes
@@ -980,10 +1004,10 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
                     ${hostVMs.length > 0 ? `
                         <ul class="sub-sub-list">
                             ${hostVMs.map(vm => {
-                                const statusEmoji = vm.state === 'Running' ? '🟢' : '⚫';
+                                const meta = getVmStateMeta(vm.state);
                                 return `
                                     <li class="vm-item" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
-                                        <span class="vm-status">${statusEmoji}</span>
+                                        <span class="vm-status">${meta.emoji}</span>
                                         <span class="vm-name">${vm.name}</span>
                                     </li>
                                 `;
@@ -1002,11 +1026,11 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
         });
         
         return allVMs.map(vm => {
-            const statusEmoji = vm.state === 'Running' ? '🟢' : '⚫';
+            const meta = getVmStateMeta(vm.state);
             const hostShort = vm.host.split('.')[0];
             return `
                 <li class="vm-item direct" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
-                    <span class="vm-status">${statusEmoji}</span>
+                    <span class="vm-status">${meta.emoji}</span>
                     <span class="vm-name">${vm.name}</span>
                     <span class="vm-host">(${hostShort})</span>
                 </li>
