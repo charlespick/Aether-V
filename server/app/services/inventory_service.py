@@ -25,6 +25,7 @@ class InventoryService:
         self.last_refresh: Optional[datetime] = None
         self._refresh_task: Optional[asyncio.Task] = None
         self._job_vm_placeholders: Dict[str, Set[str]] = {}
+        self._initial_diagnostics_completed: Set[str] = set()
 
     async def start(self):
         """Start the inventory service and begin periodic refresh."""
@@ -363,6 +364,107 @@ class InventoryService:
 
         if exit_code != 0:
             raise Exception(f"Connection test failed: {stderr}")
+
+        if hostname not in self._initial_diagnostics_completed:
+            self._run_initial_diagnostics(hostname)
+            self._initial_diagnostics_completed.add(hostname)
+
+    def _run_initial_diagnostics(self, hostname: str) -> None:
+        """Execute detailed one-time diagnostics to aid troubleshooting."""
+
+        logger.info("Running initial WinRM diagnostics for %s", hostname)
+
+        diagnostics = [
+            (
+                "Echo connectivity",
+                "echo \"connected\"",
+            ),
+            (
+                "PowerShell version table",
+                textwrap.dedent(
+                    """
+                    $ErrorActionPreference = 'Stop'
+                    $PSVersionTable | ConvertTo-Json -Depth 2
+                    """
+                ).strip(),
+            ),
+            (
+                "Hyper-V module and Get-VM command availability",
+                textwrap.dedent(
+                    """
+                    $ErrorActionPreference = 'Stop'
+                    Import-Module Hyper-V -ErrorAction Stop
+                    Get-Command Get-VM -ErrorAction Stop |
+                        Select-Object -Property Name, ModuleName, Definition |
+                        ConvertTo-Json -Depth 3
+                    """
+                ).strip(),
+            ),
+            (
+                "whoami principal",
+                "whoami",
+            ),
+        ]
+
+        for description, command in diagnostics:
+            stdout, stderr, exit_code = winrm_service.execute_ps_command(
+                hostname, command
+            )
+
+            trimmed_stdout = stdout.strip()
+            trimmed_stderr = stderr.strip()
+            preview_stdout = (
+                trimmed_stdout[:497] + "..."
+                if len(trimmed_stdout) > 500
+                else trimmed_stdout
+            )
+            preview_stderr = (
+                trimmed_stderr[:497] + "..."
+                if len(trimmed_stderr) > 500
+                else trimmed_stderr
+            )
+
+            logger.info(
+                "Diagnostic '%s' on %s completed with exit code %s",
+                description,
+                hostname,
+                exit_code,
+            )
+
+            if trimmed_stdout:
+                logger.info(
+                    "Diagnostic '%s' stdout (%d chars): %s",
+                    description,
+                    len(trimmed_stdout),
+                    preview_stdout,
+                )
+            else:
+                logger.info(
+                    "Diagnostic '%s' stdout was empty",
+                    description,
+                )
+
+            if trimmed_stderr:
+                logger.info(
+                    "Diagnostic '%s' stderr (%d chars): %s",
+                    description,
+                    len(trimmed_stderr),
+                    preview_stderr,
+                )
+            else:
+                logger.info(
+                    "Diagnostic '%s' stderr was empty",
+                    description,
+                )
+
+            if exit_code != 0:
+                raise RuntimeError(
+                    "Diagnostic '%s' failed on %s with exit code %s" % (
+                        description,
+                        hostname,
+                        exit_code,
+                    )
+                )
 
     def _query_host_vms(self, hostname: str) -> List[VM]:
         """Query VMs from a host using PowerShell."""
