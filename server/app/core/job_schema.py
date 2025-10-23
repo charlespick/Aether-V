@@ -15,7 +15,10 @@ _SCHEMA_CACHE: Optional[Dict[str, Any]] = None
 
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "Schemas" / "job-inputs.yaml"
 
-_HOSTNAME_PATTERN = re.compile(r"^(?=.{1,255}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
+_HOSTNAME_PATTERN = re.compile(
+    r"^(?=.{1,255}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+)
+_IPV4_INPUT_PATTERN = r"^(?:\d{1,3}\.){3}\d{1,3}$"
 
 
 class SchemaValidationError(Exception):
@@ -62,6 +65,13 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
         if fid in field_ids:
             raise SchemaValidationError([f"Duplicate field id: {fid}"])
         field_ids.add(fid)
+
+        field_type = (entry.get("type") or "string").lower()
+        if field_type == "ipv4":
+            validations = entry.get("validations") or {}
+            if "pattern" not in validations:
+                validations["pattern"] = _IPV4_INPUT_PATTERN
+            entry["validations"] = validations
 
     for param_set in raw.get("parameter_sets", []) or []:
         if not isinstance(param_set, dict):

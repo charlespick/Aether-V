@@ -410,6 +410,11 @@ function Invoke-ProvisioningPublishProvisioningData {
                 $rsaParameters.Exponent = $exponent
 
                 $rsa = [System.Security.Cryptography.RSACng]::new()
+                try {
+                    $rsa.KeySize = [int]($modulus.Length * 8)
+                } catch {
+                    # If the platform rejects the explicit size, fall back to the default
+                }
                 $rsa.ImportParameters($rsaParameters)
                 return $rsa
             }

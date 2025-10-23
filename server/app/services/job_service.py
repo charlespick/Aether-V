@@ -175,7 +175,7 @@ class JobService:
         if not prepared:
             raise RuntimeError(f"Failed to prepare host {target_host} for provisioning")
 
-        yaml_payload = yaml.safe_dump(definition, sort_keys=False)
+        yaml_payload = await asyncio.to_thread(yaml.safe_dump, definition, sort_keys=False)
         command = self._build_master_invocation_command(yaml_payload)
 
         loop = asyncio.get_running_loop()

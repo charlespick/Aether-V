@@ -234,6 +234,27 @@ class SettingsOverlay extends BaseOverlay {
 }
 
 class ProvisionJobOverlay extends BaseOverlay {
+    resolveInitialSchema() {
+        const sources = [
+            () => this.data?.schema,
+            () => window?.jobSchema,
+            () => window?.appConfig?.job_schema,
+        ];
+
+        for (const getter of sources) {
+            try {
+                const value = getter();
+                if (value) {
+                    return value;
+                }
+            } catch (error) {
+                // Ignore lookup errors from optional chaining fallbacks
+            }
+        }
+
+        return null;
+    }
+
     getTitle() {
         return 'Create Virtual Machine';
     }
@@ -247,7 +268,7 @@ class ProvisionJobOverlay extends BaseOverlay {
     }
 
     init() {
-        this.schema = (this.data?.schema) || window.jobSchema || (window.appConfig?.job_schema) || null;
+        this.schema = this.resolveInitialSchema();
         this.hosts = [];
         this.rootEl = document.getElementById('provision-job-root');
         if (!this.rootEl) {
@@ -520,7 +541,8 @@ class ProvisionJobOverlay extends BaseOverlay {
         }
 
         const inputType = type === 'secret' ? 'password' : 'text';
-        const pattern = type === 'ipv4' ? 'pattern="^(?:\\d{1,3}\\.){3}\\d{1,3}$"' : '';
+        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
+        const pattern = patternValue ? `pattern="${patternValue}"` : '';
         const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
         const placeholder = type === 'ipv4' ? 'placeholder="192.0.2.10"' : '';
         return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
