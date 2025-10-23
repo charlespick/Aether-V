@@ -1,8 +1,8 @@
 """WinRM service for executing PowerShell commands on Hyper-V hosts."""
 import logging
 from time import perf_counter
-from typing import Any, Callable, Dict, Optional
-import winrm
+from typing import Any, Callable, Dict, Iterable, Optional
+from base64 import b64encode
 from winrm.protocol import Protocol
 
 from ..core.config import settings
@@ -29,10 +29,124 @@ def _format_output_preview(output: str, *, max_length: int = 400) -> str:
 
 class WinRMService:
     """Service for managing WinRM connections to Hyper-V hosts."""
-    
+
+    _BASE_POWERSHELL_ARGS: tuple[str, ...] = (
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+    )
+
     def __init__(self):
         self._sessions: Dict[str, Protocol] = {}
-    
+
+    def _open_powershell_shell(
+        self,
+        session: Protocol,
+        hostname: str,
+        *,
+        env_vars: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Open a PowerShell-friendly shell for the given session."""
+        normalized_env = None
+        if env_vars:
+            normalized_env = {key: str(value) for key, value in env_vars.items()}
+
+        shell_id = session.open_shell(codepage=65001, env_vars=normalized_env)
+        logger.debug("Opened PowerShell shell %s on %s", shell_id, hostname)
+        return shell_id
+
+    @classmethod
+    def _build_powershell_command(
+        cls, additional_args: Iterable[str]
+    ) -> list[str]:
+        """Create a full PowerShell command line for execution."""
+        command = list(cls._BASE_POWERSHELL_ARGS)
+        command.extend(additional_args)
+        return command
+
+    def _run_powershell_command(
+        self,
+        session: Protocol,
+        hostname: str,
+        args: Iterable[str],
+        *,
+        env_vars: Optional[Dict[str, str]] = None,
+    ) -> tuple[bytes, bytes, int]:
+        """Execute a PowerShell command and return the raw outputs."""
+        shell_id = self._open_powershell_shell(session, hostname, env_vars=env_vars)
+        try:
+            command_args = list(args)
+            command_id = session.run_command(
+                shell_id,
+                "powershell.exe",
+                command_args,
+                skip_cmd_shell=True,
+            )
+            logger.debug(
+                "Started PowerShell command %s on shell %s (%s)",
+                command_id,
+                shell_id,
+                hostname,
+            )
+            stdout, stderr, exit_code = session.get_command_output(shell_id, command_id)
+            session.cleanup_command(shell_id, command_id)
+            return stdout, stderr, exit_code
+        finally:
+            session.close_shell(shell_id)
+
+    def _stream_powershell_command(
+        self,
+        session: Protocol,
+        hostname: str,
+        args: Iterable[str],
+        on_chunk: Callable[[str, str], None],
+    ) -> tuple[int, float]:
+        """Execute a PowerShell command and stream output via callback."""
+        shell_id = self._open_powershell_shell(session, hostname)
+        command_args = list(args)
+        command_id = session.run_command(
+            shell_id,
+            "powershell.exe",
+            command_args,
+            skip_cmd_shell=True,
+        )
+        logger.debug(
+            "Started streaming PowerShell command %s on shell %s (%s)",
+            command_id,
+            shell_id,
+            hostname,
+        )
+
+        exit_code = 0
+        start_time = perf_counter()
+        try:
+            command_done = False
+            while not command_done:
+                stdout, stderr, exit_code, command_done = session.receive(shell_id, command_id)
+                if stdout:
+                    on_chunk('stdout', stdout.decode('utf-8', errors='replace'))
+                    logger.debug(
+                        "Received %d stdout bytes from %s (streaming)",
+                        len(stdout),
+                        hostname,
+                    )
+                if stderr:
+                    on_chunk('stderr', stderr.decode('utf-8', errors='replace'))
+                    logger.debug(
+                        "Received %d stderr bytes from %s (streaming)",
+                        len(stderr),
+                        hostname,
+                    )
+        finally:
+            try:
+                session.cleanup_command(shell_id, command_id)
+            finally:
+                session.close_shell(shell_id)
+        duration = perf_counter() - start_time
+        return exit_code, duration
+
     def get_session(self, hostname: str) -> Protocol:
         """Get or create a WinRM session for a host."""
         if hostname not in self._sessions:
@@ -102,35 +216,26 @@ class WinRMService:
         session = self.get_session(hostname)
         
         # Build PowerShell command
-        param_args = []
+        param_args: list[str] = []
         for key, value in parameters.items():
             if value is None:
                 continue
-            
-            # Handle different value types
+
+            flag = f"-{key}"
             if isinstance(value, bool):
                 if value:
-                    param_args.append(f"-{key}")
+                    param_args.append(flag)
             elif isinstance(value, (int, float)):
-                param_args.append(f"-{key} {value}")
+                param_args.extend([flag, str(value)])
             elif isinstance(value, str):
-                # Escape quotes in string values
                 escaped_value = value.replace('"', '`"')
-                param_args.append(f'-{key} "{escaped_value}"')
-        
-        param_str = " ".join(param_args)
-        
-        # Build environment variable settings
-        env_str = ""
-        if environment:
-            env_vars = "; ".join([f"$env:{k} = '{v}'" for k, v in environment.items()])
-            env_str = f"{env_vars}; "
-        
-        command = (
-            f"{env_str}"
-            f"powershell.exe -ExecutionPolicy Bypass -File \"{script_path}\" {param_str}"
+                param_args.extend([flag, f'"{escaped_value}"'])
+
+        escaped_path = script_path.replace('"', '`"')
+        ps_args = self._build_powershell_command(
+            ["-File", f'"{escaped_path}"', *param_args]
         )
-        
+
         logger.info("Executing PowerShell script on %s", hostname)
         logger.debug(
             "Script invocation on %s -> path=%s params=%s env=%s",
@@ -139,17 +244,20 @@ class WinRMService:
             parameters,
             environment,
         )
-        logger.debug("Full rendered script command for %s: %s", hostname, command)
+        logger.debug(
+            "Full rendered script command for %s: powershell.exe %s",
+            hostname,
+            " ".join(ps_args),
+        )
 
         try:
             start_time = perf_counter()
-            shell_id = session.open_shell()
-            logger.debug("Opened shell %s on %s", shell_id, hostname)
-            command_id = session.run_command(shell_id, command)
-            logger.debug("Started command %s on shell %s (%s)", command_id, shell_id, hostname)
-            stdout, stderr, exit_code = session.get_command_output(shell_id, command_id)
-            session.cleanup_command(shell_id, command_id)
-            session.close_shell(shell_id)
+            stdout, stderr, exit_code = self._run_powershell_command(
+                session,
+                hostname,
+                ps_args,
+                env_vars=environment,
+            )
             duration = perf_counter() - start_time
 
             stdout_str = stdout.decode('utf-8') if stdout else ""
@@ -205,15 +313,16 @@ class WinRMService:
         logger.info("Executing PowerShell command on %s: %s", hostname, truncated_command)
         logger.debug("Full PowerShell command on %s: %s", hostname, command)
 
+        encoded_command = b64encode(command.encode('utf-16le')).decode('ascii')
+        ps_args = self._build_powershell_command(["-EncodedCommand", encoded_command])
+
         try:
             start_time = perf_counter()
-            shell_id = session.open_shell()
-            logger.debug("Opened shell %s on %s", shell_id, hostname)
-            command_id = session.run_command(shell_id, f"powershell.exe -Command \"{command}\"")
-            logger.debug("Started command %s on shell %s (%s)", command_id, shell_id, hostname)
-            stdout, stderr, exit_code = session.get_command_output(shell_id, command_id)
-            session.cleanup_command(shell_id, command_id)
-            session.close_shell(shell_id)
+            stdout, stderr, exit_code = self._run_powershell_command(
+                session,
+                hostname,
+                ps_args,
+            )
             duration = perf_counter() - start_time
 
             stdout_str = stdout.decode('utf-8') if stdout else ""
@@ -266,46 +375,25 @@ class WinRMService:
         logger.info("Streaming PowerShell command on %s: %s", hostname, truncated_command)
         logger.debug("Full streaming PowerShell command on %s: %s", hostname, command)
 
-        shell_id = session.open_shell()
-        logger.debug("Opened streaming shell %s on %s", shell_id, hostname)
-        command_id = session.run_command(shell_id, f"powershell.exe -Command \"{command}\"")
-        logger.debug("Started streaming command %s on shell %s (%s)", command_id, shell_id, hostname)
+        encoded_command = b64encode(command.encode('utf-16le')).decode('ascii')
+        ps_args = self._build_powershell_command(["-EncodedCommand", encoded_command])
 
-        exit_code = 0
         try:
-            start_time = perf_counter()
-            command_done = False
-            while not command_done:
-                stdout, stderr, exit_code, command_done = session.receive(shell_id, command_id)
-                if stdout:
-                    on_chunk('stdout', stdout.decode('utf-8', errors='replace'))
-                    logger.debug(
-                        "Received %d stdout bytes from %s (streaming)",
-                        len(stdout),
-                        hostname,
-                    )
-                if stderr:
-                    on_chunk('stderr', stderr.decode('utf-8', errors='replace'))
-                    logger.debug(
-                        "Received %d stderr bytes from %s (streaming)",
-                        len(stderr),
-                        hostname,
-                    )
+            exit_code, duration = self._stream_powershell_command(
+                session,
+                hostname,
+                ps_args,
+                on_chunk,
+            )
         except Exception as exc:
             logger.exception("WinRM streaming execution failed on %s", hostname)
             raise
-        finally:
-            try:
-                session.cleanup_command(shell_id, command_id)
-            finally:
-                session.close_shell(shell_id)
-            duration = perf_counter() - start_time
-            logger.info(
-                "Streaming command on %s completed in %.2fs with exit code %s",
-                hostname,
-                duration,
-                exit_code,
-            )
+        logger.info(
+            "Streaming command on %s completed in %.2fs with exit code %s",
+            hostname,
+            duration,
+            exit_code,
+        )
 
         return exit_code
 
