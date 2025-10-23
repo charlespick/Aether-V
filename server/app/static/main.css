@@ -1793,15 +1793,24 @@ tbody tr:last-child td {
     font-size: 15px;
 }
 
-.field-required {
-    margin-left: 4px;
-    color: #ef4444;
+.field-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
-.field-optional {
-    margin-left: 8px;
-    font-size: 12px;
+.field-required-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.08);
     color: var(--muted-ink);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 .field-tags {
@@ -1865,6 +1874,55 @@ tbody tr:last-child td {
     font-size: 13px;
     color: var(--muted-ink);
     line-height: 1.5;
+}
+
+.field-note {
+    font-size: 12px;
+    margin-top: -4px;
+    color: var(--muted-ink);
+}
+
+.primary-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+@media (min-width: 720px) {
+    .primary-controls {
+        flex-direction: row;
+    }
+}
+
+.primary-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(148, 163, 184, 0.12);
+}
+
+.primary-field .field-header {
+    margin-bottom: 4px;
+}
+
+.primary-select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.6);
+    background: #fff;
+    color: var(--ink);
+    font-size: 15px;
+}
+
+.primary-select:disabled {
+    background: rgba(148, 163, 184, 0.2);
+    color: var(--muted-ink);
+    cursor: not-allowed;
 }
 
 .form-messages {

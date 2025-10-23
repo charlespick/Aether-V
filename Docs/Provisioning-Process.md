@@ -115,11 +115,12 @@ Add-ClusterVirtualMachineRole -VMName "vm-name"
 
 - `vm_name` - Name of the VM
 - `image_name` - Template image to use
-- `hyperv_host` - Target Hyper-V host
 - `gb_ram` - RAM in gigabytes
 - `cpu_cores` - Number of CPU cores
 - `guest_la_uid` - Guest local administrator username
 - `guest_la_pw` - Guest local administrator password (secret)
+
+> **Host selection:** The destination Hyper-V host is chosen separately when submitting a job (UI dropdown or API `target_host` property) and is no longer part of the schema-defined field list.
 
 #### Optional Network Configuration
 
@@ -170,7 +171,7 @@ The original implementation used Ansible to orchestrate provisioning:
 ```yaml
 ---
 - name: Provision VM
-  hosts: "{{ hyperv_host }}"
+  hosts: "{{ target_host }}"
   gather_facts: no
   vars:
     develop: false
@@ -291,25 +292,28 @@ The service maintains **exact orchestration parity** with the original Ansible p
 ### Creating a VM via REST API
 
 ```bash
-curl -X POST "https://aetherv.example.com/api/v1/vms/create" \
+curl -X POST "https://aetherv.example.com/api/v1/jobs/provision" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "vm_name": "web-server-01",
-    "image_name": "Windows Server 2022",
-    "hyperv_host": "hyperv01.local",
-    "gb_ram": 8,
-    "cpu_cores": 4,
-    "guest_la_uid": "Administrator",
-    "guest_la_pw": "SecurePassword123!",
-    "guest_v4_ipaddr": "192.168.1.100",
-    "guest_v4_cidrprefix": 24,
-    "guest_v4_defaultgw": "192.168.1.1",
-    "guest_v4_dns1": "192.168.1.10",
-    "guest_domain_jointarget": "example.com",
-    "guest_domain_joinuid": "svc-domainjoin",
-    "guest_domain_joinpw": "DomainPassword123!",
-    "vlan_id": 10
+    "schema_version": 1,
+    "target_host": "hyperv01.local",
+    "values": {
+      "vm_name": "web-server-01",
+      "image_name": "Windows Server 2022",
+      "gb_ram": 8,
+      "cpu_cores": 4,
+      "guest_la_uid": "Administrator",
+      "guest_la_pw": "SecurePassword123!",
+      "guest_v4_ipaddr": "192.168.1.100",
+      "guest_v4_cidrprefix": 24,
+      "guest_v4_defaultgw": "192.168.1.1",
+      "guest_v4_dns1": "192.168.1.10",
+      "guest_domain_jointarget": "example.com",
+      "guest_domain_joinuid": "svc-domainjoin",
+      "guest_domain_joinpw": "DomainPassword123!",
+      "vlan_id": 10
+    }
   }'
 ```
 

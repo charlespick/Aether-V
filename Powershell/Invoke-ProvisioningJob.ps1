@@ -170,14 +170,13 @@ try {
 
     $values = ConvertTo-Hashtable $jobDefinition.fields
 
-    foreach ($required in @('vm_name', 'image_name', 'hyperv_host', 'gb_ram', 'cpu_cores', 'guest_la_uid', 'guest_la_pw')) {
+    foreach ($required in @('vm_name', 'image_name', 'gb_ram', 'cpu_cores', 'guest_la_uid', 'guest_la_pw')) {
         if (-not (Test-ProvisioningValuePresent $values[$required])) {
             throw "Job definition missing required field '$required'."
         }
     }
 
     $vmName = $values['vm_name']
-    $targetHost = $values['hyperv_host']
     $osFamily = Get-ProvisioningOsFamily -Values $values
     Assert-OsSpecificConstraints -OsFamily $osFamily -Values $values
 
@@ -190,7 +189,8 @@ try {
     $vlanId = if ($values.ContainsKey('vlan_id') -and $values['vlan_id'] -ne $null) { [int]$values['vlan_id'] } else { $null }
     $clusterRequested = [bool]$values['vm_clustered']
 
-    Write-Host "Starting provisioning workflow for VM '$vmName' on host '$targetHost' (OS: $osFamily)."
+    $currentHost = $env:COMPUTERNAME
+    Write-Host "Starting provisioning workflow for VM '$vmName' on host '$currentHost' (OS: $osFamily)."
 
     $vmDataFolder = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $values['image_name']
     Write-Host "Image copied to $vmDataFolder" -ForegroundColor Green

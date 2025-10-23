@@ -149,17 +149,23 @@ async def submit_provisioning_job(
     except SchemaValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": exc.errors})
 
-    target_host = validated_values.get("hyperv_host")
-    if target_host:
-        hosts = inventory_service.get_all_hosts()
-        if target_host not in [h.hostname for h in hosts]:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Host {target_host} not found",
-            )
+    target_host = (submission.target_host or "").strip()
+    if not target_host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target host is required",
+        )
+
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
 
     vm_name = validated_values.get("vm_name")
-    if target_host and vm_name:
+    if vm_name:
         existing_vm = inventory_service.get_vm(target_host, vm_name)
         if existing_vm:
             raise HTTPException(

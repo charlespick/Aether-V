@@ -167,8 +167,7 @@ class JobService:
 
     async def _execute_provisioning_job(self, job: Job) -> None:
         definition = job.parameters.get("definition", {})
-        fields = definition.get("fields", {})
-        target_host = job.target_host or fields.get("hyperv_host")
+        target_host = (job.target_host or "").strip()
         if not target_host:
             raise RuntimeError("Provisioning job is missing a target host")
 

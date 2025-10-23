@@ -16,11 +16,6 @@ fields:
     description: "Identifier of the golden image to clone."
     type: string
     required: true
-  - id: hyperv_host
-    label: "Destination host"
-    description: "Hyper-V host that will receive the provisioning request."
-    type: hostname
-    required: true
   - id: gb_ram
     label: "Memory (GB)"
     description: "Amount of memory to assign to the VM in gigabytes."

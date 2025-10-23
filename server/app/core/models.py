@@ -144,3 +144,7 @@ class JobSubmission(BaseModel):
         default_factory=dict,
         description="Field values keyed by schema field id",
     )
+    target_host: Optional[str] = Field(
+        default=None,
+        description="Hostname of the connected Hyper-V host that will execute the job",
+    )
