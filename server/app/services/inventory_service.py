@@ -372,13 +372,25 @@ class InventoryService:
             $ErrorActionPreference = 'Stop'
             $vms = Get-VM | Select-Object \
                 Name, \
-                State, \
+                @{N='State';E={$_.State.ToString()}}, \
                 ProcessorCount, \
                 @{N='MemoryGB';E={[math]::Round(($_.MemoryAssigned/1GB), 2)}}, \
-                @{N='CreationTime';E={$_.CreationTime}}, \
+                @{N='CreationTime';E={
+                    if ($_.CreationTime) {
+                        $_.CreationTime.ToUniversalTime().ToString('o')
+                    } else {
+                        $null
+                    }
+                }}, \
                 @{N='Generation';E={$_.Generation}}, \
                 @{N='Version';E={$_.Version}}, \
-                @{N='OperatingSystem';E={$_.OperatingSystem}}
+                @{N='OperatingSystem';E={
+                    if ($_.OperatingSystem) {
+                        $_.OperatingSystem.ToString()
+                    } else {
+                        $null
+                    }
+                }}
             $vms | ConvertTo-Json -Depth 3
             """
         )
