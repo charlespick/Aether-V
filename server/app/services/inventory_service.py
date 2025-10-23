@@ -370,15 +370,17 @@ class InventoryService:
         command = textwrap.dedent(
             """
             $ErrorActionPreference = 'Stop'
-            $vms = Get-VM | Select-Object \
-                Name, \
-                State, \
-                ProcessorCount, \
-                @{N='MemoryGB';E={[math]::Round(($_.MemoryAssigned/1GB), 2)}}, \
-                @{N='CreationTime';E={$_.CreationTime}}, \
-                @{N='Generation';E={$_.Generation}}, \
-                @{N='Version';E={$_.Version}}, \
-                @{N='OperatingSystem';E={$_.OperatingSystem}}
+            $properties = @(
+                'Name'
+                'State'
+                'ProcessorCount'
+                @{Name='MemoryGB';Expression={[math]::Round(($_.MemoryAssigned / 1GB), 2)}}
+                @{Name='CreationTime';Expression={$_.CreationTime}}
+                @{Name='Generation';Expression={$_.Generation}}
+                @{Name='Version';Expression={$_.Version}}
+                @{Name='OperatingSystem';Expression={$_.OperatingSystem}}
+            )
+            $vms = Get-VM | Select-Object -Property $properties
             $vms | ConvertTo-Json -Depth 3
             """
         )
@@ -450,16 +452,28 @@ class InventoryService:
 
     def _query_host_cluster(self, hostname: str) -> Optional[str]:
         """Discover the cluster name for the given host."""
-        host_literal = self._ps_string_literal(hostname)
+        short_hostname = hostname.split('.', 1)[0]
+        candidates = [hostname]
+        if short_hostname and short_hostname != hostname:
+            candidates.append(short_hostname)
+
+        ps_candidates = ", ".join(self._ps_string_literal(candidate) for candidate in candidates)
         command = textwrap.dedent(
             f"""
-            try {{
-                $node = Get-ClusterNode -Name {host_literal} -ErrorAction Stop
-                if ($node -and $node.Cluster) {{
-                    $node.Cluster.Name
+            foreach ($candidate in @({ps_candidates})) {{
+                if ([string]::IsNullOrWhiteSpace($candidate)) {{
+                    continue
                 }}
-            }} catch {{
-                ''
+
+                try {{
+                    $node = Get-ClusterNode -Name $candidate -ErrorAction Stop
+                    if ($node -and $node.Cluster) {{
+                        $node.Cluster.Name
+                        break
+                    }}
+                }} catch {{
+                    continue
+                }}
             }}
             """
         )
