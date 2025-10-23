@@ -1,7 +1,7 @@
 """Service for deploying scripts and ISOs to Hyper-V hosts."""
 import logging
 from pathlib import Path, PureWindowsPath
-from typing import List, Tuple
+from typing import List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 from ..core.config import settings
@@ -15,7 +15,29 @@ class HostDeploymentService:
     
     def __init__(self):
         self._container_version: str = ""
+        self._agent_download_base_url: Optional[str] = None
+        self._deployment_enabled = self._initialize_agent_download_base_url()
         self._load_container_version()
+
+    def _initialize_agent_download_base_url(self) -> bool:
+        """Resolve and cache the agent download base URL if configured."""
+
+        base_url = settings.get_agent_download_base_url()
+        if not base_url:
+            logger.warning(
+                "AGENT_DOWNLOAD_BASE_URL is not configured; host deployments are disabled."
+            )
+            return False
+
+        self._agent_download_base_url = base_url
+        logger.info("Host deployment service configured with agent download endpoint %s", base_url)
+        return True
+
+    @property
+    def is_enabled(self) -> bool:
+        """Return True when host deployments are permitted."""
+
+        return self._deployment_enabled
     
     def _load_container_version(self):
         """Load version from container artifacts."""
@@ -97,27 +119,55 @@ class HostDeploymentService:
     async def _deploy_to_host(self, hostname: str) -> bool:
         """Deploy scripts and ISOs to a host."""
         logger.info(f"Starting deployment to {hostname}")
-        
+
         try:
+            if not self._deployment_enabled:
+                logger.warning(
+                    "Host deployment service is disabled; skipping deployment to %s",
+                    hostname,
+                )
+                return False
+
+            script_files = self._collect_script_files()
+            iso_files = self._collect_iso_files()
+            version_path = Path(settings.version_file_path)
+
+            if not version_path.exists():
+                logger.error(f"Version file not found at {version_path}")
+                return False
+
+            expected_artifacts: List[str] = [path.name for path in script_files]
+            expected_artifacts.extend(path.name for path in iso_files)
+            expected_artifacts.append(version_path.name)
+
             # Create installation directory
             if not self._ensure_install_directory(hostname):
                 return False
-            
+
+            if not self._clear_host_install_directory(hostname):
+                return False
+
+            if not self._verify_install_directory_empty(hostname):
+                return False
+
             # Deploy scripts
-            if not await self._deploy_scripts(hostname):
+            if not await self._deploy_scripts(hostname, script_files):
                 return False
-            
+
             # Deploy ISOs
-            if not await self._deploy_isos(hostname):
+            if not await self._deploy_isos(hostname, iso_files):
                 return False
-            
+
             # Deploy version file
             if not self._deploy_version_file(hostname):
                 return False
-            
+
+            if not self._verify_expected_artifacts_present(hostname, expected_artifacts):
+                return False
+
             logger.info(f"Deployment to {hostname} completed successfully")
             return True
-            
+
         except Exception as e:
             logger.error(f"Deployment to {hostname} failed: {e}")
             return False
@@ -140,16 +190,13 @@ class HostDeploymentService:
             logger.error(f"Failed to ensure install directory on {hostname}: {e}")
             return False
     
-    async def _deploy_scripts(self, hostname: str) -> bool:
+    async def _deploy_scripts(self, hostname: str, script_files: Sequence[Path]) -> bool:
         """Deploy PowerShell scripts to host."""
         logger.info(f"Deploying scripts to {hostname}")
-        
+
         script_dir = Path(settings.agent_artifacts_path)
 
         try:
-            # Get list of script files
-            script_files = sorted(p for p in script_dir.glob('*.ps1') if p.is_file())
-
             if not script_files:
                 logger.warning(f"No script files found in {script_dir}")
                 return True
@@ -172,16 +219,13 @@ class HostDeploymentService:
             logger.error(f"Failed to deploy scripts to {hostname}: {e}")
             return False
     
-    async def _deploy_isos(self, hostname: str) -> bool:
+    async def _deploy_isos(self, hostname: str, iso_files: Sequence[Path]) -> bool:
         """Deploy ISO files to host."""
         logger.info(f"Deploying ISOs to {hostname}")
-        
+
         iso_dir = Path(settings.agent_artifacts_path)
 
         try:
-            # Get list of ISO files
-            iso_files = sorted(p for p in iso_dir.glob('*.iso') if p.is_file())
-
             if not iso_files:
                 logger.warning(f"No ISO files found in {iso_dir}")
                 return False
@@ -207,7 +251,7 @@ class HostDeploymentService:
     def _deploy_version_file(self, hostname: str) -> bool:
         """Deploy version file to host."""
         logger.info(f"Deploying version file to {hostname}")
-        
+
         version_path = Path(settings.version_file_path)
         if not version_path.exists():
             logger.error(f"Version file not found at {version_path}")
@@ -221,16 +265,145 @@ class HostDeploymentService:
             logger.error(f"Failed to deploy version file to {hostname}: {e}")
             return False
 
+    def _collect_script_files(self) -> List[Path]:
+        """Return all PowerShell scripts available for deployment."""
+
+        artifact_dir = Path(settings.agent_artifacts_path)
+
+        if not artifact_dir.exists():
+            logger.error(f"Agent artifacts directory does not exist: {artifact_dir}")
+            return []
+
+        return sorted(path for path in artifact_dir.glob('*.ps1') if path.is_file())
+
+    def _collect_iso_files(self) -> List[Path]:
+        """Return all ISO files available for deployment."""
+
+        artifact_dir = Path(settings.agent_artifacts_path)
+
+        if not artifact_dir.exists():
+            logger.error(f"Agent artifacts directory does not exist: {artifact_dir}")
+            return []
+
+        return sorted(path for path in artifact_dir.glob('*.iso') if path.is_file())
+
+    def _clear_host_install_directory(self, hostname: str) -> bool:
+        """Remove all files from the host installation directory."""
+
+        install_dir = settings.host_install_directory
+        command = (
+            "$ErrorActionPreference = 'Stop'; "
+            f"$installDir = {self._ps_literal(install_dir)}; "
+            "if (-not (Test-Path -LiteralPath $installDir)) {"
+            "    New-Item -ItemType Directory -Path $installDir -Force | Out-Null"
+            "} "
+            "$items = Get-ChildItem -LiteralPath $installDir -Force -ErrorAction Stop; "
+            "foreach ($item in $items) {"
+            "    Remove-Item -LiteralPath $item.FullName -Force -Recurse -ErrorAction Stop"
+            "}"
+        )
+
+        _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
+
+        if exit_code != 0:
+            logger.error(f"Failed to clear install directory on {hostname}: {stderr}")
+            return False
+
+        logger.info(f"Cleared install directory {install_dir} on {hostname}")
+        return True
+
+    def _verify_install_directory_empty(self, hostname: str) -> bool:
+        """Ensure the host installation directory is empty after cleanup."""
+
+        install_dir = settings.host_install_directory
+        command = (
+            "$ErrorActionPreference = 'Stop'; "
+            f"$installDir = {self._ps_literal(install_dir)}; "
+            "$items = Get-ChildItem -LiteralPath $installDir -Force -ErrorAction Stop; "
+            "if ($items.Count -gt 0) {"
+            "    $names = $items | Select-Object -ExpandProperty FullName; "
+            "    Write-Error (\"Install directory cleanup failed; remaining items: \" + ($names -join ', '))"
+            "} else { Write-Output 'EMPTY' }"
+        )
+
+        _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
+
+        if exit_code != 0:
+            logger.error(f"Install directory verification failed on {hostname}: {stderr}")
+            return False
+
+        logger.info(f"Verified {install_dir} is empty on {hostname}")
+        return True
+
+    def _verify_expected_artifacts_present(
+        self, hostname: str, artifact_names: Sequence[str]
+    ) -> bool:
+        """Ensure every expected artifact exists on the host after download."""
+
+        if not artifact_names:
+            logger.debug("No artifacts to verify on host %s", hostname)
+            return True
+
+        install_dir = settings.host_install_directory
+        command = (
+            "$ErrorActionPreference = 'Stop'; "
+            f"$installDir = {self._ps_literal(install_dir)}; "
+            f"$expected = {self._ps_array_literal(artifact_names)}; "
+            "$missing = @(); "
+            "foreach ($name in $expected) {"
+            "    $path = Join-Path -Path $installDir -ChildPath $name; "
+            "    if (-not (Test-Path -LiteralPath $path)) { $missing += $path }"
+            "} "
+            "if ($missing.Count -gt 0) {"
+            "    Write-Error (\"Missing artifact(s): \" + ($missing -join ', '))"
+            "} else { Write-Output 'OK' }"
+        )
+
+        _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
+
+        if exit_code != 0:
+            logger.error(f"Artifact verification failed on {hostname}: {stderr}")
+            return False
+
+        logger.info(f"Verified {len(artifact_names)} artifact(s) on {hostname}")
+        return True
+
+    @staticmethod
+    def _ps_literal(value: str) -> str:
+        """Return a PowerShell single-quoted string literal for the provided value."""
+
+        return "'" + value.replace("'", "''") + "'"
+
+    @staticmethod
+    def _ps_array_literal(values: Sequence[str]) -> str:
+        """Return a PowerShell array literal with each element safely quoted."""
+
+        if not values:
+            return "@()"
+
+        escaped_values = [HostDeploymentService._ps_literal(v) for v in values]
+        return f"@({', '.join(escaped_values)})"
+
     def _build_remote_path(self, filename: str) -> str:
         """Construct the remote path inside the host install directory."""
         return str(PureWindowsPath(settings.host_install_directory) / filename)
 
     def _download_file_to_host(self, hostname: str, artifact_name: str, remote_path: str) -> bool:
         """Download an artifact from the web server to the host using HTTP."""
+        if not self._deployment_enabled:
+            logger.error(
+                "Host deployment service is disabled; unable to download %s to %s",
+                artifact_name,
+                hostname,
+            )
+            return False
+
         download_url = self._build_download_url(artifact_name)
         command = (
             "$ProgressPreference = 'SilentlyContinue'; "
-            f"Invoke-WebRequest -Uri '{download_url}' -OutFile '{remote_path}' -UseBasicParsing"
+            f"$downloadUrl = {self._ps_literal(download_url)}; "
+            f"$destinationPath = {self._ps_literal(remote_path)}; "
+            "Invoke-WebRequest -Uri $downloadUrl -OutFile $destinationPath -UseBasicParsing"
         )
 
         logger.info(f"Downloading {artifact_name} to {hostname}:{remote_path} from {download_url}")
@@ -245,26 +418,33 @@ class HostDeploymentService:
 
     def _build_download_url(self, artifact_name: str) -> str:
         """Build a download URL for an artifact exposed by the FastAPI static mount."""
-        try:
-            base_url = settings.get_agent_download_base_url()
-        except ValueError as exc:
-            raise RuntimeError("AGENT_DOWNLOAD_BASE_URL is not configured") from exc
+        if not self._agent_download_base_url:
+            raise RuntimeError(
+                "Host deployment service is disabled because AGENT_DOWNLOAD_BASE_URL is not configured"
+            )
 
-        return f"{base_url}/{quote(artifact_name)}"
+        return f"{self._agent_download_base_url}/{quote(artifact_name)}"
     
     async def deploy_to_all_hosts(self, hostnames: List[str]) -> Tuple[int, int]:
         """
         Deploy to all specified hosts.
-        
+
         Args:
             hostnames: List of host names to deploy to
-            
+
         Returns:
             Tuple of (successful_count, failed_count)
         """
+        if not self._deployment_enabled:
+            logger.warning(
+                "Host deployment service is disabled; skipping deployment to %d host(s)",
+                len(hostnames),
+            )
+            return 0, len(hostnames)
+
         successful = 0
         failed = 0
-        
+
         for hostname in hostnames:
             if await self.ensure_host_setup(hostname):
                 successful += 1

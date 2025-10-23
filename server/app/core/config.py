@@ -69,14 +69,11 @@ class Settings(BaseSettings):
     agent_http_mount_path: str = "/agent"
     agent_download_base_url: Optional[AnyHttpUrl] = None
 
-    def get_agent_download_base_url(self) -> str:
-        """Return the configured agent download base URL, ensuring it is set."""
+    def get_agent_download_base_url(self) -> Optional[str]:
+        """Return the configured agent download base URL if provided."""
 
         if not self.agent_download_base_url:
-            raise ValueError(
-                "AGENT_DOWNLOAD_BASE_URL must be configured with the external "
-                "HTTP endpoint used by Hyper-V hosts."
-            )
+            return None
 
         return str(self.agent_download_base_url).rstrip("/")
 
