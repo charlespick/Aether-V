@@ -662,6 +662,16 @@ tbody tr:last-child td {
     color: #fca5a5;
 }
 
+.status.creating {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+[data-theme="dark"] .status.creating {
+    background: rgba(251, 191, 36, 0.2);
+    color: #fcd34d;
+}
+
 .status.connected {
     background: #dcfce7;
     color: #166534;
@@ -1986,6 +1996,10 @@ tbody tr:last-child td {
 
 .vm-status-dot.off {
     background: #6b7280;
+}
+
+.vm-status-dot.creating {
+    background: #f59e0b;
 }
 
 .vm-card-details {

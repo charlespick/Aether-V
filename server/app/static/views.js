@@ -276,22 +276,25 @@ class ClusterView extends BaseView {
             return '<p class="empty">No virtual machines</p>';
         }
 
-        return vms.map(vm => `
-            <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
-                <div class="vm-card-header">
-                    <span class="vm-status-icon">${vm.state === 'Running' ? '🟢' : '⚫'}</span>
-                    <span class="vm-card-name">${vm.name}</span>
+        return vms.map(vm => {
+            const meta = getVmStateMeta(vm.state);
+            return `
+                <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
+                    <div class="vm-card-header">
+                        <span class="vm-status-icon">${meta.emoji}</span>
+                        <span class="vm-card-name">${vm.name}</span>
+                    </div>
+                    <div class="vm-card-details">
+                        <div class="vm-card-spec">${vm.cpu_cores ?? 0} vCPU</div>
+                        <div class="vm-card-spec">${Number(vm.memory_gb ?? 0).toFixed(2)} GB RAM</div>
+                        <div class="vm-card-host">Host: ${vm.host.split('.')[0]}</div>
+                    </div>
+                    <div class="vm-card-status">
+                        <span class="status ${meta.badgeClass}">${meta.label.toUpperCase()}</span>
+                    </div>
                 </div>
-                <div class="vm-card-details">
-                    <div class="vm-card-spec">${vm.cpu_cores} vCPU</div>
-                    <div class="vm-card-spec">${vm.memory_gb.toFixed(2)} GB RAM</div>
-                    <div class="vm-card-host">Host: ${vm.host.split('.')[0]}</div>
-                </div>
-                <div class="vm-card-status">
-                    <span class="status ${vm.state === 'Running' ? 'running' : 'off'}">${vm.state.toUpperCase()}</span>
-                </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     }
 
     calculateTotalCPU(vms) {
@@ -362,19 +365,22 @@ class HostView extends BaseView {
             return '<p class="empty">No VMs on this host</p>';
         }
 
-        return vms.map(vm => `
-            <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
-                <div class="vm-card-header">
-                    <span class="vm-status-dot ${vm.state === 'Running' ? 'running' : 'off'}"></span>
-                    <span class="vm-name">${vm.name}</span>
+        return vms.map(vm => {
+            const meta = getVmStateMeta(vm.state);
+            return `
+                <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
+                    <div class="vm-card-header">
+                        <span class="vm-status-dot ${meta.dotClass}"></span>
+                        <span class="vm-name">${vm.name}</span>
+                    </div>
+                    <div class="vm-card-details">
+                        <span>${vm.cpu_cores ?? 0} vCPU</span>
+                        <span>${Number(vm.memory_gb ?? 0).toFixed(2)} GB RAM</span>
+                        <span class="status ${meta.badgeClass}">${meta.label}</span>
+                    </div>
                 </div>
-                <div class="vm-card-details">
-                    <span>${vm.cpu_cores} vCPU</span>
-                    <span>${vm.memory_gb.toFixed(2)} GB RAM</span>
-                    <span class="status ${vm.state === 'Running' ? 'running' : 'off'}">${vm.state}</span>
-                </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     }
 
     async fetchInventory() {
@@ -402,6 +408,7 @@ class VMView extends BaseView {
             `;
         }
 
+        const meta = getVmStateMeta(vm.state);
         return `
             <h1 class="page-title">${vm.name}</h1>
 
@@ -412,7 +419,7 @@ class VMView extends BaseView {
                 <div class="info-grid">
                     <div class="info-item">
                         <span class="info-label">State:</span>
-                        <span class="status ${vm.state === 'Running' ? 'running' : 'off'}">${vm.state}</span>
+                        <span class="status ${meta.badgeClass}">${meta.label}</span>
                     </div>
                     <div class="info-item">
                         <span class="info-label">Host:</span>
@@ -420,11 +427,11 @@ class VMView extends BaseView {
                     </div>
                     <div class="info-item">
                         <span class="info-label">CPU Cores:</span>
-                        <span>${vm.cpu_cores}</span>
+                        <span>${vm.cpu_cores ?? 0}</span>
                     </div>
                     <div class="info-item">
                         <span class="info-label">Memory:</span>
-                        <span>${vm.memory_gb.toFixed(2)} GB</span>
+                        <span>${Number(vm.memory_gb ?? 0).toFixed(2)} GB</span>
                     </div>
                     <div class="info-item">
                         <span class="info-label">Version:</span>
