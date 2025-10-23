@@ -10,6 +10,23 @@ from ..core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _format_output_preview(output: str, *, max_length: int = 400) -> str:
+    """Return a newline-prefixed preview of command/script output."""
+    if not output:
+        return ""
+
+    sanitized = output.replace("\r\n", "\n").strip()
+    if not sanitized:
+        return ""
+
+    if len(sanitized) > max_length:
+        preview = sanitized[: max_length - 3] + "..."
+    else:
+        preview = sanitized
+
+    return "\n" + preview
+
+
 class WinRMService:
     """Service for managing WinRM connections to Hyper-V hosts."""
     
@@ -138,6 +155,9 @@ class WinRMService:
             stdout_str = stdout.decode('utf-8') if stdout else ""
             stderr_str = stderr.decode('utf-8') if stderr else ""
 
+            stdout_preview = _format_output_preview(stdout_str)
+            stderr_preview = _format_output_preview(stderr_str)
+
             logger.info(
                 "Script on %s completed in %.2fs with exit code %s (stdout=%d bytes, stderr=%d bytes)",
                 hostname,
@@ -146,8 +166,15 @@ class WinRMService:
                 len(stdout or b""),
                 len(stderr or b""),
             )
-            if stderr_str:
-                logger.warning("Script stderr on %s: %s", hostname, stderr_str)
+            if stdout_preview:
+                logger.info("Script stdout preview on %s:%s", hostname, stdout_preview)
+            else:
+                logger.info("Script stdout on %s was empty", hostname)
+
+            if stderr_preview:
+                logger.warning("Script stderr preview on %s:%s", hostname, stderr_preview)
+            else:
+                logger.info("Script stderr on %s was empty", hostname)
 
             return stdout_str, stderr_str, exit_code
 
@@ -191,6 +218,8 @@ class WinRMService:
 
             stdout_str = stdout.decode('utf-8') if stdout else ""
             stderr_str = stderr.decode('utf-8') if stderr else ""
+            stdout_preview = _format_output_preview(stdout_str)
+            stderr_preview = _format_output_preview(stderr_str)
 
             logger.info(
                 "Command on %s completed in %.2fs with exit code %s (stdout=%d bytes, stderr=%d bytes)",
@@ -200,13 +229,22 @@ class WinRMService:
                 len(stdout or b""),
                 len(stderr or b""),
             )
+            if stdout_preview:
+                logger.info("Command stdout preview on %s:%s", hostname, stdout_preview)
+            else:
+                logger.info("Command stdout on %s was empty", hostname)
+
+            if stderr_preview:
+                level = logger.warning if exit_code != 0 else logger.info
+                level("Command stderr preview on %s:%s", hostname, stderr_preview)
+            else:
+                logger.info("Command stderr on %s was empty", hostname)
+
             if exit_code != 0:
                 logger.warning(
-                    "Command on %s exited with non-zero status %s. Stderr preview: %s",
-                    hostname,
-                    exit_code,
-                    stderr_str[:200],
+                    "Command on %s exited with non-zero status %s", hostname, exit_code
                 )
+
             return stdout_str, stderr_str, exit_code
 
         except Exception as e:
