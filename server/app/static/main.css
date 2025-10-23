@@ -1073,8 +1073,7 @@ tbody tr:last-child td {
     margin-bottom: 12px;
 }
 
-.job-output,
-.job-error {
+.job-output {
     background: #1e1e1e;
     color: #d4d4d4;
     padding: 16px;
@@ -1084,16 +1083,214 @@ tbody tr:last-child td {
     overflow-x: auto;
 }
 
-.job-error {
-    background: #fee2e2;
-    color: #991b1b;
-}
-
-.job-output pre,
-.job-error pre {
+.job-output code {
+    display: block;
     margin: 0;
     white-space: pre-wrap;
     word-wrap: break-word;
+}
+
+.job-error-box {
+    background: #fee2e2;
+    color: #991b1b;
+    padding: 16px;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 12px;
+    overflow-x: auto;
+}
+
+.job-error-box pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.job-header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.job-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.job-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-weight: 600;
+    text-transform: capitalize;
+    background: #e0e7ff;
+    color: #3730a3;
+}
+
+.job-status-badge.status-running {
+    background: #cffafe;
+    color: #0e7490;
+    position: relative;
+    overflow: hidden;
+}
+
+.job-status-badge.status-running::after {
+    content: '';
+    display: inline-block;
+    width: 36px;
+    height: 4px;
+    margin-left: 8px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(14, 116, 144, 0.0) 0%, rgba(14, 116, 144, 0.6) 50%, rgba(14, 116, 144, 0.0) 100%);
+    animation: job-activity 1.2s linear infinite;
+}
+
+.job-status-badge.status-completed {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.job-status-badge.status-failed {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+@keyframes job-activity {
+    0% {
+        transform: translateX(-24px);
+    }
+    100% {
+        transform: translateX(24px);
+    }
+}
+
+.job-info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--muted);
+}
+
+.info-label {
+    font-size: 12px;
+    color: var(--muted-ink);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.info-value {
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.job-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.summary-item {
+    background: var(--muted);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.summary-label {
+    font-size: 12px;
+    color: var(--muted-ink);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.summary-value {
+    font-weight: 600;
+    color: var(--ink);
+    word-break: break-word;
+}
+
+.job-details-toggle {
+    background: transparent;
+    border: none;
+    color: var(--primary-color);
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+    margin-bottom: 12px;
+}
+
+.job-details-toggle:hover {
+    text-decoration: underline;
+}
+
+.job-details-expanded {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--muted);
+    max-height: 240px;
+    overflow: auto;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.job-details-expanded pre {
+    margin: 0;
+}
+
+.job-log-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.job-log-follow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted-ink);
+}
+
+.job-log-copy {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--muted-ink);
+    transition: background 0.2s ease, color 0.2s ease, border 0.2s ease;
+}
+
+.job-log-copy:hover {
+    background: var(--muted);
+    color: var(--ink);
+}
+
+.job-log-copy.copied {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.job-section.job-error h3 {
+    color: #b91c1c;
 }
 
 /* Notifications Overlay Styles */
@@ -1212,6 +1409,13 @@ tbody tr:last-child td {
     min-width: 0;
 }
 
+.notification-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
 .notification-title {
     font-weight: 600;
     margin-bottom: 4px;
@@ -1225,9 +1429,71 @@ tbody tr:last-child td {
     line-height: 1.4;
 }
 
+.notification-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 8px;
+}
+
 .notification-time {
     font-size: 11px;
     color: var(--muted-ink);
+}
+
+.notification-action {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--primary-color);
+    transition: background 0.2s ease, color 0.2s ease, border 0.2s ease;
+}
+
+.notification-action:hover {
+    background: var(--muted);
+    border-color: var(--primary-color);
+}
+
+.notification-status {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary-color);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.notification-status.status-pending {
+    color: #3730a3;
+}
+
+.notification-status.status-running {
+    color: #0e7490;
+}
+
+.notification-status.status-completed {
+    color: #166534;
+}
+
+.notification-status.status-failed {
+    color: #b91c1c;
+}
+
+.notification-item.highlight {
+    animation: notification-highlight 1.2s ease-out;
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.35);
+}
+
+@keyframes notification-highlight {
+    from {
+        background: rgba(139, 92, 246, 0.2);
+    }
+    to {
+        background: transparent;
+    }
 }
 
 /* Search Overlay Styles */

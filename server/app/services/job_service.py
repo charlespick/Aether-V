@@ -6,15 +6,16 @@ import base64
 import logging
 import uuid
 from datetime import datetime
-from functools import partial
 from pathlib import PureWindowsPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
 from ..core.config import settings
-from ..core.models import Job, JobStatus, JobSubmission, VMDeleteRequest
+from ..core.models import Job, JobStatus, JobSubmission, VMDeleteRequest, NotificationLevel
 from .host_deployment_service import host_deployment_service
+from .notification_service import notification_service
+from .websocket_service import websocket_manager
 from .winrm_service import winrm_service
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class JobService:
 
     def __init__(self) -> None:
         self.jobs: Dict[str, Job] = {}
+        self.job_notifications: Dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._queue: Optional[asyncio.Queue[Optional[str]]] = None
         self._worker_task: Optional[asyncio.Task[None]] = None
@@ -82,6 +84,9 @@ class JobService:
 
         async with self._lock:
             self.jobs[job_id] = job
+
+        await self._sync_job_notification(job)
+        await self._broadcast_job_status(job.model_copy(deep=True))
 
         await self._queue.put(job_id)
         logger.info("Queued provisioning job %s for host %s", job_id, target_host or "<unspecified>")
@@ -179,20 +184,142 @@ class JobService:
         command = self._build_master_invocation_command(yaml_payload)
 
         loop = asyncio.get_running_loop()
-        stdout, stderr, exit_code = await loop.run_in_executor(
-            None,
-            partial(winrm_service.execute_ps_command, target_host, command),
-        )
+        queue: asyncio.Queue[Optional[Tuple[str, str]]] = asyncio.Queue()
 
-        await self._append_job_output(job.job_id, stdout)
-        if stderr:
-            stderr_clean = stderr.replace("\r\n", "\n").replace("\r", "\n")
-            stderr_lines = [f"STDERR: {line}" for line in stderr_clean.split("\n") if line]
-            if stderr_lines:
-                await self._append_job_output(job.job_id, *stderr_lines)
+        def publish_chunk(stream: str, chunk: str) -> None:
+            asyncio.run_coroutine_threadsafe(queue.put((stream, chunk)), loop)
 
+        def run_command() -> int:
+            try:
+                return winrm_service.stream_ps_command(target_host, command, publish_chunk)
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
+        command_future = loop.run_in_executor(None, run_command)
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            stream_type, payload = item
+            await self._handle_stream_chunk(job.job_id, stream_type, payload)
+
+        exit_code = await command_future
         if exit_code != 0:
             raise RuntimeError(f"Provisioning script exited with code {exit_code}")
+
+    async def _handle_stream_chunk(self, job_id: str, stream: str, payload: str) -> None:
+        if not payload:
+            return
+
+        normalized = payload.replace("\r\n", "\n").replace("\r", "\n")
+        lines = [line for line in normalized.split("\n") if line]
+        if not lines:
+            return
+
+        if stream.lower() == "stderr":
+            lines = [f"STDERR: {line}" for line in lines]
+
+        await self._append_job_output(job_id, *lines)
+
+    async def _after_job_update(
+        self,
+        job: Job,
+        previous_status: JobStatus,
+        changes: Dict[str, Any],
+    ) -> None:
+        status_changed = "status" in changes and job.status != previous_status
+        if status_changed:
+            await self._sync_job_notification(job)
+
+        await self._broadcast_job_status(job)
+
+    async def _sync_job_notification(self, job: Job) -> None:
+        vm_name = self._extract_vm_name(job)
+        job_label = self._job_type_label(job)
+        target_label = f'"{vm_name}"' if vm_name else job.job_id
+        host_phrase = f"host {job.target_host}" if job.target_host else "an unspecified host"
+
+        if job.status == JobStatus.PENDING:
+            title = f"{job_label} queued"
+            message = f"{job_label} request for {target_label} queued for {host_phrase}."
+            level = NotificationLevel.INFO
+        elif job.status == JobStatus.RUNNING:
+            title = f"{job_label} running"
+            message = f"{job_label} for {target_label} is running on {host_phrase}."
+            level = NotificationLevel.INFO
+        elif job.status == JobStatus.COMPLETED:
+            title = f"{job_label} completed"
+            message = f"{job_label} for {target_label} completed successfully on {host_phrase}."
+            level = NotificationLevel.SUCCESS
+        elif job.status == JobStatus.FAILED:
+            title = f"{job_label} failed"
+            detail = f" Details: {job.error}" if job.error else ""
+            message = f"{job_label} for {target_label} failed on {host_phrase}.{detail}"
+            level = NotificationLevel.ERROR
+        else:
+            title = f"{job_label} update"
+            message = f"{job_label} for {target_label} updated."
+            level = NotificationLevel.INFO
+
+        notification = notification_service.upsert_job_notification(
+            job.job_id,
+            title=title,
+            message=message,
+            level=level,
+            status=job.status,
+            metadata={
+                "job_type": job.job_type,
+                "vm_name": vm_name,
+                "target_host": job.target_host,
+            },
+        )
+
+        if notification:
+            async with self._lock:
+                stored = self.jobs.get(job.job_id)
+                if stored:
+                    stored.notification_id = notification.id
+                self.job_notifications[job.job_id] = notification.id
+            job.notification_id = notification.id
+
+    async def _broadcast_job_status(self, job: Job) -> None:
+        payload = job.model_dump(mode="json")
+        await self._broadcast_job_event(job.job_id, "status", payload)
+
+    async def _broadcast_job_output(self, job_id: str, lines: List[str]) -> None:
+        if not lines:
+            return
+        await self._broadcast_job_event(job_id, "output", {"lines": lines})
+
+    async def _broadcast_job_event(self, job_id: str, action: str, data: Dict[str, Any]) -> None:
+        message = {"type": "job", "action": action, "job_id": job_id, "data": data}
+        try:
+            await websocket_manager.broadcast(message, topic=f"jobs:{job_id}")
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Failed to broadcast job event for %s", job_id)
+
+        try:
+            await websocket_manager.broadcast(message, topic="jobs")
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Failed to broadcast aggregate job event for %s", job_id)
+
+    def _job_type_label(self, job: Job) -> str:
+        if job.job_type == "provision_vm":
+            return "Create VM"
+        if job.job_type == "delete_vm":
+            return "Delete VM"
+        return job.job_type.replace("_", " ").title()
+
+    def _extract_vm_name(self, job: Job) -> Optional[str]:
+        definition = job.parameters.get("definition") or {}
+        fields = definition.get("fields") or {}
+        value = fields.get("vm_name")
+        if isinstance(value, str):
+            value = value.strip()
+            if value:
+                return value
+        return None
 
     def _build_master_invocation_command(self, yaml_payload: str) -> str:
         payload_bytes = yaml_payload.encode("utf-8")
@@ -216,11 +343,15 @@ class JobService:
             job = self.jobs.get(job_id)
             if not job:
                 return None
+            previous_status = job.status
             for field, value in changes.items():
                 setattr(job, field, value)
-            return job
+            job_copy = job.model_copy(deep=True)
 
-    async def _append_job_output(self, job_id: str, *messages: Optional[str]) -> None:
+        await self._after_job_update(job_copy, previous_status, changes)
+        return job_copy
+
+    async def _append_job_output(self, job_id: str, *messages: Optional[str]) -> List[str]:
         lines: List[str] = []
         for message in messages:
             if not message:
@@ -231,12 +362,15 @@ class JobService:
                     lines.append(line)
 
         if not lines:
-            return
+            return []
 
         async with self._lock:
             job = self.jobs.get(job_id)
             if job:
                 job.output.extend(lines)
+
+        await self._broadcast_job_output(job_id, lines)
+        return lines
 
 
 default_job_service = JobService()

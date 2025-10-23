@@ -3,10 +3,13 @@ import logging
 import uuid
 import asyncio
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..core.models import (
-    Notification, NotificationLevel, NotificationCategory
+    Notification,
+    NotificationLevel,
+    NotificationCategory,
+    JobStatus,
 )
 from ..core.config import settings
 
@@ -179,7 +182,8 @@ class NotificationService:
         message: str,
         level: NotificationLevel,
         category: NotificationCategory,
-        related_entity: Optional[str] = None
+        related_entity: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Notification:
         """Create a new notification."""
         if not self._initialized:
@@ -195,7 +199,8 @@ class NotificationService:
             category=category,
             created_at=datetime.utcnow(),
             read=False,
-            related_entity=related_entity
+            related_entity=related_entity,
+            metadata=metadata or {},
         )
 
         self.notifications[notification.id] = notification
@@ -203,34 +208,46 @@ class NotificationService:
             f"Created notification: {notification.title} ({notification.level})")
 
         # Broadcast notification via WebSocket
-        if self._websocket_manager:
-            # Create a task to broadcast the notification
-            task = asyncio.create_task(
-                self._broadcast_notification(notification)
-            )
-            task.add_done_callback(self._handle_broadcast_task_exception)
+        self._schedule_broadcast(notification, action='created')
 
         return notification
 
-    async def _broadcast_notification(self, notification: Notification):
-        """Broadcast a new notification via WebSocket."""
+    def _schedule_broadcast(self, notification: Notification, action: str = 'updated') -> None:
+        if not self._websocket_manager:
+            return
+
+        task = asyncio.create_task(
+            self._broadcast_notification_event(notification, action)
+        )
+        task.add_done_callback(self._handle_broadcast_task_exception)
+
+    async def _broadcast_notification_event(self, notification: Notification, action: str) -> None:
+        """Broadcast a notification event via WebSocket."""
         try:
-            await self._websocket_manager.broadcast({
-                "type": "notification",
-                "action": "created",
-                "data": {
-                    "id": notification.id,
-                    "title": notification.title,
-                    "message": notification.message,
-                    "level": notification.level.value,
-                    "category": notification.category.value,
-                    "created_at": notification.created_at.isoformat(),
-                    "read": notification.read,
-                    "related_entity": notification.related_entity
-                }
-            }, topic="notifications")
+            await self._websocket_manager.broadcast(
+                {
+                    'type': 'notification',
+                    'action': action,
+                    'data': self._serialize_notification(notification),
+                },
+                topic='notifications',
+            )
         except Exception as e:
-            logger.error(f"Error broadcasting notification via WebSocket: {e}")
+            logger.error(f'Error broadcasting notification via WebSocket: {e}')
+
+    @staticmethod
+    def _serialize_notification(notification: Notification) -> Dict[str, Any]:
+        return {
+            'id': notification.id,
+            'title': notification.title,
+            'message': notification.message,
+            'level': notification.level.value,
+            'category': notification.category.value,
+            'created_at': notification.created_at.isoformat(),
+            'read': notification.read,
+            'related_entity': notification.related_entity,
+            'metadata': notification.metadata,
+        }
 
     def _handle_broadcast_task_exception(self, task):
         """Handle exceptions from broadcast tasks."""
@@ -315,28 +332,69 @@ class NotificationService:
             logger.info(f"Marked notification {notification_id} as read")
 
             # Broadcast update via WebSocket
-            if self._websocket_manager:
-                task = asyncio.create_task(
-                    self._broadcast_notification_update(notification))
-                task.add_done_callback(self._handle_broadcast_task_exception)
+            self._schedule_broadcast(notification, action='updated')
 
             return True
         return False
 
-    async def _broadcast_notification_update(self, notification: Notification):
-        """Broadcast a notification update via WebSocket."""
-        try:
-            await self._websocket_manager.broadcast({
-                "type": "notification",
-                "action": "updated",
-                "data": {
-                    "id": notification.id,
-                    "read": notification.read
-                }
-            }, topic="notifications")
-        except Exception as e:
-            logger.error(
-                f"Error broadcasting notification update via WebSocket: {e}")
+    def update_notification(self, notification_id: str, **changes: Any) -> Optional[Notification]:
+        """Update an existing notification and broadcast the change."""
+        notification = self.notifications.get(notification_id)
+        if not notification:
+            return None
+
+        for key, value in changes.items():
+            if hasattr(notification, key):
+                setattr(notification, key, value)
+
+        if 'read' not in changes:
+            notification.read = False
+
+        self._schedule_broadcast(notification, action='updated')
+        return notification
+
+    def upsert_job_notification(
+        self,
+        job_id: str,
+        *,
+        title: str,
+        message: str,
+        level: NotificationLevel,
+        status: JobStatus,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Notification]:
+        """Create or update a job lifecycle notification."""
+
+        job_metadata = {'job_id': job_id, 'status': status.value}
+        if metadata:
+            job_metadata.update(metadata)
+
+        existing = next(
+            (
+                n
+                for n in self.notifications.values()
+                if n.category == NotificationCategory.JOB and n.related_entity == job_id
+            ),
+            None,
+        )
+
+        if existing:
+            return self.update_notification(
+                existing.id,
+                title=title,
+                message=message,
+                level=level,
+                metadata={**existing.metadata, **job_metadata},
+            )
+
+        return self.create_notification(
+            title=title,
+            message=message,
+            level=level,
+            category=NotificationCategory.JOB,
+            related_entity=job_id,
+            metadata=job_metadata,
+        )
 
     def mark_all_read(self) -> int:
         """Mark all notifications as read. Returns count of notifications marked."""
