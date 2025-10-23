@@ -124,7 +124,7 @@ class OverviewView extends BaseView {
             </section>
 
             ${(inventory.hosts || []).length === 0 ? `
-                <div class="view-section">
+                <div class="view-section surface-card">
                     <div class="section-header">
                         <h2>${(inventory.disconnected_hosts || []).length > 0 ? 'Connection Issues' : 'Getting Started'}</h2>
                     </div>
@@ -158,7 +158,7 @@ class OverviewView extends BaseView {
                     </div>
                 </div>
             ` : `
-                <div class="view-section">
+                <div class="view-section surface-card">
                     <div class="section-header">
                         <h2>Recent Activity</h2>
                     </div>
@@ -168,7 +168,7 @@ class OverviewView extends BaseView {
                 </div>
             `}
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Quick Actions</h2>
                 </div>
@@ -221,7 +221,7 @@ class ClusterView extends BaseView {
         return `
             <h1 class="page-title">${clusterName}</h1>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Hosts in Cluster</h2>
                 </div>
@@ -230,7 +230,7 @@ class ClusterView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Virtual Machines</h2>
                 </div>
@@ -239,7 +239,7 @@ class ClusterView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Cluster Resources</h2>
                 </div>
@@ -327,7 +327,7 @@ class HostView extends BaseView {
         return `
             <h1 class="page-title">${hostname}</h1>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Host Information</h2>
                 </div>
@@ -349,7 +349,7 @@ class HostView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Virtual Machines</h2>
                 </div>
@@ -489,7 +489,7 @@ class VMView extends BaseView {
                 </div>
             </div>
 
-            <section class="vm-overview-panel" aria-label="Virtual machine overview">
+            <section class="vm-overview-panel surface-card" aria-label="Virtual machine overview">
                 <div class="vm-overview-grid">
                     ${overviewItems.map(item => `
                         <div class="vm-overview-item">
@@ -513,7 +513,7 @@ class VMView extends BaseView {
                         </button>
                     `).join('')}
                 </div>
-                <div class="vm-tab-panels">
+                <div class="vm-tab-panels surface-card">
                     <div class="vm-tab-panel vm-tab-panel--hardware active" data-tab="hardware" role="tabpanel" aria-labelledby="vm-tab-hardware">
                         <div class="vm-hardware-grid">
                             ${hardwareItems.map(item => `
@@ -781,7 +781,7 @@ class DisconnectedHostsView extends BaseView {
         return `
             <h1 class="page-title">Disconnected Hosts</h1>
 
-            <div class="view-section">
+            <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Hosts Not Currently Connected</h2>
                     <p class="section-description">

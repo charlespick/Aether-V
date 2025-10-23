@@ -8,7 +8,8 @@
     --topbar-h: 64px;
     --radius: 12px;
     --card-bg: #f5f5f5;
-    --card-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+    --card-shadow: 0 6px 20px rgba(15, 23, 42, 0.1);
+    --surface-radius: 14px;
     /* Connection status colors */
     --border-color: rgba(0, 0, 0, 0.12);
     --warning-color: #f59e0b;
@@ -32,7 +33,7 @@
     --muted-ink: #999;
     --primary: #6366f1;
     --card-bg: #242424;
-    --card-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    --card-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
     /* Dark theme connection status colors */
     --border-color: rgba(255, 255, 255, 0.16);
     --warning-color: #fbbf24;
@@ -542,10 +543,18 @@ body {
     color: var(--ink);
 }
 
+/* Shared surface styling */
+.surface-card {
+    background: var(--bg);
+    border-radius: var(--surface-radius);
+    box-shadow: var(--card-shadow);
+    border: none;
+}
+
 /* Sections */
 .section {
     background: var(--bg);
-    border-radius: 12px;
+    border-radius: var(--surface-radius);
     box-shadow: var(--card-shadow);
     margin-bottom: 2rem;
     overflow: hidden;
@@ -1766,15 +1775,8 @@ tbody tr:last-child td {
 
 /* View-specific Styles */
 .view-section {
-    background: var(--bg);
-    border-radius: 12px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
     margin-bottom: 24px;
     overflow: hidden;
-}
-
-[data-theme="dark"] .view-section {
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .quick-actions {
@@ -2102,12 +2104,9 @@ tbody tr:last-child td {
 }
 
 .vm-overview-panel {
-    border: 1px solid var(--border-color);
-    border-radius: 16px;
+    border-radius: var(--surface-radius);
     padding: 16px 20px;
     margin-bottom: 24px;
-    background: var(--bg);
-    box-shadow: var(--card-shadow);
 }
 
 [data-theme="dark"] .vm-overview-panel {
@@ -2175,16 +2174,12 @@ tbody tr:last-child td {
 }
 
 .vm-tab-panels {
-    border: 1px solid var(--border-color);
-    border-radius: 14px;
-    background: var(--bg);
-    box-shadow: var(--card-shadow);
+    border-radius: var(--surface-radius);
     overflow: hidden;
 }
 
 [data-theme="dark"] .vm-tab-panels {
     background: rgba(15, 23, 42, 0.5);
-    border-color: rgba(255, 255, 255, 0.12);
 }
 
 .vm-tab-panel {
