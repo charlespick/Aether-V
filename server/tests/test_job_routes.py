@@ -1,7 +1,21 @@
 from uuid import uuid4
+import importlib.util
 
-from app.core.job_schema import get_job_schema
-from app.services.inventory_service import inventory_service
+import pytest
+
+_REQUIRED_MODULES = ("fastapi", "pydantic", "yaml")
+SERVER_DEPS_AVAILABLE = all(
+    importlib.util.find_spec(module) is not None for module in _REQUIRED_MODULES
+)
+
+pytestmark = pytest.mark.skipif(
+    not SERVER_DEPS_AVAILABLE,
+    reason="FastAPI and its dependencies must be installed to run the server integration tests.",
+)
+
+if SERVER_DEPS_AVAILABLE:
+    from app.core.job_schema import get_job_schema
+    from app.services.inventory_service import inventory_service
 
 
 def _build_valid_submission(target_host: str) -> dict:

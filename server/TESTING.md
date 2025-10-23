@@ -37,6 +37,12 @@ make test
 additional pytest flags via `PYTEST_ARGS`, for example
 `make test PYTEST_ARGS="-vv --maxfail=1"`.
 
+> [!NOTE]
+> The tests rely on FastAPI and related runtime dependencies. If they are not
+> installed (for example, in an offline environment), the suite will be marked
+> as skipped rather than failing. Installing the requirements listed above
+> enables the full test run.
+
 ## Continuous integration
 
 A GitHub Actions workflow (`.github/workflows/server-tests.yml`) executes the
