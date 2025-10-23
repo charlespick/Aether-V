@@ -171,7 +171,7 @@ async def submit_provisioning_job(
         "schema_id": schema.get("id", "vm-provisioning"),
         "fields": validated_values,
     }
-    job = job_service.submit_provisioning_job(submission, job_payload, target_host)
+    job = await job_service.submit_provisioning_job(submission, job_payload, target_host)
     return job
 
 
@@ -187,20 +187,20 @@ async def delete_vm(request: VMDeleteRequest, user: dict = Depends(get_current_u
         )
 
     # Create job
-    job = job_service.submit_delete_job(request)
+    job = await job_service.submit_delete_job(request)
     return job
 
 
 @router.get("/api/v1/jobs", response_model=List[Job], tags=["Jobs"])
 async def list_jobs(user: dict = Depends(get_current_user)):
     """List all jobs."""
-    return job_service.get_all_jobs()
+    return await job_service.get_all_jobs()
 
 
 @router.get("/api/v1/jobs/{job_id}", response_model=Job, tags=["Jobs"])
 async def get_job(job_id: str, user: dict = Depends(get_current_user)):
     """Get job details."""
-    job = job_service.get_job(job_id)
+    job = await job_service.get_job(job_id)
 
     if not job:
         raise HTTPException(

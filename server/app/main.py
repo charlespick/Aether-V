@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
     notification_service.publish_startup_configuration_result(config_result)
 
     if not config_result.has_errors:
-        job_service.start()
+        await job_service.start()
         job_started = True
         await inventory_service.start()
         inventory_started = True
@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
         if inventory_started:
             await inventory_service.stop()
         if job_started:
-            job_service.stop()
+            await job_service.stop()
         if notifications_started:
             await notification_service.stop()
         logger.info("Application stopped")
