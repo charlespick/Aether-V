@@ -66,8 +66,9 @@ FROM base AS application
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 
-# Copy application code
+# Copy application code and schema definitions
 COPY server/app /app/app
+COPY Schemas /app/Schemas
 
 # Prepare unified agent artifact directory
 RUN mkdir -p /app/agent

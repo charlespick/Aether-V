@@ -13,9 +13,7 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA_CACHE: Optional[Dict[str, Any]] = None
 
-DEFAULT_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[2] / "Schemas" / "job-inputs.v1.yaml"
-)
+DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "Schemas" / "job-inputs.yaml"
 
 _HOSTNAME_PATTERN = re.compile(r"^(?=.{1,255}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
 
