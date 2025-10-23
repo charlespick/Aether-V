@@ -404,6 +404,10 @@ class InventoryService:
                 "whoami principal",
                 "whoami",
             ),
+            (
+                "whoami group membership",
+                "whoami /groups | findstr /i \"Administrators\"",
+            ),
         ]
 
         for description, command in diagnostics:
