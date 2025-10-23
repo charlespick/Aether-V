@@ -29,9 +29,17 @@ def _format_output_preview(output: str, *, max_length: int = 400) -> str:
 
 class WinRMService:
     """Service for managing WinRM connections to Hyper-V hosts."""
-    
+
+    _POWERSHELL_URI = "http://schemas.microsoft.com/powershell/Microsoft.PowerShell"
+
     def __init__(self):
         self._sessions: Dict[str, Protocol] = {}
+
+    def _open_powershell_shell(self, session: Protocol, hostname: str) -> str:
+        """Open a PowerShell shell for the given session."""
+        shell_id = session.open_shell(shell=self._POWERSHELL_URI, codepage=65001)
+        logger.debug("Opened PowerShell shell %s on %s", shell_id, hostname)
+        return shell_id
     
     def get_session(self, hostname: str) -> Protocol:
         """Get or create a WinRM session for a host."""
@@ -143,8 +151,7 @@ class WinRMService:
 
         try:
             start_time = perf_counter()
-            shell_id = session.open_shell()
-            logger.debug("Opened shell %s on %s", shell_id, hostname)
+            shell_id = self._open_powershell_shell(session, hostname)
             command_id = session.run_command(shell_id, command)
             logger.debug("Started command %s on shell %s (%s)", command_id, shell_id, hostname)
             stdout, stderr, exit_code = session.get_command_output(shell_id, command_id)
@@ -207,8 +214,7 @@ class WinRMService:
 
         try:
             start_time = perf_counter()
-            shell_id = session.open_shell()
-            logger.debug("Opened shell %s on %s", shell_id, hostname)
+            shell_id = self._open_powershell_shell(session, hostname)
             command_id = session.run_command(shell_id, f"powershell.exe -Command \"{command}\"")
             logger.debug("Started command %s on shell %s (%s)", command_id, shell_id, hostname)
             stdout, stderr, exit_code = session.get_command_output(shell_id, command_id)
@@ -266,8 +272,7 @@ class WinRMService:
         logger.info("Streaming PowerShell command on %s: %s", hostname, truncated_command)
         logger.debug("Full streaming PowerShell command on %s: %s", hostname, command)
 
-        shell_id = session.open_shell()
-        logger.debug("Opened streaming shell %s on %s", shell_id, hostname)
+        shell_id = self._open_powershell_shell(session, hostname)
         command_id = session.run_command(shell_id, f"powershell.exe -Command \"{command}\"")
         logger.debug("Started streaming command %s on shell %s (%s)", command_id, shell_id, hostname)
 
