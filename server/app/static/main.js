@@ -1,5 +1,7 @@
 // Get configuration from backend
 const configData = JSON.parse(document.getElementById('config-data').textContent);
+window.appConfig = configData;
+window.jobSchema = configData.job_schema || null;
 const authEnabled = configData.auth_enabled;
 
 // Authentication state

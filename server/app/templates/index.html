@@ -117,7 +117,8 @@
         {
             "auth_enabled": {{ auth_enabled | tojson }},
             "websocket_refresh_time": {{ websocket_refresh_time | tojson }},
-            "websocket_ping_interval": {{ websocket_ping_interval | tojson }}
+            "websocket_ping_interval": {{ websocket_ping_interval | tojson }},
+            "job_schema": {{ job_schema | tojson }}
         }
     </script>
     <script src="/static/websocket.js"></script>

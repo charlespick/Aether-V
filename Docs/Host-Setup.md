@@ -74,11 +74,12 @@ When the service starts, it:
 The service deploys the following to `{HOST_INSTALL_DIRECTORY}` on each host:
 
 **PowerShell Scripts:**
-- `CopyImage.ps1` - Copies VM image files from template location
-- `CopyProvisioningISO.ps1` - Copies the appropriate provisioning ISO to VM folder
-- `RegisterVM.ps1` - Registers VM with Hyper-V and applies configuration
-- `WaitForProvisioningKey.ps1` - Waits for VM to signal readiness via KVP
-- `PublishProvisioningData.ps1` - Publishes provisioning data to VM via Hyper-V KVP
+- `Invoke-ProvisioningJob.ps1` - Master orchestrator that reads YAML job definitions and invokes the helper scripts
+- `Provisioning.CopyImage.ps1` - Copies VM image files from template location
+- `Provisioning.CopyProvisioningISO.ps1` - Copies the appropriate provisioning ISO to VM folder
+- `Provisioning.RegisterVM.ps1` - Registers VM with Hyper-V and applies configuration
+- `Provisioning.WaitForProvisioningKey.ps1` - Waits for VM to signal readiness via KVP
+- `Provisioning.PublishProvisioningData.ps1` - Publishes provisioning data to VM via Hyper-V KVP
 
 **ISOs:**
 - `WindowsProvisioning.iso` - Windows provisioning service and modules
@@ -169,7 +170,7 @@ Before service integration, host setup required manual execution of installation
 
 **Solutions:**
 - Verify installation directory path in service configuration
-- Ensure `CopyProvisioningISO.ps1` uses correct paths
+- Ensure `Provisioning.CopyProvisioningISO.ps1` uses correct paths
 - Check PowerShell scripts reference `HOST_INSTALL_DIRECTORY` correctly
 
 ## Testing Configuration
@@ -186,7 +187,8 @@ Get-ChildItem $installDir
 Get-Content "$installDir\version"
 
 # Verify scripts are executable
-Test-Path "$installDir\CopyImage.ps1"
+Test-Path "$installDir\Invoke-ProvisioningJob.ps1"
+Test-Path "$installDir\Provisioning.CopyImage.ps1"
 ```
 
 ## Configuration Examples

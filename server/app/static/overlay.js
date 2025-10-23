@@ -95,6 +95,7 @@ class OverlayManager {
 
     registerDefaultOverlays() {
         this.registerOverlay('settings', SettingsOverlay);
+        this.registerOverlay('provision-job', ProvisionJobOverlay);
         this.registerOverlay('job-details', JobDetailsOverlay);
         this.registerOverlay('notifications', NotificationsOverlay);
     }
@@ -229,6 +230,482 @@ class SettingsOverlay extends BaseOverlay {
 
         // Immediately refresh the navigation tree to apply show hosts setting
         loadInventory();
+    }
+}
+
+class ProvisionJobOverlay extends BaseOverlay {
+    resolveInitialSchema() {
+        const sources = [
+            () => this.data?.schema,
+            () => window?.jobSchema,
+            () => window?.appConfig?.job_schema,
+        ];
+
+        for (const getter of sources) {
+            try {
+                const value = getter();
+                if (value) {
+                    return value;
+                }
+            } catch (error) {
+                // Ignore lookup errors from optional chaining fallbacks
+            }
+        }
+
+        return null;
+    }
+
+    getTitle() {
+        return 'Create Virtual Machine';
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="provision-job-root">
+                <div class="form-loading">Loading schema...</div>
+            </div>
+        `;
+    }
+
+    init() {
+        this.schema = this.resolveInitialSchema();
+        this.hosts = [];
+        this.rootEl = document.getElementById('provision-job-root');
+        if (!this.rootEl) {
+            console.error('Provision job root element missing');
+            return;
+        }
+
+        this.rootEl.innerHTML = `
+            <div class="form-loading">Loading schema...</div>
+        `;
+
+        this.prepareForm();
+    }
+
+    async prepareForm() {
+        try {
+            const [schema, hosts] = await Promise.all([
+                this.schema ? Promise.resolve(this.schema) : this.fetchSchema(),
+                this.fetchHosts(),
+            ]);
+
+            this.schema = schema;
+            window.jobSchema = this.schema;
+            this.hosts = hosts;
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to prepare provisioning form:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load provisioning form data. Please try again later.</div>
+            `;
+        }
+    }
+
+    async fetchSchema() {
+        const response = await fetch('/api/v1/schema/job-inputs', { credentials: 'same-origin' });
+        if (!response.ok) {
+            throw new Error(`Schema request failed: ${response.status}`);
+        }
+        return response.json();
+    }
+
+    async fetchHosts() {
+        const response = await fetch('/api/v1/hosts', { credentials: 'same-origin' });
+        if (!response.ok) {
+            throw new Error(`Host list request failed: ${response.status}`);
+        }
+
+        const hosts = await response.json();
+        return Array.isArray(hosts) ? hosts.filter((host) => host.connected) : [];
+    }
+
+    renderForm() {
+        if (!this.schema) {
+            return;
+        }
+
+        const fieldSetMap = this.buildParameterSetMap();
+        const vmField = this.schema.fields.find((field) => field.id === 'vm_name') || null;
+        const fieldsHtml = this.schema.fields
+            .filter((field) => field.id !== 'vm_name')
+            .map((field) => this.renderField(field, fieldSetMap.get(field.id) || []))
+            .join('');
+
+        const parameterSetHtml = this.renderParameterSets();
+        const primaryControls = this.renderPrimaryControls(vmField);
+
+        this.rootEl.innerHTML = `
+            <form id="provision-job-form" class="schema-form-body">
+                <div id="provision-job-messages" class="form-messages" role="alert"></div>
+                ${primaryControls}
+                <div class="schema-fields">${fieldsHtml}</div>
+                ${parameterSetHtml}
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="provision-job-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="provision-job-submit">Submit Job</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('provision-job-form');
+        this.messagesEl = document.getElementById('provision-job-messages');
+        const cancelBtn = document.getElementById('provision-job-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    buildParameterSetMap() {
+        const map = new Map();
+        const sets = this.schema?.parameter_sets || [];
+        sets.forEach((set) => {
+            (set.members || []).forEach((member) => {
+                const existing = map.get(member) || [];
+                existing.push(set);
+                map.set(member, existing);
+            });
+        });
+        return map;
+    }
+
+    renderField(field, parameterSets) {
+        const fieldId = `schema-${field.id}`;
+        const requiredPill = this.renderRequiredPill(field.required);
+        const labelText = this.escapeHtml(field.label || field.id);
+        const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
+        const tags = this.renderFieldTags(field, parameterSets);
+        const inputControl = this.renderInputControl(field, fieldId);
+
+        return `
+            <div class="schema-field" data-field-id="${field.id}">
+                <div class="field-header">
+                    <div class="field-title">
+                        <label for="${fieldId}" class="field-label">${labelText}</label>
+                        ${requiredPill}
+                    </div>
+                    ${tags}
+                </div>
+                <div class="field-control">${inputControl}</div>
+                ${description}
+            </div>
+        `;
+    }
+
+    renderFieldTags(field, parameterSets) {
+        const tags = [];
+        if (parameterSets.length > 0) {
+            parameterSets.forEach((set) => {
+                const label = this.escapeHtml(set.label || set.id);
+                tags.push(`<span class="field-tag">${label}</span>`);
+            });
+        }
+
+        const applicability = field.applicability;
+        if (applicability?.os_family) {
+            const families = applicability.os_family.map((fam) => fam.charAt(0).toUpperCase() + fam.slice(1));
+            tags.push(`<span class="field-tag field-tag-muted">${this.escapeHtml(families.join(', '))} only</span>`);
+        }
+
+        if (!tags.length) {
+            return '';
+        }
+
+        return `<div class="field-tags">${tags.join('')}</div>`;
+    }
+
+    renderRequiredPill(isRequired) {
+        return isRequired ? '<span class="field-required-pill">Required</span>' : '';
+    }
+
+    renderPrimaryControls(vmField) {
+        const hostControl = this.renderHostSelector();
+        const vmControl = vmField ? this.renderVmNameField(vmField) : '';
+
+        return `
+            <section class="primary-controls">
+                ${hostControl}
+                ${vmControl}
+            </section>
+        `;
+    }
+
+    renderHostSelector() {
+        const requiredPill = this.renderRequiredPill(true);
+        if (!this.hosts.length) {
+            return `
+                <div class="primary-field" data-primary="host">
+                    <div class="field-header">
+                        <div class="field-title">
+                            <label for="schema-target_host" class="field-label">Destination host</label>
+                            ${requiredPill}
+                        </div>
+                    </div>
+                    <div class="field-control">
+                        <select id="schema-target_host" name="target_host" class="primary-select" disabled>
+                            <option value="">No connected hosts available</option>
+                        </select>
+                    </div>
+                    <p class="field-description field-note">Reconnect a host to enable provisioning.</p>
+                </div>
+            `;
+        }
+
+        const options = this.hosts
+            .map((host) => {
+                const hostname = this.escapeHtml(host.hostname || '');
+                const cluster = host.cluster ? ` (${this.escapeHtml(host.cluster)})` : '';
+                return `<option value="${hostname}">${hostname}${cluster}</option>`;
+            })
+            .join('');
+
+        return `
+            <div class="primary-field" data-primary="host">
+                <div class="field-header">
+                    <div class="field-title">
+                        <label for="schema-target_host" class="field-label">Destination host</label>
+                        ${requiredPill}
+                    </div>
+                </div>
+                <div class="field-control">
+                    <select id="schema-target_host" name="target_host" class="primary-select" required>
+                        <option value="">Select a connected host</option>
+                        ${options}
+                    </select>
+                </div>
+                <p class="field-description field-note">Only hosts that are currently connected appear in this list.</p>
+            </div>
+        `;
+    }
+
+    renderVmNameField(vmField) {
+        const fieldId = 'schema-vm_name';
+        const requiredPill = this.renderRequiredPill(vmField.required);
+        const labelText = this.escapeHtml(vmField.label || vmField.id);
+        const description = vmField.description ? `<p class="field-description">${this.escapeHtml(vmField.description)}</p>` : '';
+        const note = '<p class="field-description field-note">This value becomes both the VM name and the guest hostname.</p>';
+        const inputControl = this.renderInputControl(vmField, fieldId);
+
+        return `
+            <div class="primary-field" data-primary="vm-name">
+                <div class="field-header">
+                    <div class="field-title">
+                        <label for="${fieldId}" class="field-label">${labelText}</label>
+                        ${requiredPill}
+                    </div>
+                </div>
+                <div class="field-control">${inputControl}</div>
+                ${description}
+                ${note}
+            </div>
+        `;
+    }
+
+    escapeHtml(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    renderInputControl(field, fieldId) {
+        const type = (field.type || 'string').toLowerCase();
+        const defaultValue = field.default ?? '';
+        const validations = field.validations || {};
+        const requiredAttr = field.required ? 'required' : '';
+
+        if (type === 'boolean') {
+            const checked = defaultValue === true ? 'checked' : '';
+            return `
+                <label class="checkbox-field">
+                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
+                    <span>Enable</span>
+                </label>
+            `;
+        }
+
+        if (type === 'integer') {
+            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
+            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
+            const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${valueAttr} ${requiredAttr} />`;
+        }
+
+        if (type === 'multiline') {
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
+        }
+
+        const inputType = type === 'secret' ? 'password' : 'text';
+        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
+        const pattern = patternValue ? `pattern="${patternValue}"` : '';
+        const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+        const placeholder = type === 'ipv4' ? 'placeholder="192.0.2.10"' : '';
+        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+    }
+
+    renderParameterSets() {
+        const parameterSets = this.schema?.parameter_sets || [];
+        if (!parameterSets.length) {
+            return '';
+        }
+
+        const rows = parameterSets.map((set) => `
+            <div class="parameter-set">
+                <div class="parameter-set-title">${this.escapeHtml(set.label || set.id)}</div>
+                <div class="parameter-set-mode">Mode: ${this.escapeHtml(set.mode || 'unspecified')}</div>
+                <div class="parameter-set-description">${this.escapeHtml(set.description || '')}</div>
+                <div class="parameter-set-members">Fields: ${this.escapeHtml((set.members || []).join(', '))}</div>
+            </div>
+        `).join('');
+
+        return `
+            <div class="parameter-set-summary">
+                <h3>Parameter Sets</h3>
+                ${rows}
+            </div>
+        `;
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+        if (!this.formEl || !this.schema) {
+            return;
+        }
+
+        const submitBtn = document.getElementById('provision-job-submit');
+        submitBtn?.setAttribute('disabled', 'disabled');
+        this.showMessage('', '');
+
+        if (!this.hosts.length) {
+            this.showMessage('No connected hosts are available for provisioning.', 'error');
+            submitBtn?.removeAttribute('disabled');
+            return;
+        }
+
+        if (typeof this.formEl.reportValidity === 'function' && !this.formEl.reportValidity()) {
+            submitBtn?.removeAttribute('disabled');
+            return;
+        }
+
+        const targetHostControl = this.formEl.elements['target_host'];
+        const targetHost = targetHostControl ? targetHostControl.value.trim() : '';
+        if (!targetHost) {
+            this.showMessage('Select a destination host before submitting.', 'error');
+            submitBtn?.removeAttribute('disabled');
+            return;
+        }
+
+        const payload = this.collectValues();
+
+        try {
+            const response = await fetch('/api/v1/jobs/provision', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    schema_version: this.schema.version,
+                    target_host: targetHost,
+                    values: payload
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                const errorMessages = this.extractErrorMessages(error);
+                this.showMessage(errorMessages.join('<br>') || 'Failed to submit job.', 'error');
+                return;
+            }
+
+            const job = await response.json();
+            this.showMessage(`Job ${job.job_id} queued successfully.`, 'success');
+            setTimeout(() => overlayManager.close(), 1500);
+        } catch (error) {
+            console.error('Failed to submit provisioning job:', error);
+            this.showMessage('Unexpected error submitting job.', 'error');
+        } finally {
+            submitBtn?.removeAttribute('disabled');
+        }
+    }
+
+    collectValues() {
+        const values = {};
+        this.schema.fields.forEach((field) => {
+            const control = this.formEl.elements[field.id];
+            if (!control) {
+                values[field.id] = null;
+                return;
+            }
+
+            const type = (field.type || 'string').toLowerCase();
+            if (type === 'boolean') {
+                values[field.id] = control.checked;
+                return;
+            }
+
+            const rawValue = control.value;
+            if (rawValue === '') {
+                values[field.id] = null;
+                return;
+            }
+
+            if (type === 'integer') {
+                values[field.id] = Number.parseInt(rawValue, 10);
+            } else {
+                values[field.id] = rawValue;
+            }
+        });
+
+        return values;
+    }
+
+    extractErrorMessages(errorPayload) {
+        if (!errorPayload) {
+            return [];
+        }
+        if (Array.isArray(errorPayload?.detail)) {
+            return errorPayload.detail.map((item) => item.msg || JSON.stringify(item));
+        }
+        if (typeof errorPayload.detail === 'string') {
+            return [errorPayload.detail];
+        }
+        if (Array.isArray(errorPayload.errors)) {
+            return errorPayload.errors;
+        }
+        if (Array.isArray(errorPayload?.detail?.errors)) {
+            return errorPayload.detail.errors;
+        }
+        if (errorPayload.detail?.message) {
+            return [errorPayload.detail.message];
+        }
+        return [];
+    }
+
+    showMessage(message, level) {
+        if (!this.messagesEl) {
+            return;
+        }
+
+        this.messagesEl.classList.remove('error', 'success');
+        if (!message) {
+            this.messagesEl.innerHTML = '';
+            return;
+        }
+
+        if (level === 'error') {
+            this.messagesEl.classList.add('error');
+        }
+        if (level === 'success') {
+            this.messagesEl.classList.add('success');
+        }
+
+        this.messagesEl.innerHTML = message;
     }
 }
 

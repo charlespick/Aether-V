@@ -87,53 +87,6 @@ class VM(BaseModel):
     created_at: Optional[datetime] = None
 
 
-class VMCreateRequest(BaseModel):
-    """Request to create a new VM."""
-    vm_name: str = Field(..., min_length=1, max_length=64)
-    image_name: str = Field(...,
-                            description="Name of the golden image without extension")
-    hyperv_host: str = Field(..., description="Target Hyper-V host")
-    gb_ram: int = Field(4, ge=1, le=512, description="RAM in GB")
-    cpu_cores: int = Field(2, ge=1, le=64, description="Number of CPU cores")
-    vlan_id: Optional[int] = Field(
-        None, ge=1, le=4094, description="VLAN ID for network isolation")
-
-    # Guest OS configuration
-    guest_la_uid: str = Field(..., description="Local administrator username")
-    guest_la_pw: str = Field(..., description="Local administrator password")
-    guest_v4_ipaddr: Optional[str] = Field(
-        None, description="Static IPv4 address")
-    guest_v4_cidrprefix: Optional[int] = Field(
-        None, ge=1, le=32, description="IPv4 CIDR prefix")
-    guest_v4_defaultgw: Optional[str] = Field(
-        None, description="Default gateway")
-    guest_v4_dns1: Optional[str] = Field(
-        None, description="Primary DNS server")
-    guest_v4_dns2: Optional[str] = Field(
-        None, description="Secondary DNS server")
-    guest_net_dnssuffix: Optional[str] = Field(None, description="DNS suffix")
-
-    # Windows domain join (Windows only)
-    guest_domain_jointarget: Optional[str] = Field(
-        None, description="Domain to join")
-    guest_domain_joinuid: Optional[str] = Field(
-        None, description="Domain join username")
-    guest_domain_joinpw: Optional[str] = Field(
-        None, description="Domain join password")
-    guest_domain_joinou: Optional[str] = Field(
-        None, description="OU path for computer account")
-
-    # Linux SSH configuration (Linux only)
-    cnf_ansible_ssh_user: Optional[str] = Field(
-        None, description="Ansible SSH username")
-    cnf_ansible_ssh_key: Optional[str] = Field(
-        None, description="Ansible SSH public key")
-
-    # Clustering
-    vm_clustered: Optional[bool] = Field(
-        False, description="Add VM to cluster")
-
-
 class VMDeleteRequest(BaseModel):
     """Request to delete a VM."""
     vm_name: str
@@ -145,12 +98,12 @@ class VMDeleteRequest(BaseModel):
 class Job(BaseModel):
     """Job execution tracking."""
     job_id: str
-    job_type: str  # "create_vm", "delete_vm"
+    job_type: str  # "provision_vm", "delete_vm", etc.
     status: JobStatus
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    target_host: str
+    target_host: Optional[str] = None
     parameters: Dict[str, Any]
     output: List[str] = Field(default_factory=list)
     error: Optional[str] = None
@@ -181,3 +134,17 @@ class NotificationsResponse(BaseModel):
     notifications: List[Notification]
     total_count: int
     unread_count: int
+
+
+class JobSubmission(BaseModel):
+    """Schema-driven job submission payload."""
+
+    schema_version: int = Field(..., description="Version of the job schema used")
+    values: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Field values keyed by schema field id",
+    )
+    target_host: Optional[str] = Field(
+        default=None,
+        description="Hostname of the connected Hyper-V host that will execute the job",
+    )

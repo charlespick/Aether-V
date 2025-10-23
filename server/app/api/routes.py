@@ -9,11 +9,16 @@ from datetime import datetime
 import secrets
 
 from ..core.models import (
-    Host, VM, Job, VMCreateRequest, VMDeleteRequest,
-    InventoryResponse, HealthResponse, NotificationsResponse
+    Host, VM, Job, VMDeleteRequest, InventoryResponse,
+    HealthResponse, NotificationsResponse, JobSubmission
 )
 from ..core.auth import get_current_user, oauth
 from ..core.config import settings, get_config_validation_result
+from ..core.job_schema import (
+    SchemaValidationError,
+    get_job_schema,
+    validate_job_submission,
+)
 from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
 from ..services.notification_service import notification_service
@@ -116,28 +121,63 @@ async def get_vm(hostname: str, vm_name: str, user: dict = Depends(get_current_u
     return vm
 
 
-@router.post("/api/v1/vms/create", response_model=Job, tags=["VMs"])
-async def create_vm(request: VMCreateRequest, user: dict = Depends(get_current_user)):
-    """Create a new VM."""
-    # Validate host exists
-    hosts = inventory_service.get_all_hosts()
-    if request.hyperv_host not in [h.hostname for h in hosts]:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host {request.hyperv_host} not found"
-        )
+@router.get("/api/v1/schema/job-inputs", tags=["Schema"])
+async def get_job_input_schema(user: dict = Depends(get_current_user)):
+    """Return the active job input schema."""
+    return get_job_schema()
 
-    # Check if VM already exists
-    existing_vm = inventory_service.get_vm(
-        request.hyperv_host, request.vm_name)
-    if existing_vm:
+
+@router.post("/api/v1/jobs/provision", response_model=Job, tags=["Jobs"])
+async def submit_provisioning_job(
+    submission: JobSubmission, user: dict = Depends(get_current_user)
+):
+    """Accept a schema-driven provisioning request."""
+
+    schema = get_job_schema()
+    if submission.schema_version != schema.get("version"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {request.vm_name} already exists on host {request.hyperv_host}"
+            detail={
+                "message": "Schema version mismatch",
+                "expected": schema.get("version"),
+                "received": submission.schema_version,
+            },
         )
 
-    # Create job
-    job = job_service.create_vm_job(request)
+    try:
+        validated_values = validate_job_submission(submission.values, schema)
+    except SchemaValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": exc.errors})
+
+    target_host = (submission.target_host or "").strip()
+    if not target_host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target host is required",
+        )
+
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    vm_name = validated_values.get("vm_name")
+    if vm_name:
+        existing_vm = inventory_service.get_vm(target_host, vm_name)
+        if existing_vm:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"VM {vm_name} already exists on host {target_host}",
+            )
+
+    job_payload = {
+        "schema_id": schema.get("id", "vm-provisioning"),
+        "fields": validated_values,
+    }
+    job = await job_service.submit_provisioning_job(submission, job_payload, target_host)
     return job
 
 
@@ -153,20 +193,20 @@ async def delete_vm(request: VMDeleteRequest, user: dict = Depends(get_current_u
         )
 
     # Create job
-    job = job_service.delete_vm_job(request)
+    job = await job_service.submit_delete_job(request)
     return job
 
 
 @router.get("/api/v1/jobs", response_model=List[Job], tags=["Jobs"])
 async def list_jobs(user: dict = Depends(get_current_user)):
     """List all jobs."""
-    return job_service.get_all_jobs()
+    return await job_service.get_all_jobs()
 
 
 @router.get("/api/v1/jobs/{job_id}", response_model=Job, tags=["Jobs"])
 async def get_job(job_id: str, user: dict = Depends(get_current_user)):
     """Get job details."""
-    job = job_service.get_job(job_id)
+    job = await job_service.get_job(job_id)
 
     if not job:
         raise HTTPException(

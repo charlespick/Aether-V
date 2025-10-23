@@ -12,6 +12,8 @@ The Aether-V service orchestrates VM provisioning through its job execution syst
 
 ### Provisioning Flow
 
+Provisioning requests are serialized into YAML and streamed to the host-side orchestration script `Invoke-ProvisioningJob.ps1`. The master script reads the job definition from standard input, validates parameter-set requirements, and then invokes the individual provisioning helpers that live beside it (`Provisioning.CopyImage.ps1`, `Provisioning.CopyProvisioningISO.ps1`, `Provisioning.RegisterVM.ps1`, `Provisioning.WaitForProvisioningKey.ps1`, and `Provisioning.PublishProvisioningData.ps1`). Optional clustering is performed from within the same master script after guest configuration data has been published.
+
 The service executes these steps when provisioning a new VM:
 
 #### 1. Pre-Provisioning
@@ -24,12 +26,12 @@ The service executes these steps when provisioning a new VM:
   - For Linux VMs: Clear domain join parameters (not supported)
   - For Windows VMs: Clear SSH configuration (not applicable)
 
-#### 2. Image Preparation (CopyImage.ps1)
+#### 2. Image Preparation (Provisioning.CopyImage.ps1)
 
 Executed via WinRM on the target Hyper-V host:
 
 ```powershell
-CopyImage.ps1 -VMName "vm-name" -ImageName "image-template"
+Provisioning.CopyImage.ps1 -VMName "vm-name" -ImageName "image-template"
 ```
 
 **Actions:**
@@ -38,10 +40,10 @@ CopyImage.ps1 -VMName "vm-name" -ImageName "image-template"
 - Copies VHDX to VM folder
 - Returns VM data folder path for subsequent steps
 
-#### 3. Provisioning ISO Attachment (CopyProvisioningISO.ps1)
+#### 3. Provisioning ISO Attachment (Provisioning.CopyProvisioningISO.ps1)
 
 ```powershell
-CopyProvisioningISO.ps1 -OSFamily "windows|linux" -VMDataFolder "path"
+Provisioning.CopyProvisioningISO.ps1 -OSFamily "windows|linux" -VMDataFolder "path"
 ```
 
 **Actions:**
@@ -49,10 +51,10 @@ CopyProvisioningISO.ps1 -OSFamily "windows|linux" -VMDataFolder "path"
 - Copies ISO from `{HOST_INSTALL_DIRECTORY}` to VM folder
 - ISO will be attached when VM is registered
 
-#### 4. VM Registration (RegisterVM.ps1)
+#### 4. VM Registration (Provisioning.RegisterVM.ps1)
 
 ```powershell
-RegisterVM.ps1 -OSFamily "windows|linux" -GBRam 4 -CPUcores 2 `
+Provisioning.RegisterVM.ps1 -OSFamily "windows|linux" -GBRam 4 -CPUcores 2 `
                -VMDataFolder "path" [-VLANId 10]
 ```
 
@@ -63,10 +65,10 @@ RegisterVM.ps1 -OSFamily "windows|linux" -GBRam 4 -CPUcores 2 `
 - Applies VLAN configuration if specified
 - Starts the VM
 
-#### 5. Provisioning Readiness (WaitForProvisioningKey.ps1)
+#### 5. Provisioning Readiness (Provisioning.WaitForProvisioningKey.ps1)
 
 ```powershell
-WaitForProvisioningKey.ps1 -VMName "vm-name"
+Provisioning.WaitForProvisioningKey.ps1 -VMName "vm-name"
 ```
 
 **Actions:**
@@ -74,10 +76,10 @@ WaitForProvisioningKey.ps1 -VMName "vm-name"
 - Waits for VM to write "ProvisioningReady" key
 - Signals that guest is ready to receive configuration
 
-#### 6. Configuration Publishing (PublishProvisioningData.ps1)
+#### 6. Configuration Publishing (Provisioning.PublishProvisioningData.ps1)
 
 ```powershell
-PublishProvisioningData.ps1 -GuestHostName "vm-name" `
+Provisioning.PublishProvisioningData.ps1 -GuestHostName "vm-name" `
     -GuestLaUid "Administrator" `
     -GuestV4IpAddr "192.168.1.100" `
     -GuestV4CidrPrefix 24 `
@@ -95,7 +97,7 @@ PublishProvisioningData.ps1 -GuestHostName "vm-name" `
 - VM guest reads and applies configuration
 - Guest completes provisioning autonomously
 
-#### 7. Cluster Integration (Optional, Windows only)
+#### 7. Cluster Integration (Optional)
 
 If clustering is requested:
 
@@ -104,7 +106,6 @@ Add-ClusterVirtualMachineRole -VMName "vm-name"
 ```
 
 **Requirements:**
-- CredSSP authentication enabled temporarily
 - Failover Clustering feature installed
 - VM registered on cluster-capable host
 
@@ -114,11 +115,12 @@ Add-ClusterVirtualMachineRole -VMName "vm-name"
 
 - `vm_name` - Name of the VM
 - `image_name` - Template image to use
-- `hyperv_host` - Target Hyper-V host
 - `gb_ram` - RAM in gigabytes
 - `cpu_cores` - Number of CPU cores
 - `guest_la_uid` - Guest local administrator username
 - `guest_la_pw` - Guest local administrator password (secret)
+
+> **Host selection:** The destination Hyper-V host is chosen separately when submitting a job (UI dropdown or API `target_host` property) and is no longer part of the schema-defined field list.
 
 #### Optional Network Configuration
 
@@ -169,7 +171,7 @@ The original implementation used Ansible to orchestrate provisioning:
 ```yaml
 ---
 - name: Provision VM
-  hosts: "{{ hyperv_host }}"
+  hosts: "{{ target_host }}"
   gather_facts: no
   vars:
     develop: false
@@ -290,25 +292,28 @@ The service maintains **exact orchestration parity** with the original Ansible p
 ### Creating a VM via REST API
 
 ```bash
-curl -X POST "https://aetherv.example.com/api/v1/vms/create" \
+curl -X POST "https://aetherv.example.com/api/v1/jobs/provision" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "vm_name": "web-server-01",
-    "image_name": "Windows Server 2022",
-    "hyperv_host": "hyperv01.local",
-    "gb_ram": 8,
-    "cpu_cores": 4,
-    "guest_la_uid": "Administrator",
-    "guest_la_pw": "SecurePassword123!",
-    "guest_v4_ipaddr": "192.168.1.100",
-    "guest_v4_cidrprefix": 24,
-    "guest_v4_defaultgw": "192.168.1.1",
-    "guest_v4_dns1": "192.168.1.10",
-    "guest_domain_jointarget": "example.com",
-    "guest_domain_joinuid": "svc-domainjoin",
-    "guest_domain_joinpw": "DomainPassword123!",
-    "vlan_id": 10
+    "schema_version": 1,
+    "target_host": "hyperv01.local",
+    "values": {
+      "vm_name": "web-server-01",
+      "image_name": "Windows Server 2022",
+      "gb_ram": 8,
+      "cpu_cores": 4,
+      "guest_la_uid": "Administrator",
+      "guest_la_pw": "SecurePassword123!",
+      "guest_v4_ipaddr": "192.168.1.100",
+      "guest_v4_cidrprefix": 24,
+      "guest_v4_defaultgw": "192.168.1.1",
+      "guest_v4_dns1": "192.168.1.10",
+      "guest_domain_jointarget": "example.com",
+      "guest_domain_joinuid": "svc-domainjoin",
+      "guest_domain_joinpw": "DomainPassword123!",
+      "vlan_id": 10
+    }
   }'
 ```
 
