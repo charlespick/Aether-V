@@ -529,7 +529,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             "category": n.category.value,
                             "created_at": n.created_at.isoformat(),
                             "read": n.read,
-                            "related_entity": n.related_entity
+                            "related_entity": n.related_entity,
+                            "metadata": n.metadata,
                         }
                         for n in notifications
                     ],

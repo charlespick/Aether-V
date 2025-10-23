@@ -1,6 +1,6 @@
 """WinRM service for executing PowerShell commands on Hyper-V hosts."""
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Callable, Dict, Optional
 import winrm
 from winrm.protocol import Protocol
 
@@ -155,6 +155,40 @@ class WinRMService:
         except Exception as e:
             logger.error(f"WinRM command execution failed on {hostname}: {e}")
             raise
+
+    def stream_ps_command(
+        self,
+        hostname: str,
+        command: str,
+        on_chunk: Callable[[str, str], None],
+    ) -> int:
+        """Execute a PowerShell command and stream output via callback."""
+        session = self.get_session(hostname)
+
+        logger.info(f"Streaming command on {hostname}: {command[:100]}...")
+
+        shell_id = session.open_shell()
+        command_id = session.run_command(shell_id, f"powershell.exe -Command \"{command}\"")
+
+        exit_code = 0
+        try:
+            command_done = False
+            while not command_done:
+                stdout, stderr, exit_code, command_done = session.receive(shell_id, command_id)
+                if stdout:
+                    on_chunk('stdout', stdout.decode('utf-8', errors='replace'))
+                if stderr:
+                    on_chunk('stderr', stderr.decode('utf-8', errors='replace'))
+        except Exception as exc:
+            logger.error(f"WinRM streaming execution failed on {hostname}: {exc}")
+            raise
+        finally:
+            try:
+                session.cleanup_command(shell_id, command_id)
+            finally:
+                session.close_shell(shell_id)
+
+        return exit_code
 
 
 # Global WinRM service instance

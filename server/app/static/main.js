@@ -8,6 +8,55 @@ const authEnabled = configData.auth_enabled;
 let userInfo = null;
 let authCheckInProgress = false;
 
+// Job streaming listeners
+const jobUpdateListeners = new Map();
+
+function subscribeToJobUpdates(jobId, callback) {
+    if (!jobId || typeof callback !== 'function') {
+        return;
+    }
+
+    if (!jobUpdateListeners.has(jobId)) {
+        jobUpdateListeners.set(jobId, new Set());
+        wsClient.subscribe([`jobs:${jobId}`]);
+    }
+
+    jobUpdateListeners.get(jobId).add(callback);
+}
+
+function unsubscribeFromJobUpdates(jobId, callback) {
+    if (!jobId || !jobUpdateListeners.has(jobId)) {
+        return;
+    }
+
+    const listeners = jobUpdateListeners.get(jobId);
+    if (callback) {
+        listeners.delete(callback);
+    }
+
+    if (!callback || listeners.size === 0) {
+        jobUpdateListeners.delete(jobId);
+        wsClient.unsubscribe([`jobs:${jobId}`]);
+    }
+}
+
+function emitJobUpdate(jobId, message) {
+    if (!jobUpdateListeners.has(jobId)) {
+        return;
+    }
+
+    jobUpdateListeners.get(jobId).forEach((handler) => {
+        try {
+            handler(message);
+        } catch (error) {
+            console.error('Error in job update handler:', error);
+        }
+    });
+}
+
+window.subscribeToJobUpdates = subscribeToJobUpdates;
+window.unsubscribeFromJobUpdates = unsubscribeFromJobUpdates;
+
 // WebSocket notification handlers
 function setupWebSocketHandlers() {
     // Handle connection status changes
@@ -33,6 +82,14 @@ function setupWebSocketHandlers() {
     wsClient.on('notification', (message) => {
         console.log('Received notification update via WebSocket:', message);
         handleNotificationUpdate(message);
+    });
+
+    // Handle job streaming updates
+    wsClient.on('job', (message) => {
+        if (!message || !message.job_id) {
+            return;
+        }
+        emitJobUpdate(message.job_id, message);
     });
 
     // Subscribe to notifications
@@ -226,10 +283,15 @@ function handleNotificationUpdate(message) {
     if (action === 'created') {
         // New notification created
         console.log('New notification:', data);
-        
+
         // Reload notifications to get the updated list
-        loadNotifications();
-        
+        loadNotifications().then(() => {
+            const overlay = document.getElementById('notifications-overlay');
+            if (overlay && overlay.classList.contains('open') && data?.id && data?.category === 'job') {
+                highlightNotificationItem(data.id);
+            }
+        });
+
         // Optionally show a toast notification
         showNotificationToast(data);
     } else if (action === 'updated') {
@@ -251,13 +313,7 @@ function updateNotificationItem(data) {
     // Update a specific notification in the list
     const notificationItem = document.querySelector(`[data-notification-id="${data.id}"]`);
     if (notificationItem) {
-        if (data.read !== undefined) {
-            if (data.read) {
-                notificationItem.classList.remove('unread');
-            } else {
-                notificationItem.classList.add('unread');
-            }
-        }
+        applyNotificationDataToElement(notificationItem, data);
     }
 }
 
@@ -400,7 +456,7 @@ async function logout() {
 
 async function loadInventory() {
     try {
-        const response = await fetch('/api/v1/inventory', { 
+        const response = await fetch('/api/v1/inventory', {
             credentials: 'same-origin'
         });
         
@@ -442,9 +498,44 @@ async function loadInventory() {
     }
 }
 
+async function openJobDetails(jobId, options = {}) {
+    if (!jobId) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}`, {
+            credentials: 'same-origin'
+        });
+
+        if (!response.ok) {
+            throw new Error(`Job request failed: ${response.status}`);
+        }
+
+        const job = await response.json();
+        const overlayData = {
+            job,
+            jobId,
+            autoSubscribe: options.autoSubscribe !== false
+        };
+
+        await overlayManager.open('job-details', overlayData);
+
+        const overlayInstance = overlayManager.currentOverlay;
+        if (overlayInstance && typeof overlayInstance.attachJobSubscription === 'function' && overlayData.autoSubscribe !== false) {
+            overlayInstance.attachJobSubscription(jobId);
+        }
+    } catch (error) {
+        console.error('Failed to open job details overlay:', error);
+        showError('Failed to load job details. Please try again.');
+    }
+}
+
+window.openJobDetails = openJobDetails;
+
 async function loadNotifications() {
     try {
-        const response = await fetch('/api/v1/notifications', { 
+        const response = await fetch('/api/v1/notifications', {
             credentials: 'same-origin'
         });
         
@@ -486,12 +577,12 @@ async function loadNotifications() {
 // Update the notification panel with real data
 function updateNotificationPanel(notificationsData) {
     const notificationsList = document.querySelector('.notifications-list');
-    
+
     if (!notificationsList || !notificationsData) return;
-    
+
     // Clear existing notifications (remove dummy data)
     notificationsList.innerHTML = '';
-    
+
     if (notificationsData.notifications.length === 0) {
         notificationsList.innerHTML = `
             <div class="notification-item">
@@ -503,62 +594,202 @@ function updateNotificationPanel(notificationsData) {
                 </div>
             </div>
         `;
+        updateNotificationBadge(notificationsData.unread_count || 0);
         return;
     }
-    
+
     // Create notification items
     notificationsData.notifications.forEach(notification => {
         const notificationItem = createNotificationItem(notification);
         notificationsList.appendChild(notificationItem);
     });
-    
+
     // Update notification button badge if there are unread notifications
-    updateNotificationBadge(notificationsData.unread_count);
+    updateNotificationBadge(notificationsData.unread_count || 0);
 }
 
 // Create a notification item element
 function createNotificationItem(notification) {
     const item = document.createElement('div');
-    item.className = `notification-item${notification.read ? '' : ' unread'}`;
+    item.className = 'notification-item';
     item.dataset.notificationId = notification.id;
-    
-    // Get icon based on level and category
-    let icon = '📋'; // default
-    switch (notification.level) {
-        case 'error':
-            icon = '⚠️';
-            break;
-        case 'warning':
-            icon = '🔶';
-            break;
-        case 'success':
-            icon = '✅';
-            break;
-        case 'info':
-            icon = '📋';
-            break;
-    }
-    
-    // Format time ago
-    const timeAgo = formatTimeAgo(new Date(notification.created_at));
-    
     item.innerHTML = `
-        <div class="notification-icon">${icon}</div>
+        <div class="notification-icon"></div>
         <div class="notification-content">
-            <div class="notification-title">${notification.title}</div>
-            <div class="notification-message">${notification.message}</div>
-            <div class="notification-time">${timeAgo}</div>
+            <div class="notification-title-row">
+                <div class="notification-title"></div>
+                <span class="notification-status"></span>
+            </div>
+            <div class="notification-message"></div>
+            <div class="notification-meta">
+                <span class="notification-time"></span>
+                <button class="notification-action" data-role="view-job" type="button">View details</button>
+            </div>
         </div>
     `;
-    
-    // Add click handler to mark as read
+
+    applyNotificationDataToElement(item, notification);
+
+    const actionButton = item.querySelector('[data-role="view-job"]');
+    if (actionButton) {
+        actionButton.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            const current = item._notificationData;
+            const jobId = getJobIdFromNotification(current);
+            if (jobId) {
+                await openJobDetails(jobId);
+            }
+            if (current && !current.read) {
+                await markNotificationAsRead(current.id);
+            }
+        });
+    }
+
     item.addEventListener('click', async () => {
-        if (!notification.read) {
-            await markNotificationAsRead(notification.id);
+        const current = item._notificationData;
+        if (!current) {
+            return;
+        }
+
+        if (current.category === 'job') {
+            const jobId = getJobIdFromNotification(current);
+            if (jobId) {
+                await openJobDetails(jobId);
+            }
+        }
+
+        if (!current.read) {
+            await markNotificationAsRead(current.id);
         }
     });
-    
+
     return item;
+}
+
+function applyNotificationDataToElement(element, notification) {
+    if (!element) {
+        return;
+    }
+
+    const existing = element._notificationData || {};
+    const mergedMetadata = {
+        ...(existing.metadata || {}),
+        ...(notification.metadata || {})
+    };
+
+    const merged = {
+        ...existing,
+        ...notification,
+        metadata: mergedMetadata
+    };
+
+    element._notificationData = merged;
+
+    element.classList.toggle('unread', !merged.read);
+    element.classList.toggle('notification-job', merged.category === 'job');
+
+    const iconEl = element.querySelector('.notification-icon');
+    if (iconEl) {
+        iconEl.textContent = getNotificationIcon(merged);
+    }
+
+    const titleEl = element.querySelector('.notification-title');
+    if (titleEl) {
+        titleEl.textContent = merged.title || '';
+    }
+
+    const messageEl = element.querySelector('.notification-message');
+    if (messageEl) {
+        messageEl.textContent = merged.message || '';
+    }
+
+    const timeEl = element.querySelector('.notification-time');
+    if (timeEl && merged.created_at) {
+        const createdDate = new Date(merged.created_at);
+        timeEl.textContent = Number.isNaN(createdDate.getTime()) ? merged.created_at : formatTimeAgo(createdDate);
+    }
+
+    const statusEl = element.querySelector('.notification-status');
+    if (statusEl) {
+        const status = merged.metadata?.status;
+        if (merged.category === 'job' && status) {
+            statusEl.textContent = formatJobStatus(status);
+            statusEl.className = `notification-status status-${status}`;
+            statusEl.style.display = '';
+        } else {
+            statusEl.textContent = '';
+            statusEl.className = 'notification-status';
+            statusEl.style.display = 'none';
+        }
+    }
+
+    const actionButton = element.querySelector('[data-role="view-job"]');
+    if (actionButton) {
+        if (merged.category === 'job') {
+            actionButton.style.display = '';
+        } else {
+            actionButton.style.display = 'none';
+        }
+    }
+}
+
+function getNotificationIcon(notification) {
+    if (notification.category === 'job') {
+        const status = notification.metadata?.status;
+        switch (status) {
+            case 'running':
+                return '⏳';
+            case 'completed':
+                return '✅';
+            case 'failed':
+                return '❌';
+            case 'pending':
+                return '🗂️';
+            default:
+                return '⚙️';
+        }
+    }
+
+    switch (notification.level) {
+        case 'error':
+            return '⚠️';
+        case 'warning':
+            return '🔶';
+        case 'success':
+            return '✅';
+        case 'info':
+        default:
+            return '📋';
+    }
+}
+
+function getJobIdFromNotification(notification) {
+    if (!notification) {
+        return null;
+    }
+    return notification.metadata?.job_id || notification.related_entity || null;
+}
+
+function highlightNotificationItem(notificationId) {
+    if (!notificationId) {
+        return;
+    }
+
+    const notificationsList = document.querySelector('.notifications-list');
+    if (!notificationsList) {
+        return;
+    }
+
+    const item = notificationsList.querySelector(`[data-notification-id="${notificationId}"]`);
+    if (!item) {
+        return;
+    }
+
+    item.classList.add('highlight');
+    item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    setTimeout(() => {
+        item.classList.remove('highlight');
+    }, 1500);
 }
 
 // Format time ago helper
@@ -568,11 +799,21 @@ function formatTimeAgo(date) {
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMins / 60);
     const diffDays = Math.floor(diffHours / 24);
-    
+
     if (diffMins < 1) return 'Just now';
     if (diffMins < 60) return `${diffMins} minute${diffMins === 1 ? '' : 's'} ago`;
     if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
     return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+}
+
+function formatJobStatus(status) {
+    const mapping = {
+        pending: 'Queued',
+        running: 'Running',
+        completed: 'Completed',
+        failed: 'Failed'
+    };
+    return mapping[status] || (status ? status.charAt(0).toUpperCase() + status.slice(1) : '');
 }
 
 // Mark notification as read
@@ -965,13 +1206,18 @@ async function toggleNotifications() {
     }
 }
 
-async function openNotifications() {
+async function openNotifications(options = {}) {
     const overlay = document.getElementById('notifications-overlay');
     if (overlay) {
         overlay.classList.add('open');
         // Load notifications when panel is opened
-        await loadNotifications();
+        const data = await loadNotifications();
+        if (options.highlightId) {
+            requestAnimationFrame(() => highlightNotificationItem(options.highlightId));
+        }
+        return data;
     }
+    return null;
 }
 
 function closeNotifications() {

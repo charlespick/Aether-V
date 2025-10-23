@@ -74,6 +74,7 @@ class Notification(BaseModel):
     created_at: datetime
     read: bool = False
     related_entity: Optional[str] = None  # Host name, VM name, Job ID, etc.
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class VM(BaseModel):
@@ -107,6 +108,7 @@ class Job(BaseModel):
     parameters: Dict[str, Any]
     output: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+    notification_id: Optional[str] = None
 
 
 class InventoryResponse(BaseModel):
