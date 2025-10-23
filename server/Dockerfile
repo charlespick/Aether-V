@@ -25,7 +25,41 @@ RUN apt-get update && \
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 3: Application
+# Stage 3: Collect agent artifacts (scripts, ISOs, version)
+FROM base AS agent-artifacts
+
+WORKDIR /src
+
+# Copy required artifact sources from the repository
+COPY Powershell/ ./Powershell/
+COPY version ./version
+COPY ISOs/ ./ISOs/
+
+RUN set -eux; \
+    mkdir -p /artifacts; \
+    if [ ! -f ./version ]; then \
+        echo "Missing version file in repository root" >&2; \
+        exit 1; \
+    fi; \
+    cp ./version /artifacts/version; \
+    script_count="$(find ./Powershell -maxdepth 1 -type f -name '*.ps1' | wc -l | tr -d '[:space:]')"; \
+    if [ "${script_count}" -eq 0 ]; then \
+        echo "No PowerShell scripts found in Powershell/." >&2; \
+        exit 1; \
+    fi; \
+    find ./Powershell -maxdepth 1 -type f -name '*.ps1' -exec cp {} /artifacts/ \;; \
+    if [ ! -d ./ISOs ]; then \
+        echo "Missing ISOs directory. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
+        exit 1; \
+    fi; \
+    iso_count="$(find ./ISOs -maxdepth 1 -type f -name '*.iso' | wc -l | tr -d '[:space:]')"; \
+    if [ "${iso_count}" -eq 0 ]; then \
+        echo "No ISO artifacts found in ISOs/. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
+        exit 1; \
+    fi; \
+    find ./ISOs -maxdepth 1 -type f -name '*.iso' -exec cp {} /artifacts/ \;
+
+# Stage 4: Application
 FROM base AS application
 
 # Copy Python dependencies from previous stage
@@ -35,18 +69,11 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 # Copy application code
 COPY server/app /app/app
 
-# Create directories for ISO and script storage
-RUN mkdir -p /app/artifacts/isos /app/artifacts/scripts
+# Prepare unified agent artifact directory
+RUN mkdir -p /app/agent
 
-# Copy pre-built ISOs (built by GitHub Actions)
-COPY ISOs/WindowsProvisioning.iso /app/artifacts/isos/
-COPY ISOs/LinuxProvisioning.iso /app/artifacts/isos/
-
-# Copy PowerShell scripts for deployment to hosts
-COPY Powershell /app/artifacts/scripts/
-
-# Copy version file
-COPY version /app/artifacts/version
+# Copy the curated agent artifacts (scripts, ISOs, version)
+COPY --from=agent-artifacts /artifacts/ /app/agent/
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \

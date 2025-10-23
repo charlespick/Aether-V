@@ -1,6 +1,8 @@
 """Configuration management using Pydantic settings."""
-from pydantic_settings import BaseSettings
 from typing import List, Optional, TYPE_CHECKING
+
+from pydantic import AnyHttpUrl
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -62,23 +64,23 @@ class Settings(BaseSettings):
     # Host deployment settings
     host_install_directory: str = "C:\\Program Files\\Home Lab Virtual Machine Manager"
 
-    # Artifact paths (ISOs and scripts bundled in container)
-    artifacts_base_path: str = "/app/artifacts"
+    # Agent artifact settings
+    agent_artifacts_path: str = "/app/agent"
+    agent_http_mount_path: str = "/agent"
+    agent_download_base_url: Optional[AnyHttpUrl] = None
 
-    @property
-    def iso_path(self) -> str:
-        """Get path to ISOs in container."""
-        return f"{self.artifacts_base_path}/isos"
+    def get_agent_download_base_url(self) -> Optional[str]:
+        """Return the configured agent download base URL if provided."""
 
-    @property
-    def script_path(self) -> str:
-        """Get path to scripts in container."""
-        return f"{self.artifacts_base_path}/scripts"
+        if not self.agent_download_base_url:
+            return None
+
+        return str(self.agent_download_base_url).rstrip("/")
 
     @property
     def version_file_path(self) -> str:
         """Get path to version file in container."""
-        return f"{self.artifacts_base_path}/version"
+        return f"{self.agent_artifacts_path}/version"
 
     class Config:
         env_file = ".env"

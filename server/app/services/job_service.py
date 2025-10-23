@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Dict, Optional, List
 from queue import Queue
 from threading import Thread
+from pathlib import PureWindowsPath
 
 from ..core.models import Job, JobStatus, VMCreateRequest, VMDeleteRequest, OSFamily
 from ..core.config import settings
@@ -80,12 +81,14 @@ class JobService:
         """Execute VM creation job (mirrors Ansible Provisioning.yaml)."""
         params = job.parameters
         hostname = job.target_host
-        
+
         # Determine OS family from image name
         image_name = params["image_name"]
         os_family = self._determine_os_family(image_name)
         job.output.append(f"Detected OS family: {os_family}")
-        
+
+        script_base = PureWindowsPath(settings.host_install_directory)
+
         # Clear invalid parameters based on OS
         if os_family == "linux":
             # Clear domain join for Linux
@@ -104,7 +107,7 @@ class JobService:
         
         # Step 1: Copy Image
         job.output.append("Step 1: Copying image...")
-        script_path = "C:\\Program Files\\Home Lab Virtual Machine Manager\\CopyImage.ps1"
+        script_path = str(script_base / "CopyImage.ps1")
         copy_params = {
             "VMName": params["vm_name"],
             "ImageName": params["image_name"]
@@ -119,7 +122,7 @@ class JobService:
         
         # Step 2: Copy Provisioning ISO
         job.output.append("Step 2: Copying provisioning ISO...")
-        script_path = "C:\\Program Files\\Home Lab Virtual Machine Manager\\CopyProvisioningISO.ps1"
+        script_path = str(script_base / "CopyProvisioningISO.ps1")
         iso_params = {
             "OSFamily": os_family,
             "VMDataFolder": vm_data_folder
@@ -133,7 +136,7 @@ class JobService:
         
         # Step 3: Register VM
         job.output.append("Step 3: Registering VM...")
-        script_path = "C:\\Program Files\\Home Lab Virtual Machine Manager\\RegisterVM.ps1"
+        script_path = str(script_base / "RegisterVM.ps1")
         register_params = {
             "OSFamily": os_family,
             "GBRam": params["gb_ram"],
@@ -152,7 +155,7 @@ class JobService:
         
         # Step 4: Wait for provisioning to start
         job.output.append("Step 4: Waiting for VM to signal provisioning readiness...")
-        script_path = "C:\\Program Files\\Home Lab Virtual Machine Manager\\WaitForProvisioningKey.ps1"
+        script_path = str(script_base / "WaitForProvisioningKey.ps1")
         wait_params = {
             "VMName": params["vm_name"]
         }
@@ -165,7 +168,7 @@ class JobService:
         
         # Step 5: Publish provisioning data
         job.output.append("Step 5: Publishing provisioning data to VM...")
-        script_path = "C:\\Program Files\\Home Lab Virtual Machine Manager\\PublishProvisioningData.ps1"
+        script_path = str(script_base / "PublishProvisioningData.ps1")
         publish_params = {
             "GuestHostName": params["vm_name"],
             "GuestLaUid": params["guest_la_uid"]

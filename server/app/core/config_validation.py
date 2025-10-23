@@ -133,6 +133,13 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             "Provide SESSION_SECRET_KEY to persist authenticated sessions across restarts.",
         )
 
+    if not settings.get_agent_download_base_url():
+        _warn(
+            result,
+            "AGENT_DOWNLOAD_BASE_URL is not configured; host deployments will be disabled.",
+            "Set AGENT_DOWNLOAD_BASE_URL to the externally reachable base URL that serves the /agent payloads.",
+        )
+
     # Hyper-V hosts - warn when empty.
     if not settings.get_hyperv_hosts_list():
         _warn(

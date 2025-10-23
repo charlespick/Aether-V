@@ -34,8 +34,8 @@ defaults shown below match `server/app/core/config.py`.
 | `WEBSOCKET_PING_INTERVAL` | `30` | Heartbeat ping interval in seconds. | Align with load balancer expectations. |
 | `WEBSOCKET_REFRESH_TIME` | `1500` | Client reconnect hint (seconds). | Default is 25 minutes. |
 | `HOST_INSTALL_DIRECTORY` | `C:\\Program Files\\Home Lab Virtual Machine Manager` | Remote path used when deploying assets to Hyper-V hosts. | Customize for parallel or test installations. |
+| `AGENT_DOWNLOAD_BASE_URL` | _required_ | External HTTP base URL Hyper-V hosts use to download agent artifacts. | Should match the service URL exposed to hosts, e.g., `https://aetherv.example.com/agent`. |
 | `DUMMY_DATA` | `false` | Enable mock inventory data. | Useful for UI demos without real hosts. |
-| `ARTIFACTS_BASE_PATH` | `/app/artifacts` | Container path for bundled ISOs/scripts. | Typically left at the default. |
 
 ## Secret settings
 

@@ -172,6 +172,12 @@ class InventoryService:
             logger.warning("No Hyper-V hosts configured")
             return
 
+        if not host_deployment_service.is_enabled:
+            logger.warning(
+                "Host deployment service is disabled; skipping artifact deployment to hosts"
+            )
+            return
+
         container_version = host_deployment_service.get_container_version()
         logger.info(f"Container version: {container_version}")
 

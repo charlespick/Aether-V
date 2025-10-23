@@ -10,6 +10,9 @@ The Aether-V service automatically deploys PowerShell scripts and provisioning I
 
 The `HOST_INSTALL_DIRECTORY` environment variable controls where scripts and ISOs are deployed on Hyper-V hosts.
 
+Hosts download those artifacts from the HTTP endpoint defined by `AGENT_DOWNLOAD_BASE_URL`. This value must point to the public
+URL (including scheme and the `/agent` mount path) that Hyper-V hosts can reach.
+
 **Default Location:**
 ```
 C:\Program Files\Home Lab Virtual Machine Manager
@@ -57,7 +60,7 @@ HOST_INSTALL_DIRECTORY=\\FileServer\Share\HLVMM
 
 When the service starts, it:
 
-1. **Reads Container Version**: Loads version from `/app/artifacts/version` in the container
+1. **Reads Container Version**: Loads version from `/app/agent/version` in the container
 2. **Connects to Hosts**: Establishes WinRM connections to all configured Hyper-V hosts
 3. **Checks Host Versions**: For each host, reads `{HOST_INSTALL_DIRECTORY}\version`
 4. **Deploys if Needed**: If version mismatch detected:
@@ -95,14 +98,14 @@ The service uses a single version file for all components:
 
 ### File Transfer Mechanism
 
-Files are transferred via WinRM using base64 encoding:
+Files are downloaded directly over HTTP from the orchestrator's built-in web server:
 
-1. Service reads file from container
-2. Encodes content to base64
-3. Sends chunks via PowerShell commands over WinRM
-4. Host decodes and writes to destination
+1. Service enumerates artifacts under `/app/agent`
+2. Builds download URLs from `AGENT_DOWNLOAD_BASE_URL`
+3. Executes `Invoke-WebRequest` on the host to fetch each file into `{HOST_INSTALL_DIRECTORY}`
 
-This approach works reliably across different WinRM transports (NTLM, Basic, CredSSP).
+This approach keeps host deployments lightweight, avoids large WinRM payloads, and automatically includes new scripts or ISOs
+added to the agent directory at build time.
 
 ## Historical Context: Legacy Installation Process
 

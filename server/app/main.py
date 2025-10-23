@@ -95,6 +95,11 @@ app = FastAPI(
 )
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.mount(
+    settings.agent_http_mount_path,
+    StaticFiles(directory=settings.agent_artifacts_path, html=False),
+    name="agent",
+)
 
 # Add security headers and audit logging middleware
 
