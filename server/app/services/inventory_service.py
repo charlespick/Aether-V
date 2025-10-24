@@ -34,10 +34,12 @@ class InventoryService:
             logger.info("DUMMY_DATA enabled - using development data")
             await self._initialize_dummy_data()
         else:
-            # Deploy artifacts to hosts first
-            await self._deploy_artifacts_to_hosts()
+            if host_deployment_service.is_startup_in_progress():
+                logger.info(
+                    "Host agent deployment running in background; continuing inventory startup"
+                )
 
-            # Then refresh inventory
+            # Refresh inventory without waiting for agent deployment to finish
             await self.refresh_inventory()
 
         # Start background refresh task

@@ -4,6 +4,127 @@ window.appConfig = configData;
 window.jobSchema = configData.job_schema || null;
 const authEnabled = configData.auth_enabled;
 
+const defaultAgentDeploymentState = {
+    status: 'idle',
+    provisioning_available: true,
+    total_hosts: 0,
+    completed_hosts: 0,
+    successful_hosts: 0,
+    failed_hosts: 0,
+    level: 'info',
+    message: '',
+    per_host: {},
+};
+
+function describeAgentDeploymentState(state) {
+    const total = state.total_hosts ?? 0;
+    const completed = state.completed_hosts ?? 0;
+    const failed = state.failed_hosts ?? 0;
+    const status = (state.status || '').toLowerCase();
+
+    if (status === 'running') {
+        let summary = `Provisioning agents deploying (${completed}/${total} complete)`;
+        if (failed) {
+            summary += `, ${failed} failed`;
+        }
+        return `${summary}. VM provisioning is temporarily unavailable.`;
+    }
+
+    if (status === 'failed') {
+        let summary = `Provisioning agent deployment completed with ${failed} failure(s).`;
+        if (failed === 0) {
+            summary = 'Provisioning agent deployment did not complete successfully.';
+        }
+        return `${summary} VM provisioning may be unavailable on affected hosts.`;
+    }
+
+    if (status === 'successful') {
+        return 'Provisioning agents are ready on all hosts. VM provisioning is available.';
+    }
+
+    if (status === 'skipped') {
+        return 'Provisioning agents are already up to date.';
+    }
+
+    return 'Provisioning agent status unknown.';
+}
+
+function normalizeAgentDeploymentState(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return { ...defaultAgentDeploymentState };
+    }
+
+    const metadata = raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : raw;
+    const status = String(metadata.status || raw.status || 'idle').toLowerCase();
+    const provisioningAvailable = metadata.provisioning_available !== false;
+
+    const normalized = {
+        status,
+        provisioning_available: provisioningAvailable,
+        total_hosts: Number(metadata.total_hosts ?? raw.total_hosts ?? 0),
+        completed_hosts: Number(metadata.completed_hosts ?? raw.completed_hosts ?? 0),
+        successful_hosts: Number(metadata.successful_hosts ?? raw.successful_hosts ?? 0),
+        failed_hosts: Number(metadata.failed_hosts ?? raw.failed_hosts ?? 0),
+        level: String(raw.level || metadata.level || 'info').toLowerCase(),
+        per_host: metadata.per_host || raw.per_host || {},
+    };
+
+    const explicitMessage = raw.message || metadata.message;
+    normalized.message = explicitMessage || describeAgentDeploymentState(normalized);
+
+    return normalized;
+}
+
+function applyProvisioningAvailability(state) {
+    const current = state || window.agentDeploymentState || defaultAgentDeploymentState;
+    const disabled = !current.provisioning_available;
+    const reason = current.message || describeAgentDeploymentState(current);
+
+    const quickAction = document.querySelector('[data-action="open-provision"]');
+    if (quickAction) {
+        quickAction.title = reason;
+        quickAction.classList.toggle('disabled', disabled);
+    }
+
+    const submitBtn = document.getElementById('provision-job-submit');
+    if (submitBtn) {
+        if (disabled) {
+            submitBtn.setAttribute('disabled', 'disabled');
+            submitBtn.classList.add('disabled');
+            submitBtn.title = reason;
+        } else {
+            submitBtn.removeAttribute('disabled');
+            submitBtn.classList.remove('disabled');
+            submitBtn.removeAttribute('title');
+        }
+    }
+
+    const messageEl = document.getElementById('provision-job-messages');
+    if (messageEl) {
+        messageEl.classList.remove('error', 'success');
+        if (disabled) {
+            messageEl.classList.add('info');
+            messageEl.innerHTML = reason;
+        } else if (messageEl.classList.contains('info')) {
+            messageEl.classList.remove('info');
+            messageEl.innerHTML = '';
+        }
+    }
+}
+
+function updateAgentDeploymentState(nextState) {
+    const normalized = normalizeAgentDeploymentState(nextState);
+    window.agentDeploymentState = normalized;
+    applyProvisioningAvailability(normalized);
+    document.dispatchEvent(new CustomEvent('agentDeploymentStateChanged', { detail: normalized }));
+    return normalized;
+}
+
+window.applyProvisioningAvailability = applyProvisioningAvailability;
+window.updateAgentDeploymentState = updateAgentDeploymentState;
+
+updateAgentDeploymentState(configData.agent_deployment || defaultAgentDeploymentState);
+
 // Authentication state
 let userInfo = null;
 let authCheckInProgress = false;
@@ -99,6 +220,10 @@ function setupWebSocketHandlers() {
                 unread_count: data.unread_count || 0,
                 total_count: data.notifications.length
             });
+            const agentNotification = findAgentDeploymentNotification(data.notifications);
+            if (agentNotification) {
+                updateAgentDeploymentState(agentNotification);
+            }
         }
     });
 
@@ -321,9 +446,13 @@ function handleNotificationUpdate(message) {
     } else if (action === 'updated') {
         // Notification updated (e.g., marked as read)
         console.log('Notification updated:', data);
-        
+
         // Update the UI without full reload
         updateNotificationItem(data);
+    }
+
+    if (data && data.related_entity === 'agent-deployment') {
+        updateAgentDeploymentState(data);
     }
 }
 
@@ -588,6 +717,14 @@ async function loadNotifications() {
         
         // Update notification panel
         updateNotificationPanel(data);
+
+        const agentNotification = findAgentDeploymentNotification(data.notifications);
+        if (agentNotification) {
+            updateAgentDeploymentState(agentNotification);
+        } else if (window.agentDeploymentState && window.agentDeploymentState.status === 'running') {
+            // Ensure UI reflects absence of notification updates when deployment ends
+            applyProvisioningAvailability(window.agentDeploymentState);
+        }
         
         return data;
         
@@ -596,6 +733,21 @@ async function loadNotifications() {
         showError('Failed to load notifications: ' + error.message);
         return null;
     }
+}
+
+function findAgentDeploymentNotification(notifications) {
+    if (!Array.isArray(notifications)) {
+        return null;
+    }
+
+    return (
+        notifications.find(
+            (notification) =>
+                notification &&
+                notification.category === 'system' &&
+                notification.related_entity === 'agent-deployment'
+        ) || null
+    );
 }
 
 // Update the notification panel with real data

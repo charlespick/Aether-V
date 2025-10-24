@@ -30,7 +30,7 @@ class JobService:
         self.job_notifications: Dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._queue: Optional[asyncio.Queue[Optional[str]]] = None
-        self._worker_task: Optional[asyncio.Task[None]] = None
+        self._worker_tasks: List[asyncio.Task[None]] = []
         self._started = False
 
     async def start(self) -> None:
@@ -40,9 +40,12 @@ class JobService:
             return
 
         self._queue = asyncio.Queue()
-        self._worker_task = asyncio.create_task(self._worker())
+        concurrency = max(1, settings.job_worker_concurrency)
+        self._worker_tasks = [asyncio.create_task(self._worker()) for _ in range(concurrency)]
         self._started = True
-        logger.info("Job service initialised (schema-driven queue)")
+        logger.info(
+            "Job service initialised (schema-driven queue, concurrency=%d)", concurrency
+        )
 
     async def stop(self) -> None:
         """Stop the job queue worker."""
@@ -51,12 +54,14 @@ class JobService:
             return
 
         assert self._queue is not None
-        await self._queue.put(None)
-        if self._worker_task is not None:
+        for _ in range(len(self._worker_tasks) or 1):
+            await self._queue.put(None)
+        for task in self._worker_tasks:
             try:
-                await self._worker_task
-            finally:
-                self._worker_task = None
+                await task
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Job worker terminated with exception")
+        self._worker_tasks = []
 
         self._queue = None
         self._started = False

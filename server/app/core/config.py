@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Inventory settings
     inventory_refresh_interval: int = 60  # seconds
 
+    # Job execution settings
+    job_worker_concurrency: int = 3  # Maximum concurrent provisioning jobs
+
     # WebSocket settings
     # WebSocket connection timeout in seconds (30 minutes)
     websocket_timeout: int = 1800
@@ -63,6 +66,7 @@ class Settings(BaseSettings):
 
     # Host deployment settings
     host_install_directory: str = "C:\\Program Files\\Home Lab Virtual Machine Manager"
+    agent_startup_concurrency: int = 4  # Parallel host deployments during startup
 
     # Agent artifact settings
     agent_artifacts_path: str = "/app/agent"

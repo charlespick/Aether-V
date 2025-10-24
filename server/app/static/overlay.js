@@ -246,6 +246,16 @@ class SettingsOverlay extends BaseOverlay {
 }
 
 class ProvisionJobOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.schema = this.resolveInitialSchema();
+        this.hosts = [];
+        this.rootEl = null;
+        this.formEl = null;
+        this.messagesEl = null;
+        this.stateListener = null;
+    }
+
     resolveInitialSchema() {
         const sources = [
             () => this.data?.schema,
@@ -280,8 +290,6 @@ class ProvisionJobOverlay extends BaseOverlay {
     }
 
     init() {
-        this.schema = this.resolveInitialSchema();
-        this.hosts = [];
         this.rootEl = document.getElementById('provision-job-root');
         if (!this.rootEl) {
             console.error('Provision job root element missing');
@@ -292,7 +300,11 @@ class ProvisionJobOverlay extends BaseOverlay {
             <div class="form-loading">Loading schema...</div>
         `;
 
+        this.stateListener = (event) => this.applyAvailability(event.detail);
+        document.addEventListener('agentDeploymentStateChanged', this.stateListener);
+
         this.prepareForm();
+        this.applyAvailability(window.agentDeploymentState);
     }
 
     async prepareForm() {
@@ -366,6 +378,8 @@ class ProvisionJobOverlay extends BaseOverlay {
 
         cancelBtn?.addEventListener('click', () => overlayManager.close());
         this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+
+        this.applyAvailability(window.agentDeploymentState);
     }
 
     buildParameterSetMap() {
@@ -593,6 +607,12 @@ class ProvisionJobOverlay extends BaseOverlay {
         submitBtn?.setAttribute('disabled', 'disabled');
         this.showMessage('', '');
 
+        const deploymentState = window.agentDeploymentState;
+        if (deploymentState && !deploymentState.provisioning_available) {
+            this.applyAvailability(deploymentState);
+            return;
+        }
+
         if (!this.hosts.length) {
             this.showMessage('No connected hosts are available for provisioning.', 'error');
             submitBtn?.removeAttribute('disabled');
@@ -630,24 +650,34 @@ class ProvisionJobOverlay extends BaseOverlay {
 
             if (!response.ok) {
                 const error = await response.json().catch(() => ({}));
+                if (error?.agent_deployment) {
+                    updateAgentDeploymentState(error.agent_deployment);
+                }
                 const errorMessages = this.extractErrorMessages(error);
                 this.showMessage(errorMessages.join('<br>') || 'Failed to submit job.', 'error');
+                this.applyAvailability(window.agentDeploymentState);
                 return;
             }
 
             const job = await response.json();
-            this.showMessage(`Job ${job.job_id} queued successfully.`, 'success');
-
-            const highlightId = job.notification_id;
-            setTimeout(() => {
-                overlayManager.close();
-                openNotifications({ highlightId });
-            }, 600);
+            overlayManager.close();
+            if (typeof showNotificationToast === 'function') {
+                showNotificationToast({
+                    title: 'Job queued',
+                    message: `Job ${job.job_id} queued successfully.`,
+                });
+            }
+            loadNotifications().catch((refreshError) => {
+                console.error('Failed to refresh notifications after job submission:', refreshError);
+            });
         } catch (error) {
             console.error('Failed to submit provisioning job:', error);
             this.showMessage('Unexpected error submitting job.', 'error');
+            this.applyAvailability(window.agentDeploymentState);
         } finally {
-            submitBtn?.removeAttribute('disabled');
+            if (window.agentDeploymentState?.provisioning_available !== false) {
+                submitBtn?.removeAttribute('disabled');
+            }
         }
     }
 
@@ -709,7 +739,7 @@ class ProvisionJobOverlay extends BaseOverlay {
             return;
         }
 
-        this.messagesEl.classList.remove('error', 'success');
+        this.messagesEl.classList.remove('error', 'success', 'info');
         if (!message) {
             this.messagesEl.innerHTML = '';
             return;
@@ -721,8 +751,24 @@ class ProvisionJobOverlay extends BaseOverlay {
         if (level === 'success') {
             this.messagesEl.classList.add('success');
         }
+        if (level === 'info') {
+            this.messagesEl.classList.add('info');
+        }
 
         this.messagesEl.innerHTML = message;
+    }
+
+    applyAvailability(state) {
+        if (typeof window.applyProvisioningAvailability === 'function') {
+            window.applyProvisioningAvailability(state || window.agentDeploymentState);
+        }
+    }
+
+    cleanup() {
+        if (this.stateListener) {
+            document.removeEventListener('agentDeploymentStateChanged', this.stateListener);
+            this.stateListener = null;
+        }
     }
 }
 
