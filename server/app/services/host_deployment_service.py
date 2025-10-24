@@ -6,6 +6,8 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
+from winrm.exceptions import InvalidCredentialsError, WinRMTransportError
+
 from ..core.config import settings
 from ..core.models import NotificationLevel
 from .notification_service import notification_service
@@ -138,12 +140,28 @@ class HostDeploymentService:
         
         try:
             stdout, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
-            
+
             if exit_code == 0 and stdout.strip():
                 return stdout.strip()
             else:
                 # Version file doesn't exist, return 0.0.0
                 return "0.0.0"
+        except InvalidCredentialsError as exc:
+            winrm_service.close_session(hostname)
+            logger.error(
+                "Authentication failed while retrieving agent version for %s: %s",
+                hostname,
+                exc,
+            )
+            raise
+        except WinRMTransportError as exc:
+            winrm_service.close_session(hostname)
+            logger.error(
+                "WinRM transport error while retrieving agent version for %s: %s",
+                hostname,
+                exc,
+            )
+            raise
         except Exception as e:
             logger.warning(f"Failed to get host version for {hostname}: {e}")
             return "0.0.0"
