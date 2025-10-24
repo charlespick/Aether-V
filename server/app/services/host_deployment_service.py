@@ -1,6 +1,7 @@
 """Service for deploying scripts and ISOs to Hyper-V hosts."""
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -471,13 +472,48 @@ class HostDeploymentService:
 
         logger.info(f"Downloading {artifact_name} to {hostname}:{remote_path} from {download_url}")
 
-        _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
+        max_attempts = max(1, settings.agent_download_max_attempts)
+        retry_interval = max(0.0, settings.agent_download_retry_interval)
 
-        if exit_code != 0:
-            logger.error(f"Failed to download {artifact_name} to {hostname}: {stderr}")
-            return False
+        for attempt in range(1, max_attempts + 1):
+            _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
 
-        return True
+            if exit_code == 0:
+                if attempt > 1:
+                    logger.info(
+                        "Download of %s to %s succeeded on attempt %d/%d",
+                        artifact_name,
+                        hostname,
+                        attempt,
+                        max_attempts,
+                    )
+                return True
+
+            logger.warning(
+                "Attempt %d/%d failed to download %s to %s: %s",
+                attempt,
+                max_attempts,
+                artifact_name,
+                hostname,
+                stderr.strip() or f"exit code {exit_code}",
+            )
+
+            if attempt < max_attempts and retry_interval:
+                logger.info(
+                    "Retrying download of %s to %s in %.1f seconds",
+                    artifact_name,
+                    hostname,
+                    retry_interval,
+                )
+                time.sleep(retry_interval)
+
+        logger.error(
+            "Failed to download %s to %s after %d attempt(s)",
+            artifact_name,
+            hostname,
+            max_attempts,
+        )
+        return False
 
     def _build_download_url(self, artifact_name: str) -> str:
         """Build a download URL for an artifact exposed by the FastAPI static mount."""

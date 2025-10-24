@@ -173,6 +173,7 @@ Before service integration, host setup required manual execution of installation
 **Solutions:**
 - Ensure you are running a container version that reports the transitional readiness statuses described above.
 - If 503 responses persist, verify ingress routing for the agent download path and confirm the orchestrator pod is healthy.
+- The orchestrator automatically retries failed artifact downloads up to `AGENT_DOWNLOAD_MAX_ATTEMPTS` times with a pause of `AGENT_DOWNLOAD_RETRY_INTERVAL` seconds between attempts, so transient ingress warm-up delays are handled automatically.
 
 ### Files Not Accessible to VMs
 

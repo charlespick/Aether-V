@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     agent_artifacts_path: str = "/app/agent"
     agent_http_mount_path: str = "/agent"
     agent_download_base_url: Optional[AnyHttpUrl] = None
+    agent_download_max_attempts: int = 5
+    agent_download_retry_interval: float = 2.0  # seconds between retries
 
     def get_agent_download_base_url(self) -> Optional[str]:
         """Return the configured agent download base URL if provided."""
