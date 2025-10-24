@@ -14,6 +14,7 @@ from .core.config import settings, get_config_validation_result, set_session_sec
 from .core.config_validation import run_config_checks
 from .api.routes import router
 from .services.inventory_service import inventory_service
+from .services.host_deployment_service import host_deployment_service
 from .services.job_service import job_service
 from .services.notification_service import notification_service
 from .services.websocket_service import websocket_manager
@@ -67,6 +68,10 @@ async def lifespan(app: FastAPI):
     notification_service.set_websocket_manager(websocket_manager)
 
     notification_service.publish_startup_configuration_result(config_result)
+
+    await host_deployment_service.start_startup_deployment(
+        settings.get_hyperv_hosts_list()
+    )
 
     if not config_result.has_errors:
         await job_service.start()
@@ -250,6 +255,7 @@ async def root(request: Request):
                     # Convert to milliseconds
                     "websocket_ping_interval": settings.websocket_ping_interval * 1000,
                     "job_schema": get_job_schema(),
+                    "agent_deployment": host_deployment_service.get_startup_summary(),
                 },
             )
 

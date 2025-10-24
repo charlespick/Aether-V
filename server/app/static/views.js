@@ -44,6 +44,10 @@ class ViewManager {
 
         // Update navigation active state
         this.updateNavigation(viewName);
+
+        if (typeof window.applyProvisioningAvailability === 'function') {
+            window.applyProvisioningAvailability(window.agentDeploymentState);
+        }
     }
 
     updateNavigation(viewName) {
@@ -173,7 +177,7 @@ class OverviewView extends BaseView {
                     <h2>Quick Actions</h2>
                 </div>
                 <div class="quick-actions">
-                    <button class="action-btn" onclick="overlayManager.open('provision-job')">
+                    <button class="action-btn" data-action="open-provision" onclick="overlayManager.open('provision-job')">
                         <span class="action-icon">🆕</span>
                         <span>Create VM</span>
                     </button>

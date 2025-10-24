@@ -21,6 +21,7 @@ from ..core.job_schema import (
 )
 from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
+from ..services.host_deployment_service import host_deployment_service
 from ..services.notification_service import notification_service
 from ..services.websocket_service import websocket_manager
 
@@ -148,6 +149,16 @@ async def submit_provisioning_job(
         validated_values = validate_job_submission(submission.values, schema)
     except SchemaValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": exc.errors})
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. VM provisioning is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
 
     target_host = (submission.target_host or "").strip()
     if not target_host:

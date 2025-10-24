@@ -27,6 +27,7 @@ class NotificationService:
         self._initialized = False
         self._websocket_manager = None
         self._startup_config_notified = False
+        self._agent_notification_key = "agent-deployment"
 
     def set_websocket_manager(self, manager):
         """Set the WebSocket manager for broadcasting notifications."""
@@ -211,6 +212,65 @@ class NotificationService:
         self._schedule_broadcast(notification, action='created')
 
         return notification
+
+    def upsert_agent_deployment_notification(
+        self,
+        *,
+        status: str,
+        message: str,
+        level: NotificationLevel,
+        provisioning_available: bool,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Notification]:
+        """Create or update the persistent agent deployment notification."""
+
+        if not self._initialized:
+            logger.warning(
+                "Notification service not initialized, skipping agent deployment notification update",
+            )
+            return None
+
+        agent_metadata = {
+            "status": status,
+            "provisioning_available": provisioning_available,
+        }
+        if metadata:
+            agent_metadata.update(metadata)
+
+        existing = next(
+            (
+                notification
+                for notification in self.notifications.values()
+                if notification.category == NotificationCategory.SYSTEM
+                and notification.related_entity == self._agent_notification_key
+            ),
+            None,
+        )
+
+        title = {
+            "running": "Provisioning agents deploying",
+            "successful": "Provisioning agents ready",
+            "failed": "Provisioning agents encountered errors",
+            "skipped": "Provisioning agents up-to-date",
+        }.get(status, "Provisioning agents update")
+
+        if existing:
+            return self.update_notification(
+                existing.id,
+                title=title,
+                message=message,
+                level=level,
+                metadata={**existing.metadata, **agent_metadata},
+            )
+
+        return self.create_notification(
+            title=title,
+            message=message,
+            level=level,
+            category=NotificationCategory.SYSTEM,
+            related_entity=self._agent_notification_key,
+            metadata=agent_metadata,
+        )
 
     def _schedule_broadcast(self, notification: Notification, action: str = 'updated') -> None:
         if not self._websocket_manager:

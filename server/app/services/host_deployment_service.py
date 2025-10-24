@@ -1,23 +1,69 @@
 """Service for deploying scripts and ISOs to Hyper-V hosts."""
+import asyncio
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 from ..core.config import settings
+from ..core.models import NotificationLevel
+from .notification_service import notification_service
 from .winrm_service import winrm_service
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class StartupDeploymentProgress:
+    """Track aggregate progress of the startup agent deployment."""
+
+    status: str = "idle"
+    total_hosts: int = 0
+    completed_hosts: int = 0
+    successful_hosts: int = 0
+    failed_hosts: int = 0
+    provisioning_available: bool = True
+    last_error: Optional[str] = None
+    per_host: Dict[str, str] = field(default_factory=dict)
+
+    def copy(self) -> "StartupDeploymentProgress":
+        return StartupDeploymentProgress(
+            status=self.status,
+            total_hosts=self.total_hosts,
+            completed_hosts=self.completed_hosts,
+            successful_hosts=self.successful_hosts,
+            failed_hosts=self.failed_hosts,
+            provisioning_available=self.provisioning_available,
+            last_error=self.last_error,
+            per_host=dict(self.per_host),
+        )
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "total_hosts": self.total_hosts,
+            "completed_hosts": self.completed_hosts,
+            "successful_hosts": self.successful_hosts,
+            "failed_hosts": self.failed_hosts,
+            "provisioning_available": self.provisioning_available,
+            "last_error": self.last_error,
+            "per_host": dict(self.per_host),
+        }
+
 
 class HostDeploymentService:
     """Service for deploying artifacts (scripts and ISOs) to Hyper-V hosts."""
-    
+
     def __init__(self):
         self._container_version: str = ""
         self._agent_download_base_url: Optional[str] = None
         self._deployment_enabled = self._initialize_agent_download_base_url()
         self._load_container_version()
+        self._startup_task: Optional[asyncio.Task[None]] = None
+        self._startup_event: Optional[asyncio.Event] = None
+        self._startup_progress = StartupDeploymentProgress()
+        self._startup_lock = asyncio.Lock()
+        self._progress_lock = asyncio.Lock()
 
     def _initialize_agent_download_base_url(self) -> bool:
         """Resolve and cache the agent download base URL if configured."""
@@ -65,19 +111,21 @@ class HostDeploymentService:
             True if setup successful, False otherwise
         """
         logger.info(f"Ensuring host setup for {hostname}")
-        
+
         try:
-            # Check host version
-            host_version = self._get_host_version(hostname)
+            # Check host version in a worker thread because it performs network I/O
+            host_version = await asyncio.to_thread(self._get_host_version, hostname)
             logger.info(f"Host {hostname} version: {host_version}")
-            
+
             if self._needs_update(host_version):
-                logger.info(f"Host {hostname} needs update from {host_version} to {self._container_version}")
-                return await self._deploy_to_host(hostname)
-            else:
-                logger.info(f"Host {hostname} is up-to-date")
-                return True
-                
+                logger.info(
+                    f"Host {hostname} needs update from {host_version} to {self._container_version}"
+                )
+                return await asyncio.to_thread(self._deploy_to_host, hostname)
+
+            logger.info(f"Host {hostname} is up-to-date")
+            return True
+
         except Exception as e:
             logger.error(f"Failed to ensure host setup for {hostname}: {e}")
             return False
@@ -116,7 +164,7 @@ class HostDeploymentService:
             logger.warning(f"Version comparison failed: {e}, forcing update")
             return True
     
-    async def _deploy_to_host(self, hostname: str) -> bool:
+    def _deploy_to_host(self, hostname: str) -> bool:
         """Deploy scripts and ISOs to a host."""
         logger.info(f"Starting deployment to {hostname}")
 
@@ -151,11 +199,11 @@ class HostDeploymentService:
                 return False
 
             # Deploy scripts
-            if not await self._deploy_scripts(hostname, script_files):
+            if not self._deploy_scripts(hostname, script_files):
                 return False
 
             # Deploy ISOs
-            if not await self._deploy_isos(hostname, iso_files):
+            if not self._deploy_isos(hostname, iso_files):
                 return False
 
             # Deploy version file
@@ -190,7 +238,7 @@ class HostDeploymentService:
             logger.error(f"Failed to ensure install directory on {hostname}: {e}")
             return False
     
-    async def _deploy_scripts(self, hostname: str, script_files: Sequence[Path]) -> bool:
+    def _deploy_scripts(self, hostname: str, script_files: Sequence[Path]) -> bool:
         """Deploy PowerShell scripts to host."""
         logger.info(f"Deploying scripts to {hostname}")
 
@@ -219,7 +267,7 @@ class HostDeploymentService:
             logger.error(f"Failed to deploy scripts to {hostname}: {e}")
             return False
     
-    async def _deploy_isos(self, hostname: str, iso_files: Sequence[Path]) -> bool:
+    def _deploy_isos(self, hostname: str, iso_files: Sequence[Path]) -> bool:
         """Deploy ISO files to host."""
         logger.info(f"Deploying ISOs to {hostname}")
 
@@ -421,7 +469,7 @@ class HostDeploymentService:
             )
 
         return f"{self._agent_download_base_url}/{quote(artifact_name)}"
-    
+
     async def deploy_to_all_hosts(self, hostnames: List[str]) -> Tuple[int, int]:
         """
         Deploy to all specified hosts.
@@ -439,16 +487,210 @@ class HostDeploymentService:
             )
             return 0, len(hostnames)
 
+        results = await asyncio.gather(
+            *(self.ensure_host_setup(hostname) for hostname in hostnames),
+            return_exceptions=True,
+        )
+
         successful = 0
         failed = 0
 
-        for hostname in hostnames:
-            if await self.ensure_host_setup(hostname):
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error("Host deployment task failed: %s", result)
+                failed += 1
+            elif result:
                 successful += 1
             else:
                 failed += 1
-        
+
         return successful, failed
+
+    async def start_startup_deployment(self, hostnames: Sequence[str]) -> None:
+        """Kick off background deployment of agents to all configured hosts."""
+
+        async with self._startup_lock:
+            if self._startup_task or not hostnames:
+                if not hostnames:
+                    logger.info("No Hyper-V hosts configured; skipping startup agent deployment")
+                    await self._mark_startup_complete(status="skipped")
+                return
+
+            if not self._deployment_enabled:
+                logger.warning(
+                    "Host deployment service is disabled; skipping startup deployment"
+                )
+                await self._mark_startup_complete(status="skipped")
+                return
+
+            host_list = [host for host in hostnames if host]
+            if not host_list:
+                await self._mark_startup_complete(status="skipped")
+                return
+
+            self._startup_event = asyncio.Event()
+            async with self._progress_lock:
+                self._startup_progress = StartupDeploymentProgress(
+                    status="running",
+                    total_hosts=len(host_list),
+                    provisioning_available=False,
+                    per_host={host: "pending" for host in host_list},
+                )
+                snapshot = self._startup_progress.copy()
+
+            self._publish_startup_notification(snapshot)
+
+            loop = asyncio.get_running_loop()
+            self._startup_task = loop.create_task(self._run_startup_deployment(host_list))
+
+    def is_startup_in_progress(self) -> bool:
+        return (
+            self._startup_progress.status == "running"
+            and not self._startup_progress.provisioning_available
+        )
+
+    def is_provisioning_available(self) -> bool:
+        if not self._deployment_enabled:
+            return True
+        if not self._startup_event:
+            return True
+        if not self._startup_event.is_set():
+            return False
+        return self._startup_progress.provisioning_available
+
+    def get_startup_summary(self) -> Dict[str, Any]:
+        return self._startup_progress.copy().as_dict()
+
+    async def wait_for_startup(self) -> None:
+        if self._startup_event:
+            await self._startup_event.wait()
+
+    async def _run_startup_deployment(self, hostnames: List[str]) -> None:
+        logger.info(
+            "Deploying provisioning agents to %d host(s) in background", len(hostnames)
+        )
+
+        semaphore = asyncio.Semaphore(max(1, settings.agent_startup_concurrency))
+        tasks = [
+            asyncio.create_task(self._deploy_host_startup(hostname, semaphore))
+            for hostname in hostnames
+        ]
+
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception("Unhandled exception during startup deployment: %s", exc)
+            async with self._progress_lock:
+                progress = self._startup_progress
+                progress.status = "failed"
+                progress.provisioning_available = True
+                progress.last_error = str(exc)
+                snapshot = progress.copy()
+        else:
+            async with self._progress_lock:
+                progress = self._startup_progress
+                progress.status = "successful" if progress.failed_hosts == 0 else "failed"
+                progress.provisioning_available = True
+                snapshot = progress.copy()
+        finally:
+            await self._mark_startup_complete(snapshot.status, snapshot)
+
+    async def _mark_startup_complete(
+        self, status: str, snapshot: Optional[StartupDeploymentProgress] = None
+    ) -> None:
+        async with self._progress_lock:
+            if snapshot is None:
+                self._startup_progress.status = status
+                self._startup_progress.provisioning_available = True
+                snapshot = self._startup_progress.copy()
+
+        if self._startup_event and not self._startup_event.is_set():
+            self._startup_event.set()
+
+        self._publish_startup_notification(snapshot)
+
+        async with self._startup_lock:
+            self._startup_task = None
+
+    async def _deploy_host_startup(
+        self, hostname: str, semaphore: asyncio.Semaphore
+    ) -> None:
+        async with semaphore:
+            try:
+                success = await self.ensure_host_setup(hostname)
+                error: Optional[str] = None
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.exception("Deployment thread failed for %s: %s", hostname, exc)
+                success = False
+                error = str(exc)
+
+        await self._record_startup_result(hostname, success, error)
+
+    async def _record_startup_result(
+        self, hostname: str, success: bool, error: Optional[str]
+    ) -> None:
+        async with self._progress_lock:
+            progress = self._startup_progress
+            progress.completed_hosts += 1
+            if success:
+                progress.successful_hosts += 1
+                progress.per_host[hostname] = "successful"
+            else:
+                progress.failed_hosts += 1
+                progress.per_host[hostname] = "failed"
+                progress.last_error = error or f"Deployment failed for {hostname}"
+            snapshot = progress.copy()
+
+        self._publish_startup_notification(snapshot)
+
+    def _publish_startup_notification(self, progress: StartupDeploymentProgress) -> None:
+        status = progress.status
+
+        if status == "running":
+            level = NotificationLevel.INFO
+            message = (
+                f"Deploying provisioning agents to Hyper-V hosts: "
+                f"{progress.completed_hosts}/{progress.total_hosts} complete."
+            )
+            if progress.failed_hosts:
+                message += f" {progress.failed_hosts} host(s) failed."
+            message += " VM provisioning is temporarily unavailable."
+            provisioning_available = False
+        elif status == "successful" or status == "skipped":
+            level = NotificationLevel.SUCCESS
+            provisioning_available = True
+            message = (
+                "Provisioning agents are ready on all hosts. VM provisioning is available."
+                if status == "successful"
+                else "Provisioning agents are already up to date."
+            )
+        else:  # failed or unknown
+            level = NotificationLevel.ERROR
+            provisioning_available = True
+            failure_detail = (
+                f" Last error: {progress.last_error}." if progress.last_error else ""
+            )
+            message = (
+                f"Provisioning agent deployment completed with {progress.failed_hosts} "
+                f"failure(s). VM provisioning may be unavailable on affected hosts."
+                f"{failure_detail}"
+            )
+
+        metadata = {
+            "total_hosts": progress.total_hosts,
+            "completed_hosts": progress.completed_hosts,
+            "successful_hosts": progress.successful_hosts,
+            "failed_hosts": progress.failed_hosts,
+            "per_host": progress.per_host,
+        }
+
+        notification_service.upsert_agent_deployment_notification(
+            status=status,
+            message=message,
+            level=level,
+            provisioning_available=provisioning_available,
+            metadata=metadata,
+        )
 
 
 # Global host deployment service instance
