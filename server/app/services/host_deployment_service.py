@@ -527,39 +527,51 @@ class HostDeploymentService:
     async def start_startup_deployment(self, hostnames: Sequence[str]) -> None:
         """Kick off background deployment of agents to all configured hosts."""
 
+        mark_status: Optional[str] = None
+        should_return = False
+
         async with self._startup_lock:
-            if self._startup_task or not hostnames:
-                if not hostnames:
-                    logger.info("No Hyper-V hosts configured; skipping startup agent deployment")
-                    await self._mark_startup_complete(status="skipped")
+            if self._startup_task:
                 return
 
-            if not self._deployment_enabled:
+            if not hostnames:
+                logger.info("No Hyper-V hosts configured; skipping startup agent deployment")
+                mark_status = "skipped"
+                should_return = True
+            elif not self._deployment_enabled:
                 logger.warning(
                     "Host deployment service is disabled; skipping startup deployment"
                 )
-                await self._mark_startup_complete(status="skipped")
-                return
+                mark_status = "skipped"
+                should_return = True
+            else:
+                host_list = [host for host in hostnames if host]
+                if not host_list:
+                    mark_status = "skipped"
+                    should_return = True
+                else:
+                    self._startup_event = asyncio.Event()
+                    async with self._progress_lock:
+                        self._startup_progress = StartupDeploymentProgress(
+                            status="running",
+                            total_hosts=len(host_list),
+                            provisioning_available=False,
+                            per_host={host: "pending" for host in host_list},
+                        )
+                        snapshot = self._startup_progress.copy()
 
-            host_list = [host for host in hostnames if host]
-            if not host_list:
-                await self._mark_startup_complete(status="skipped")
-                return
+                    self._publish_startup_notification(snapshot)
 
-            self._startup_event = asyncio.Event()
-            async with self._progress_lock:
-                self._startup_progress = StartupDeploymentProgress(
-                    status="running",
-                    total_hosts=len(host_list),
-                    provisioning_available=False,
-                    per_host={host: "pending" for host in host_list},
-                )
-                snapshot = self._startup_progress.copy()
+                    loop = asyncio.get_running_loop()
+                    self._startup_task = loop.create_task(
+                        self._run_startup_deployment(host_list)
+                    )
 
-            self._publish_startup_notification(snapshot)
+        if mark_status is not None:
+            await self._mark_startup_complete(status=mark_status)
 
-            loop = asyncio.get_running_loop()
-            self._startup_task = loop.create_task(self._run_startup_deployment(host_list))
+        if should_return:
+            return
 
     def is_startup_in_progress(self) -> bool:
         return (
