@@ -2527,6 +2527,10 @@ tbody tr:last-child td {
     color: #047857;
 }
 
+.form-messages.info {
+    color: var(--muted-ink);
+}
+
 .form-actions {
     display: flex;
     justify-content: flex-end;
