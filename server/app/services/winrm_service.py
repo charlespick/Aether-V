@@ -1,8 +1,11 @@
 """WinRM service for executing PowerShell commands on Hyper-V hosts."""
 import logging
+from base64 import b64encode
+from contextlib import contextmanager
+from threading import RLock
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Optional
-from base64 import b64encode
+
 from winrm.protocol import Protocol
 
 from ..core.config import settings
@@ -40,6 +43,29 @@ class WinRMService:
 
     def __init__(self):
         self._sessions: Dict[str, Protocol] = {}
+        self._session_locks: Dict[str, RLock] = {}
+        self._locks_guard = RLock()
+
+    def _get_host_lock(self, hostname: str) -> RLock:
+        """Return a re-entrant lock guarding the session for the host."""
+
+        with self._locks_guard:
+            lock = self._session_locks.get(hostname)
+            if lock is None:
+                lock = RLock()
+                self._session_locks[hostname] = lock
+            return lock
+
+    @contextmanager
+    def _host_session(self, hostname: str):
+        """Serialize access to a host's WinRM session."""
+
+        lock = self._get_host_lock(hostname)
+        lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
 
     def _open_powershell_shell(
         self,
@@ -185,14 +211,18 @@ class WinRMService:
     
     def close_session(self, hostname: str):
         """Close a WinRM session."""
-        if hostname in self._sessions:
-            logger.info(f"Closing WinRM session to {hostname}")
-            del self._sessions[hostname]
+
+        with self._host_session(hostname):
+            if hostname in self._sessions:
+                logger.info(f"Closing WinRM session to {hostname}")
+                del self._sessions[hostname]
     
     def close_all_sessions(self):
         """Close all WinRM sessions."""
         logger.info("Closing all WinRM sessions")
-        self._sessions.clear()
+        with self._locks_guard:
+            self._sessions.clear()
+            self._session_locks.clear()
     
     def execute_ps_script(
         self,
@@ -213,82 +243,83 @@ class WinRMService:
         Returns:
             Tuple of (stdout, stderr, exit_code)
         """
-        session = self.get_session(hostname)
-        
-        # Build PowerShell command
-        param_args: list[str] = []
-        for key, value in parameters.items():
-            if value is None:
-                continue
+        with self._host_session(hostname):
+            session = self.get_session(hostname)
 
-            flag = f"-{key}"
-            if isinstance(value, bool):
-                if value:
-                    param_args.append(flag)
-            elif isinstance(value, (int, float)):
-                param_args.extend([flag, str(value)])
-            elif isinstance(value, str):
-                escaped_value = value.replace('"', '`"')
-                param_args.extend([flag, f'"{escaped_value}"'])
+            # Build PowerShell command
+            param_args: list[str] = []
+            for key, value in parameters.items():
+                if value is None:
+                    continue
 
-        escaped_path = script_path.replace('"', '`"')
-        ps_args = self._build_powershell_command(
-            ["-File", f'"{escaped_path}"', *param_args]
-        )
+                flag = f"-{key}"
+                if isinstance(value, bool):
+                    if value:
+                        param_args.append(flag)
+                elif isinstance(value, (int, float)):
+                    param_args.extend([flag, str(value)])
+                elif isinstance(value, str):
+                    escaped_value = value.replace('"', '`"')
+                    param_args.extend([flag, f'"{escaped_value}"'])
 
-        logger.info("Executing PowerShell script on %s", hostname)
-        logger.debug(
-            "Script invocation on %s -> path=%s params=%s env=%s",
-            hostname,
-            script_path,
-            parameters,
-            environment,
-        )
-        logger.debug(
-            "Full rendered script command for %s: powershell.exe %s",
-            hostname,
-            " ".join(ps_args),
-        )
-
-        try:
-            start_time = perf_counter()
-            stdout, stderr, exit_code = self._run_powershell_command(
-                session,
-                hostname,
-                ps_args,
-                env_vars=environment,
+            escaped_path = script_path.replace('"', '`"')
+            ps_args = self._build_powershell_command(
+                ["-File", f'"{escaped_path}"', *param_args]
             )
-            duration = perf_counter() - start_time
 
-            stdout_str = stdout.decode('utf-8') if stdout else ""
-            stderr_str = stderr.decode('utf-8') if stderr else ""
-
-            stdout_preview = _format_output_preview(stdout_str)
-            stderr_preview = _format_output_preview(stderr_str)
-
-            logger.info(
-                "Script on %s completed in %.2fs with exit code %s (stdout=%d bytes, stderr=%d bytes)",
+            logger.info("Executing PowerShell script on %s", hostname)
+            logger.debug(
+                "Script invocation on %s -> path=%s params=%s env=%s",
                 hostname,
-                duration,
-                exit_code,
-                len(stdout or b""),
-                len(stderr or b""),
+                script_path,
+                parameters,
+                environment,
             )
-            if stdout_preview:
-                logger.info("Script stdout preview on %s:%s", hostname, stdout_preview)
-            else:
-                logger.info("Script stdout on %s was empty", hostname)
+            logger.debug(
+                "Full rendered script command for %s: powershell.exe %s",
+                hostname,
+                " ".join(ps_args),
+            )
 
-            if stderr_preview:
-                logger.warning("Script stderr preview on %s:%s", hostname, stderr_preview)
-            else:
-                logger.info("Script stderr on %s was empty", hostname)
+            try:
+                start_time = perf_counter()
+                stdout, stderr, exit_code = self._run_powershell_command(
+                    session,
+                    hostname,
+                    ps_args,
+                    env_vars=environment,
+                )
+                duration = perf_counter() - start_time
 
-            return stdout_str, stderr_str, exit_code
+                stdout_str = stdout.decode('utf-8') if stdout else ""
+                stderr_str = stderr.decode('utf-8') if stderr else ""
 
-        except Exception as e:
-            logger.exception("WinRM script execution failed on %s", hostname)
-            raise
+                stdout_preview = _format_output_preview(stdout_str)
+                stderr_preview = _format_output_preview(stderr_str)
+
+                logger.info(
+                    "Script on %s completed in %.2fs with exit code %s (stdout=%d bytes, stderr=%d bytes)",
+                    hostname,
+                    duration,
+                    exit_code,
+                    len(stdout or b""),
+                    len(stderr or b""),
+                )
+                if stdout_preview:
+                    logger.info("Script stdout preview on %s:%s", hostname, stdout_preview)
+                else:
+                    logger.info("Script stdout on %s was empty", hostname)
+
+                if stderr_preview:
+                    logger.warning("Script stderr preview on %s:%s", hostname, stderr_preview)
+                else:
+                    logger.info("Script stderr on %s was empty", hostname)
+
+                return stdout_str, stderr_str, exit_code
+
+            except Exception as e:
+                logger.exception("WinRM script execution failed on %s", hostname)
+                raise
     
     def execute_ps_command(
         self,
@@ -305,60 +336,61 @@ class WinRMService:
         Returns:
             Tuple of (stdout, stderr, exit_code)
         """
-        session = self.get_session(hostname)
-        
-        truncated_command = command.replace("\n", " ")
-        if len(truncated_command) > 120:
-            truncated_command = f"{truncated_command[:117]}..."
-        logger.info("Executing PowerShell command on %s: %s", hostname, truncated_command)
-        logger.debug("Full PowerShell command on %s: %s", hostname, command)
+        with self._host_session(hostname):
+            session = self.get_session(hostname)
 
-        encoded_command = b64encode(command.encode('utf-16le')).decode('ascii')
-        ps_args = self._build_powershell_command(["-EncodedCommand", encoded_command])
+            truncated_command = command.replace("\n", " ")
+            if len(truncated_command) > 120:
+                truncated_command = f"{truncated_command[:117]}..."
+            logger.info("Executing PowerShell command on %s: %s", hostname, truncated_command)
+            logger.debug("Full PowerShell command on %s: %s", hostname, command)
 
-        try:
-            start_time = perf_counter()
-            stdout, stderr, exit_code = self._run_powershell_command(
-                session,
-                hostname,
-                ps_args,
-            )
-            duration = perf_counter() - start_time
+            encoded_command = b64encode(command.encode('utf-16le')).decode('ascii')
+            ps_args = self._build_powershell_command(["-EncodedCommand", encoded_command])
 
-            stdout_str = stdout.decode('utf-8') if stdout else ""
-            stderr_str = stderr.decode('utf-8') if stderr else ""
-            stdout_preview = _format_output_preview(stdout_str)
-            stderr_preview = _format_output_preview(stderr_str)
-
-            logger.info(
-                "Command on %s completed in %.2fs with exit code %s (stdout=%d bytes, stderr=%d bytes)",
-                hostname,
-                duration,
-                exit_code,
-                len(stdout or b""),
-                len(stderr or b""),
-            )
-            if stdout_preview:
-                logger.info("Command stdout preview on %s:%s", hostname, stdout_preview)
-            else:
-                logger.info("Command stdout on %s was empty", hostname)
-
-            if stderr_preview:
-                level = logger.warning if exit_code != 0 else logger.info
-                level("Command stderr preview on %s:%s", hostname, stderr_preview)
-            else:
-                logger.info("Command stderr on %s was empty", hostname)
-
-            if exit_code != 0:
-                logger.warning(
-                    "Command on %s exited with non-zero status %s", hostname, exit_code
+            try:
+                start_time = perf_counter()
+                stdout, stderr, exit_code = self._run_powershell_command(
+                    session,
+                    hostname,
+                    ps_args,
                 )
+                duration = perf_counter() - start_time
 
-            return stdout_str, stderr_str, exit_code
+                stdout_str = stdout.decode('utf-8') if stdout else ""
+                stderr_str = stderr.decode('utf-8') if stderr else ""
+                stdout_preview = _format_output_preview(stdout_str)
+                stderr_preview = _format_output_preview(stderr_str)
 
-        except Exception as e:
-            logger.exception("WinRM command execution failed on %s", hostname)
-            raise
+                logger.info(
+                    "Command on %s completed in %.2fs with exit code %s (stdout=%d bytes, stderr=%d bytes)",
+                    hostname,
+                    duration,
+                    exit_code,
+                    len(stdout or b""),
+                    len(stderr or b""),
+                )
+                if stdout_preview:
+                    logger.info("Command stdout preview on %s:%s", hostname, stdout_preview)
+                else:
+                    logger.info("Command stdout on %s was empty", hostname)
+
+                if stderr_preview:
+                    level = logger.warning if exit_code != 0 else logger.info
+                    level("Command stderr preview on %s:%s", hostname, stderr_preview)
+                else:
+                    logger.info("Command stderr on %s was empty", hostname)
+
+                if exit_code != 0:
+                    logger.warning(
+                        "Command on %s exited with non-zero status %s", hostname, exit_code
+                    )
+
+                return stdout_str, stderr_str, exit_code
+
+            except Exception as e:
+                logger.exception("WinRM command execution failed on %s", hostname)
+                raise
 
     def stream_ps_command(
         self,
@@ -367,35 +399,36 @@ class WinRMService:
         on_chunk: Callable[[str, str], None],
     ) -> int:
         """Execute a PowerShell command and stream output via callback."""
-        session = self.get_session(hostname)
+        with self._host_session(hostname):
+            session = self.get_session(hostname)
 
-        truncated_command = command.replace("\n", " ")
-        if len(truncated_command) > 120:
-            truncated_command = f"{truncated_command[:117]}..."
-        logger.info("Streaming PowerShell command on %s: %s", hostname, truncated_command)
-        logger.debug("Full streaming PowerShell command on %s: %s", hostname, command)
+            truncated_command = command.replace("\n", " ")
+            if len(truncated_command) > 120:
+                truncated_command = f"{truncated_command[:117]}..."
+            logger.info("Streaming PowerShell command on %s: %s", hostname, truncated_command)
+            logger.debug("Full streaming PowerShell command on %s: %s", hostname, command)
 
-        encoded_command = b64encode(command.encode('utf-16le')).decode('ascii')
-        ps_args = self._build_powershell_command(["-EncodedCommand", encoded_command])
+            encoded_command = b64encode(command.encode('utf-16le')).decode('ascii')
+            ps_args = self._build_powershell_command(["-EncodedCommand", encoded_command])
 
-        try:
-            exit_code, duration = self._stream_powershell_command(
-                session,
+            try:
+                exit_code, duration = self._stream_powershell_command(
+                    session,
+                    hostname,
+                    ps_args,
+                    on_chunk,
+                )
+            except Exception as exc:
+                logger.exception("WinRM streaming execution failed on %s", hostname)
+                raise
+            logger.info(
+                "Streaming command on %s completed in %.2fs with exit code %s",
                 hostname,
-                ps_args,
-                on_chunk,
+                duration,
+                exit_code,
             )
-        except Exception as exc:
-            logger.exception("WinRM streaming execution failed on %s", hostname)
-            raise
-        logger.info(
-            "Streaming command on %s completed in %.2fs with exit code %s",
-            hostname,
-            duration,
-            exit_code,
-        )
 
-        return exit_code
+            return exit_code
 
 
 # Global WinRM service instance
