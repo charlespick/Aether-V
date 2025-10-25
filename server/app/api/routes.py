@@ -190,8 +190,10 @@ async def submit_provisioning_job(
                 detail=f"VM {vm_name} already exists on host {target_host}",
             )
 
+    schema_id = schema.get("id", "vm-provisioning") if schema else "vm-provisioning"
     job_payload = {
-        "schema_id": schema.get("id", "vm-provisioning"),
+        "schema_id": schema_id,
+        "schema_version": submission.schema_version,
         "fields": validated_values,
     }
     job = await job_service.submit_provisioning_job(submission, job_payload, target_host)

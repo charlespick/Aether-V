@@ -76,19 +76,83 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
     for param_set in raw.get("parameter_sets", []) or []:
         if not isinstance(param_set, dict):
             raise SchemaValidationError(["Parameter set definitions must be mappings"])
-        members = param_set.get("members", [])
-        if not isinstance(members, list) or not members:
-            raise SchemaValidationError(
-                [f"Parameter set '{param_set.get('id', '?')}' must list at least one member"]
-            )
-        missing_members = [member for member in members if member not in field_ids]
-        if missing_members:
+
+        members = param_set.get("members")
+        variants = param_set.get("variants")
+
+        if members and variants:
             raise SchemaValidationError(
                 [
-                    f"Parameter set '{param_set.get('id', '?')}' references unknown fields: "
-                    + ", ".join(missing_members)
+                    f"Parameter set '{param_set.get('id', '?')}' cannot define both 'members' and 'variants'"
                 ]
             )
+
+        if members is not None:
+            if not isinstance(members, list) or not members:
+                raise SchemaValidationError(
+                    [f"Parameter set '{param_set.get('id', '?')}' must list at least one member"]
+                )
+            missing_members = [member for member in members if member not in field_ids]
+            if missing_members:
+                raise SchemaValidationError(
+                    [
+                        f"Parameter set '{param_set.get('id', '?')}' references unknown fields: "
+                        + ", ".join(missing_members)
+                    ]
+                )
+            continue
+
+        if variants is None:
+            raise SchemaValidationError(
+                [
+                    f"Parameter set '{param_set.get('id', '?')}' must define either 'members' or 'variants'"
+                ]
+            )
+
+        if not isinstance(variants, list) or not variants:
+            raise SchemaValidationError(
+                [
+                    f"Parameter set '{param_set.get('id', '?')}' must provide at least one variant definition"
+                ]
+            )
+
+        for variant in variants:
+            if not isinstance(variant, dict):
+                raise SchemaValidationError(
+                    [
+                        f"Parameter set '{param_set.get('id', '?')}' variants must be mappings"
+                    ]
+                )
+            required = variant.get("required", [])
+            optional = variant.get("optional", [])
+            if not isinstance(required, list):
+                raise SchemaValidationError(
+                    [
+                        f"Parameter set '{param_set.get('id', '?')}' variant 'required' must be a list"
+                    ]
+                )
+            if not required:
+                raise SchemaValidationError(
+                    [
+                        f"Parameter set '{param_set.get('id', '?')}' variant must require at least one field"
+                    ]
+                )
+            if optional is not None and not isinstance(optional, list):
+                raise SchemaValidationError(
+                    [
+                        f"Parameter set '{param_set.get('id', '?')}' variant 'optional' must be a list when provided"
+                    ]
+                )
+            missing_required = [member for member in required if member not in field_ids]
+            missing_optional = [member for member in (optional or []) if member not in field_ids]
+            missing = missing_required + missing_optional
+            if missing:
+                raise SchemaValidationError(
+                    [
+                        f"Parameter set '{param_set.get('id', '?')}' references unknown fields: "
+                        + ", ".join(missing)
+                    ]
+                )
 
     _SCHEMA_CACHE = raw
     logger.info(
@@ -137,20 +201,87 @@ def validate_job_submission(values: Dict[str, Any], schema: Optional[Dict[str, A
             sanitized[field_id] = None
 
     for param_set in schema_data.get("parameter_sets", []) or []:
-        members: List[str] = param_set.get("members", [])
+        members: Optional[List[str]] = param_set.get("members")
         mode = (param_set.get("mode") or "").lower()
-        provided_members = [m for m in members if not _is_missing(sanitized.get(m))]
-        if mode == "all-or-none" and provided_members and len(provided_members) != len(members):
-            missing_members = [m for m in members if _is_missing(sanitized.get(m))]
-            label = param_set.get("label") or param_set.get("id", "parameter set")
-            errors.append(
-                f"Parameter set '{label}' requires all members: {', '.join(missing_members)}"
-            )
+        variants = param_set.get("variants")
+
+        if members is not None:
+            provided_members = [m for m in members if not _is_missing(sanitized.get(m))]
+            if mode == "all-or-none" and provided_members and len(provided_members) != len(members):
+                missing_members = [m for m in members if _is_missing(sanitized.get(m))]
+                label = param_set.get("label") or param_set.get("id", "parameter set")
+                errors.append(
+                    f"Parameter set '{label}' requires all members: {', '.join(missing_members)}"
+                )
+            continue
+
+        if variants:
+            all_variant_fields = set()
+            for variant in variants:
+                required_fields = variant.get("required", []) or []
+                optional_fields = variant.get("optional", []) or []
+                all_variant_fields.update(required_fields)
+                all_variant_fields.update(optional_fields)
+
+            provided_variant_fields = [
+                field for field in all_variant_fields if not _is_missing(sanitized.get(field))
+            ]
+
+            if not provided_variant_fields:
+                continue
+
+            matched_variant = False
+            for variant in variants:
+                required_fields = variant.get("required", []) or []
+                optional_fields = variant.get("optional", []) or []
+
+                missing_required = [
+                    field for field in required_fields if _is_missing(sanitized.get(field))
+                ]
+                if missing_required:
+                    continue
+
+                allowed_fields = set(required_fields) | set(optional_fields)
+                extra_fields = [
+                    field for field in provided_variant_fields if field not in allowed_fields
+                ]
+                if extra_fields:
+                    continue
+
+                matched_variant = True
+                break
+
+            if not matched_variant:
+                label = param_set.get("label") or param_set.get("id", "parameter set")
+                variant_descriptions = []
+                for variant in variants:
+                    variant_label = variant.get("label")
+                    required_fields = variant.get("required", []) or []
+                    optional_fields = variant.get("optional", []) or []
+                    parts: List[str] = []
+                    if variant_label:
+                        parts.append(variant_label)
+                    if required_fields:
+                        parts.append("required: " + ", ".join(required_fields))
+                    if optional_fields:
+                        parts.append("optional: " + ", ".join(optional_fields))
+                    variant_descriptions.append("; ".join(parts) if parts else "<unspecified variant>")
+
+                errors.append(
+                    f"Parameter set '{label}' must satisfy one of the allowed variants: "
+                    + " | ".join(variant_descriptions)
+                )
 
     if errors:
         raise SchemaValidationError(errors)
 
-    return sanitized
+    cleaned = {
+        field_id: value
+        for field_id, value in sanitized.items()
+        if not _is_missing(value)
+    }
+
+    return cleaned
 
 
 def _is_missing(value: Any) -> bool:
