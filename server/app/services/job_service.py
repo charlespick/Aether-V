@@ -5,10 +5,12 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from pathlib import PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
+from xml.etree import ElementTree
 
 from ..core.config import settings
 from ..core.models import Job, JobStatus, JobSubmission, VMDeleteRequest, NotificationLevel
@@ -222,8 +224,7 @@ class JobService:
         if not payload:
             return
 
-        normalized = payload.replace("\r\n", "\n").replace("\r", "\n")
-        lines = [line for line in normalized.split("\n") if line]
+        lines = self._normalize_stream_payload(payload)
         if not lines:
             return
 
@@ -231,6 +232,83 @@ class JobService:
             lines = [f"STDERR: {line}" for line in lines]
 
         await self._append_job_output(job_id, *lines)
+
+    def _normalize_stream_payload(self, payload: str) -> List[str]:
+        """Return human-friendly log lines for streamed job output."""
+
+        if not payload:
+            return []
+
+        sanitized = payload.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
+        if not sanitized.strip():
+            return []
+
+        contains_clixml = "#< CLIXML" in sanitized or "<Objs" in sanitized
+        if contains_clixml:
+            parsed = self._parse_clixml_payload(sanitized)
+            if parsed is None:
+                sanitized = self._strip_clixml_markup(sanitized)
+            else:
+                sanitized = parsed
+
+        sanitized = sanitized.replace("\r\n", "\n").replace("\r", "\n")
+        lines = [line for line in sanitized.split("\n") if line.strip()]
+        return lines
+
+    _CLIXML_PREFIX = "#< CLIXML"
+    _CLIXML_TEXT_TAGS = {"S", "AV"}
+    _HEX_ESCAPE_PATTERN = re.compile(r"_x([0-9A-Fa-f]{4})_")
+
+    def _parse_clixml_payload(self, payload: str) -> Optional[str]:
+        """Attempt to decode PowerShell CLI XML output into plain text."""
+
+        trimmed = payload.lstrip()
+        if trimmed.startswith(self._CLIXML_PREFIX):
+            trimmed = trimmed[len(self._CLIXML_PREFIX) :].lstrip()
+
+        xml_start = trimmed.find("<Objs")
+        if xml_start == -1:
+            return None
+
+        xml_data = trimmed[xml_start:]
+        try:
+            root = ElementTree.fromstring(xml_data)
+        except ElementTree.ParseError:
+            return None
+
+        fragments: List[str] = []
+        for element in root.iter():
+            tag = element.tag.split("}")[-1]
+            if tag in self._CLIXML_TEXT_TAGS and element.text:
+                fragments.append(element.text)
+
+        if not fragments:
+            return None
+
+        text = "\n".join(fragments)
+        return self._decode_hex_escapes(text)
+
+    def _strip_clixml_markup(self, payload: str) -> str:
+        """Best-effort fallback for CLI XML payloads that cannot be parsed."""
+
+        trimmed = payload
+        xml_start = trimmed.find("<Objs")
+        if xml_start != -1:
+            trimmed = trimmed[xml_start:]
+
+        stripped = re.sub(r"<[^>]+>", "", trimmed)
+        return self._decode_hex_escapes(stripped)
+
+    def _decode_hex_escapes(self, value: str) -> str:
+        """Convert PowerShell _xHHHH_ sequences to their character equivalents."""
+
+        def repl(match: re.Match[str]) -> str:
+            try:
+                return chr(int(match.group(1), 16))
+            except ValueError:
+                return match.group(0)
+
+        return self._HEX_ESCAPE_PATTERN.sub(repl, value)
 
     async def _after_job_update(
         self,
