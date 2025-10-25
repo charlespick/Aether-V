@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import uuid
 from datetime import datetime
 from pathlib import PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
-
-import yaml
 
 from ..core.config import settings
 from ..core.models import Job, JobStatus, JobSubmission, VMDeleteRequest, NotificationLevel
@@ -186,8 +185,13 @@ class JobService:
         if not prepared:
             raise RuntimeError(f"Failed to prepare host {target_host} for provisioning")
 
-        yaml_payload = await asyncio.to_thread(yaml.safe_dump, definition, sort_keys=False)
-        command = self._build_master_invocation_command(yaml_payload)
+        json_payload = await asyncio.to_thread(
+            json.dumps,
+            definition,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        command = self._build_master_invocation_command(json_payload)
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Optional[Tuple[str, str]]] = asyncio.Queue()
@@ -335,8 +339,8 @@ class JobService:
                 return value
         return None
 
-    def _build_master_invocation_command(self, yaml_payload: str) -> str:
-        payload_bytes = yaml_payload.encode("utf-8")
+    def _build_master_invocation_command(self, payload: str) -> str:
+        payload_bytes = payload.encode("utf-8")
         encoded = base64.b64encode(payload_bytes).decode("ascii")
         script_path = PureWindowsPath(settings.host_install_directory) / "Invoke-ProvisioningJob.ps1"
         script_literal = self._ps_literal(str(script_path))

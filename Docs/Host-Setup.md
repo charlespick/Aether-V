@@ -74,7 +74,7 @@ When the service starts, it:
 The service deploys the following to `{HOST_INSTALL_DIRECTORY}` on each host:
 
 **PowerShell Scripts:**
-- `Invoke-ProvisioningJob.ps1` - Master orchestrator that reads YAML job definitions and invokes the helper scripts
+- `Invoke-ProvisioningJob.ps1` - Master orchestrator that reads JSON job definitions and invokes the helper scripts
 - `Provisioning.CopyImage.ps1` - Copies VM image files from template location
 - `Provisioning.CopyProvisioningISO.ps1` - Copies the appropriate provisioning ISO to VM folder
 - `Provisioning.RegisterVM.ps1` - Registers VM with Hyper-V and applies configuration

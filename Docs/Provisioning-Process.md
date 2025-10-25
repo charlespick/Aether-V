@@ -12,19 +12,37 @@ The Aether-V service orchestrates VM provisioning through its job execution syst
 
 ### Provisioning Flow
 
-Provisioning requests are serialized into YAML and streamed to the host-side orchestration script `Invoke-ProvisioningJob.ps1`. The master script reads the job definition from standard input, validates parameter-set requirements, and then invokes the individual provisioning helpers that live beside it (`Provisioning.CopyImage.ps1`, `Provisioning.CopyProvisioningISO.ps1`, `Provisioning.RegisterVM.ps1`, `Provisioning.WaitForProvisioningKey.ps1`, and `Provisioning.PublishProvisioningData.ps1`). Optional clustering is performed from within the same master script after guest configuration data has been published.
+Provisioning requests are serialized into JSON and streamed to the host-side orchestration script `Invoke-ProvisioningJob.ps1`. Each payload follows the structure shown below and omits any fields that are not specified:
+
+```json
+{
+  "schema_id": "vm-provisioning",
+  "schema_version": 1,
+  "fields": {
+    "vm_name": "creationtest",
+    "image_name": "Ubuntu Server 24.04",
+    "gb_ram": 4,
+    "cpu_cores": 2,
+    "guest_la_uid": "makerlandmaster",
+    "guest_la_pw": "********",
+    "vm_clustered": false
+  }
+}
+```
+
+The master script reads the job definition from standard input, validates required fields and parameter-set rules, builds the provisioning payload (logging which fields were provided versus omitted), and then invokes the individual provisioning helpers that live beside it (`Provisioning.CopyImage.ps1`, `Provisioning.CopyProvisioningISO.ps1`, `Provisioning.RegisterVM.ps1`, `Provisioning.WaitForProvisioningKey.ps1`, and `Provisioning.PublishProvisioningData.ps1`). Optional clustering is performed from within the same master script after guest configuration data has been published.
 
 The service executes these steps when provisioning a new VM:
 
 #### 1. Pre-Provisioning
 
-- **OS Family Detection**: Determines whether the image is Windows or Linux based on image name patterns
+- **OS Family Detection**: Determines whether the image is Windows or Linux based on image name patterns when the `os_family` field is omitted
   - Windows: `Windows*`, `Microsoft Windows*`
   - Linux: `Ubuntu*`, `RHEL*`, `CentOS*`, `Rocky Linux*`, `AlmaLinux*`, `Oracle Linux*`, `Debian*`, `SUSE*`, `openSUSE*`, `Fedora*`
 
-- **Credential Validation**: 
-  - For Linux VMs: Clear domain join parameters (not supported)
-  - For Windows VMs: Clear SSH configuration (not applicable)
+- **Credential Validation**:
+  - For Linux VMs: Ignore domain join parameters (not supported)
+  - For Windows VMs: Ignore Ansible SSH configuration (not applicable)
 
 #### 2. Image Preparation (Provisioning.CopyImage.ps1)
 
@@ -93,6 +111,7 @@ Provisioning.PublishProvisioningData.ps1 -GuestHostName "vm-name" `
 
 **Actions:**
 - Encrypts sensitive data
+- Validates that static IPv4 requests include the required fields (IP address, CIDR prefix, default gateway) and that secondary DNS is only provided when a primary DNS server is present
 - Publishes configuration to VM via Hyper-V KVP
 - VM guest reads and applies configuration
 - Guest completes provisioning autonomously
@@ -127,8 +146,8 @@ Add-ClusterVirtualMachineRole -VMName "vm-name"
 - `guest_v4_ipaddr` - Static IPv4 address
 - `guest_v4_cidrprefix` - Subnet prefix length (e.g., 24 for /24)
 - `guest_v4_defaultgw` - Default gateway
-- `guest_v4_dns1` - Primary DNS server
-- `guest_v4_dns2` - Secondary DNS server
+- `guest_v4_dns1` - Primary DNS server (optional; required when specifying `guest_v4_dns2`)
+- `guest_v4_dns2` - Secondary DNS server (optional)
 - `guest_net_dnssuffix` - DNS suffix/search domain
 - `vlan_id` - VLAN tag (0 for untagged)
 
@@ -137,7 +156,7 @@ Add-ClusterVirtualMachineRole -VMName "vm-name"
 - `guest_domain_jointarget` - Domain FQDN (e.g., example.com)
 - `guest_domain_joinuid` - Domain join account username
 - `guest_domain_joinpw` - Domain join account password (secret)
-- `guest_domain_joinou` - Target OU for computer object (e.g., OU=Servers,DC=example,DC=com)
+- `guest_domain_joinou` - Target OU for computer object (optional; e.g., OU=Servers,DC=example,DC=com)
 
 #### Optional Linux Configuration
 
@@ -146,7 +165,7 @@ Add-ClusterVirtualMachineRole -VMName "vm-name"
 
 #### Optional Clustering
 
-- `vm_clustered` - Set to "Yes" to add VM to Failover Cluster
+- `vm_clustered` - Set to `true` to add VM to Failover Cluster
 
 ### Security Considerations
 

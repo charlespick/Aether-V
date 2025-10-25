@@ -26,15 +26,21 @@ function Invoke-ProvisioningPublishProvisioningData {
     }
     $GuestDomainJoinPw = $env:GuestDomainJoinPw
 
-    if ($GuestV4IpAddr -or $GuestV4CidrPrefix -or $GuestV4DefaultGw -or $GuestV4Dns1 -or $GuestV4Dns2) {
-        if (-not $GuestV4IpAddr -or -not $GuestV4CidrPrefix -or -not $GuestV4DefaultGw -or -not $GuestV4Dns1 -or -not $GuestV4Dns2) {
-            throw "All IP settings (GuestV4IpAddr, GuestV4CidrPrefix, GuestV4DefaultGw, GuestV4Dns1, GuestV4Dns2) must be provided if any IP setting is specified."
+    $ipv4CoreValues = @($GuestV4IpAddr, $GuestV4CidrPrefix, $GuestV4DefaultGw)
+    $ipv4CoreProvided = $ipv4CoreValues | Where-Object { $_ }
+    if ($ipv4CoreProvided.Count -gt 0) {
+        if (-not ($GuestV4IpAddr -and $GuestV4CidrPrefix -and $GuestV4DefaultGw)) {
+            throw "Static IPv4 configuration requires GuestV4IpAddr, GuestV4CidrPrefix, and GuestV4DefaultGw when any of those fields are supplied."
         }
     }
 
+    if ($GuestV4Dns2 -and -not $GuestV4Dns1) {
+        throw "GuestV4Dns2 was provided without GuestV4Dns1. Supply the primary DNS server when specifying a secondary DNS server."
+    }
+
     if ($GuestDomainJoinTarget -or $GuestDomainJoinUid -or $GuestDomainJoinPw -or $GuestDomainJoinOU) {
-        if (-not $GuestDomainJoinTarget -or -not $GuestDomainJoinUid -or -not $GuestDomainJoinPw -or -not $GuestDomainJoinOU) {
-            throw "All domain settings (GuestDomainJoinTarget, GuestDomainJoinUid, GuestDomainJoinPw, GuestDomainJoinOU) must be provided if any domain setting is specified."
+        if (-not $GuestDomainJoinTarget -or -not $GuestDomainJoinUid -or -not $GuestDomainJoinPw) {
+            throw "Domain join configuration requires GuestDomainJoinTarget, GuestDomainJoinUid, and GuestDomainJoinPw. GuestDomainJoinOU is optional."
         }
     }
 

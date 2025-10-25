@@ -10,7 +10,11 @@ Get-ChildItem -Path (Join-Path $scriptRoot 'Provisioning.*.ps1') -File |
     ForEach-Object { . $_.FullName }
 
 function ConvertTo-Hashtable {
-    param([Parameter(Mandatory)] [object]$InputObject)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$InputObject
+    )
 
     if ($InputObject -is [System.Collections.IDictionary]) {
         $result = @{}
@@ -32,18 +36,84 @@ function ConvertTo-Hashtable {
 }
 
 function Test-ProvisioningValuePresent {
-    param([object]$Value)
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object]$Value
+    )
 
-    if ($null -eq $Value) { return $false }
-    if ($Value -is [string]) { return -not [string]::IsNullOrWhiteSpace($Value) }
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    if ($Value -is [string]) {
+        return -not [string]::IsNullOrWhiteSpace($Value)
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        foreach ($item in $Value) {
+            return $true
+        }
+        return $false
+    }
+
     return $true
 }
 
+function Read-ProvisioningJobDefinition {
+    [CmdletBinding()]
+    param()
+
+    $rawInput = [Console]::In.ReadToEnd()
+    if (-not (Test-ProvisioningValuePresent -Value $rawInput)) {
+        throw "No job definition provided on standard input."
+    }
+
+    $parsed = $null
+    $parseErrors = @()
+
+    try {
+        $parsed = $rawInput | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        $parseErrors += "JSON: $($_.Exception.Message)"
+    }
+
+    if (-not $parsed) {
+        if (-not (Get-Command -Name ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
+            try {
+                Import-Module -Name powershell-yaml -ErrorAction Stop | Out-Null
+            }
+            catch {
+                throw "Failed to parse job definition. JSON parse error: $($parseErrors -join '; '). YAML parser unavailable."
+            }
+        }
+
+        try {
+            $parsed = ConvertFrom-Yaml -Yaml $rawInput -ErrorAction Stop
+        }
+        catch {
+            $parseErrors += "YAML: $($_.Exception.Message)"
+        }
+    }
+
+    if (-not $parsed) {
+        throw "Unable to parse job definition. Parse errors: $($parseErrors -join '; ')"
+    }
+
+    return $parsed
+}
+
 function Get-ProvisioningOsFamily {
-    param([hashtable]$Values)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Values
+    )
 
     if ($Values.ContainsKey('os_family') -and (Test-ProvisioningValuePresent -Value $Values['os_family'])) {
-        return ($Values['os_family'].ToString().ToLowerInvariant())
+        return $Values['os_family'].ToString().ToLowerInvariant()
     }
 
     if (-not (Test-ProvisioningValuePresent -Value $Values['image_name'])) {
@@ -80,69 +150,200 @@ function Get-ProvisioningOsFamily {
     throw "Unable to infer operating system family from image '$($Values['image_name'])'. Provide an 'os_family' field or update the detection rules."
 }
 
-function Test-AllOrNoneParameterSet {
+function Assert-ProvisioningParameterSet {
+    [CmdletBinding()]
     param(
-        [string]$SetName,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
         [string[]]$Members,
+
+        [Parameter(Mandatory = $true)]
         [hashtable]$Values
     )
 
-    $provided = @()
+    $providedMembers = @()
     foreach ($member in $Members) {
         if ($Values.ContainsKey($member) -and (Test-ProvisioningValuePresent -Value $Values[$member])) {
-            $provided += $member
+            $providedMembers += $member
         }
     }
 
-    if ($provided.Count -gt 0 -and $provided.Count -ne $Members.Count) {
+    if ($providedMembers.Count -gt 0 -and $providedMembers.Count -ne $Members.Count) {
         $missing = @()
         foreach ($member in $Members) {
-            if (-not ($provided -contains $member)) {
+            if (-not ($providedMembers -contains $member)) {
                 $missing += $member
             }
         }
-        throw "Parameter set '$SetName' requires fields: $($missing -join ', ')"
+
+        throw "Parameter set '$Name' requires fields: $($missing -join ', ')"
     }
 }
 
-function Update-OsSpecificConfiguration {
+function Apply-OsSpecificAdjustments {
+    [CmdletBinding()]
     param(
+        [Parameter(Mandatory = $true)]
         [string]$OsFamily,
+
+        [Parameter(Mandatory = $true)]
         [hashtable]$Values
     )
 
     if ($OsFamily -eq 'windows') {
-        if ((Test-ProvisioningValuePresent -Value $Values['cnf_ansible_ssh_user']) -or (Test-ProvisioningValuePresent -Value $Values['cnf_ansible_ssh_key'])) {
-            Write-Warning "Ansible SSH credentials are not supported for Windows systems. Clearing all Ansible SSH variables."
-            foreach ($field in @('cnf_ansible_ssh_user', 'cnf_ansible_ssh_key')) {
-                $Values[$field] = ''
+        $sshFields = @('cnf_ansible_ssh_user', 'cnf_ansible_ssh_key')
+        $sshSupplied = $false
+        foreach ($field in $sshFields) {
+            if ($Values.ContainsKey($field) -and (Test-ProvisioningValuePresent -Value $Values[$field])) {
+                $sshSupplied = $true
+                break
+            }
+        }
+
+        if ($sshSupplied) {
+            Write-Warning "Ansible SSH credentials are not supported for Windows systems. These values will be ignored."
+        }
+
+        foreach ($field in $sshFields) {
+            if ($Values.ContainsKey($field)) {
+                $Values.Remove($field)
             }
         }
     }
 
     if ($OsFamily -eq 'linux') {
-        $domainJoinFields = @('guest_domain_joinuid', 'guest_domain_jointarget', 'guest_domain_joinou', 'guest_domain_joinpw')
-        $domainDataProvided = $false
-
-        foreach ($field in $domainJoinFields) {
-            if (Test-ProvisioningValuePresent -Value $Values[$field]) {
-                $domainDataProvided = $true
+        $domainFields = @('guest_domain_joinuid', 'guest_domain_joinpw', 'guest_domain_jointarget', 'guest_domain_joinou')
+        $domainSupplied = $false
+        foreach ($field in $domainFields) {
+            if ($Values.ContainsKey($field) -and (Test-ProvisioningValuePresent -Value $Values[$field])) {
+                $domainSupplied = $true
                 break
             }
         }
 
-        if ($domainDataProvided) {
-            Write-Warning "Domain join is not supported for Linux systems. Clearing all domain join variables."
-            foreach ($field in $domainJoinFields) {
-                $Values[$field] = ''
+        if ($domainSupplied) {
+            Write-Warning "Domain join is not supported for Linux systems. Domain join parameters will be ignored."
+        }
+
+        foreach ($field in $domainFields) {
+            if ($Values.ContainsKey($field)) {
+                $Values.Remove($field)
             }
         }
     }
-    return $Values
+}
+
+function Get-ProvisioningFieldReport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$KnownFields,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Values
+    )
+
+    $present = @()
+    $omitted = @()
+
+    foreach ($field in $KnownFields | Sort-Object) {
+        if ($Values.ContainsKey($field) -and (Test-ProvisioningValuePresent -Value $Values[$field])) {
+            $present += $field
+        }
+        else {
+            $omitted += $field
+        }
+    }
+
+    return [pscustomobject]@{
+        Present = $present
+        Omitted = $omitted
+    }
+}
+
+function New-ProvisioningPublishParameters {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Values,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OsFamily
+    )
+
+    $params = @{
+        GuestLaUid   = [string]$Values['guest_la_uid']
+        GuestHostName = [string]$Values['vm_name']
+    }
+
+    if ($Values.ContainsKey('guest_v4_ipaddr') -and (Test-ProvisioningValuePresent -Value $Values['guest_v4_ipaddr'])) {
+        $params.GuestV4IpAddr = [string]$Values['guest_v4_ipaddr']
+        $params.GuestV4CidrPrefix = [string]$Values['guest_v4_cidrprefix']
+        $params.GuestV4DefaultGw = [string]$Values['guest_v4_defaultgw']
+        if ($Values.ContainsKey('guest_v4_dns1') -and (Test-ProvisioningValuePresent -Value $Values['guest_v4_dns1'])) {
+            $params.GuestV4Dns1 = [string]$Values['guest_v4_dns1']
+        }
+        if ($Values.ContainsKey('guest_v4_dns2') -and (Test-ProvisioningValuePresent -Value $Values['guest_v4_dns2'])) {
+            $params.GuestV4Dns2 = [string]$Values['guest_v4_dns2']
+        }
+    }
+
+    if ($Values.ContainsKey('guest_net_dnssuffix') -and (Test-ProvisioningValuePresent -Value $Values['guest_net_dnssuffix'])) {
+        $params.GuestNetDnsSuffix = [string]$Values['guest_net_dnssuffix']
+    }
+
+    if ($OsFamily -eq 'windows' -and $Values.ContainsKey('guest_domain_jointarget') -and (Test-ProvisioningValuePresent -Value $Values['guest_domain_jointarget'])) {
+        $params.GuestDomainJoinTarget = [string]$Values['guest_domain_jointarget']
+        $params.GuestDomainJoinUid = [string]$Values['guest_domain_joinuid']
+        if ($Values.ContainsKey('guest_domain_joinou') -and (Test-ProvisioningValuePresent -Value $Values['guest_domain_joinou'])) {
+            $params.GuestDomainJoinOU = [string]$Values['guest_domain_joinou']
+        }
+    }
+
+    if ($OsFamily -eq 'linux' -and $Values.ContainsKey('cnf_ansible_ssh_user') -and (Test-ProvisioningValuePresent -Value $Values['cnf_ansible_ssh_user'])) {
+        $params.AnsibleSshUser = [string]$Values['cnf_ansible_ssh_user']
+        if ($Values.ContainsKey('cnf_ansible_ssh_key') -and (Test-ProvisioningValuePresent -Value $Values['cnf_ansible_ssh_key'])) {
+            $params.AnsibleSshKey = [string]$Values['cnf_ansible_ssh_key']
+        }
+    }
+
+    return $params
+}
+
+function Assert-StaticIpDependencies {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Values
+    )
+
+    $coreFields = @('guest_v4_ipaddr', 'guest_v4_cidrprefix', 'guest_v4_defaultgw')
+    $coreProvided = @()
+    foreach ($field in $coreFields) {
+        if ($Values.ContainsKey($field) -and (Test-ProvisioningValuePresent -Value $Values[$field])) {
+            $coreProvided += $field
+        }
+    }
+
+    if ($coreProvided.Count -gt 0 -and $coreProvided.Count -ne $coreFields.Count) {
+        throw "Static IPv4 configuration requires fields: $($coreFields -join ', ')"
+    }
+
+    if ($Values.ContainsKey('guest_v4_dns2') -and (Test-ProvisioningValuePresent -Value $Values['guest_v4_dns2'])) {
+        if (-not ($Values.ContainsKey('guest_v4_dns1') -and (Test-ProvisioningValuePresent -Value $Values['guest_v4_dns1']))) {
+            throw "Guest_v4_dns2 provided without guest_v4_dns1. Provide a primary DNS server when specifying a secondary DNS server."
+        }
+    }
 }
 
 function Invoke-ProvisioningClusterEnrollment {
-    param([string]$VmName)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$VmName
+    )
 
     try {
         Import-Module FailoverClusters -ErrorAction Stop | Out-Null
@@ -168,116 +369,126 @@ function Invoke-ProvisioningClusterEnrollment {
 }
 
 try {
-    $inputText = [Console]::In.ReadToEnd()
-    if (-not (Test-ProvisioningValuePresent -Value $inputText)) {
-        throw "No job definition provided on standard input."
+    $jobDefinition = Read-ProvisioningJobDefinition
+
+    $schemaId = $jobDefinition.schema_id
+    $schemaVersion = $jobDefinition.schema_version
+    $rawFields = $jobDefinition.fields
+
+    if (-not (Test-ProvisioningValuePresent -Value $schemaId)) {
+        throw "Job definition missing 'schema_id'."
     }
 
-    if (-not (Get-Command -Name ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
-        try {
-            Import-Module -Name powershell-yaml -ErrorAction Stop | Out-Null
-        }
-        catch {
-            throw "ConvertFrom-Yaml cmdlet is unavailable. Install PowerShell 7+ or the 'powershell-yaml' module."
-        }
+    if (-not (Test-ProvisioningValuePresent -Value $schemaVersion)) {
+        throw "Job definition missing 'schema_version'."
     }
 
-    try {
-        $jobDefinition = ConvertFrom-Yaml -Yaml $inputText -ErrorAction Stop
-    }
-    catch {
-        throw "Failed to parse job definition YAML: $_"
+    if (-not $rawFields) {
+        throw "Job definition missing 'fields' mapping."
     }
 
-    if (-not $jobDefinition) {
-        throw "Parsed job definition is empty."
-    }
+    $values = ConvertTo-Hashtable $rawFields
 
-    if (-not ($jobDefinition.PSObject.Properties.Name -contains 'fields')) {
-        throw "Job definition must contain a 'fields' mapping."
-    }
-
-    $values = ConvertTo-Hashtable $jobDefinition.fields
+    $knownFields = @(
+        'vm_name',
+        'image_name',
+        'gb_ram',
+        'cpu_cores',
+        'guest_la_uid',
+        'guest_la_pw',
+        'os_family',
+        'guest_v4_ipaddr',
+        'guest_v4_cidrprefix',
+        'guest_v4_defaultgw',
+        'guest_v4_dns1',
+        'guest_v4_dns2',
+        'guest_net_dnssuffix',
+        'guest_domain_jointarget',
+        'guest_domain_joinuid',
+        'guest_domain_joinou',
+        'guest_domain_joinpw',
+        'cnf_ansible_ssh_user',
+        'cnf_ansible_ssh_key',
+        'vlan_id',
+        'vm_clustered'
+    )
 
     foreach ($required in @('vm_name', 'image_name', 'gb_ram', 'cpu_cores', 'guest_la_uid', 'guest_la_pw')) {
-        if (-not (Test-ProvisioningValuePresent -Value $values[$required])) {
+        if (-not ($values.ContainsKey($required) -and (Test-ProvisioningValuePresent -Value $values[$required]))) {
             throw "Job definition missing required field '$required'."
         }
     }
 
-    $vmName = $values['vm_name']
     $osFamily = Get-ProvisioningOsFamily -Values $values
-    $values = Update-OsSpecificConfiguration -OsFamily $osFamily -Values $values
+    Apply-OsSpecificAdjustments -OsFamily $osFamily -Values $values
 
-    Test-AllOrNoneParameterSet -SetName 'Static IPv4 configuration' -Members @('guest_v4_ipaddr', 'guest_v4_cidrprefix', 'guest_v4_defaultgw', 'guest_v4_dns1', 'guest_v4_dns2') -Values $values
-    Test-AllOrNoneParameterSet -SetName 'Windows domain join' -Members @('guest_domain_jointarget', 'guest_domain_joinuid', 'guest_domain_joinpw', 'guest_domain_joinou') -Values $values
-    Test-AllOrNoneParameterSet -SetName 'Linux Ansible automation' -Members @('cnf_ansible_ssh_user', 'cnf_ansible_ssh_key') -Values $values
+    Assert-StaticIpDependencies -Values $values
+    Assert-ProvisioningParameterSet -Name 'Windows domain join' -Members @('guest_domain_jointarget', 'guest_domain_joinuid', 'guest_domain_joinpw') -Values $values
+    Assert-ProvisioningParameterSet -Name 'Linux Ansible automation' -Members @('cnf_ansible_ssh_user', 'cnf_ansible_ssh_key') -Values $values
 
+    $values['gb_ram'] = [int]$values['gb_ram']
+    $values['cpu_cores'] = [int]$values['cpu_cores']
+
+    if ($values.ContainsKey('vlan_id') -and (Test-ProvisioningValuePresent -Value $values['vlan_id'])) {
+        $values['vlan_id'] = [int]$values['vlan_id']
+    }
+
+    $vmClustered = $false
+    if ($values.ContainsKey('vm_clustered')) {
+        $vmClustered = [bool]$values['vm_clustered']
+    }
+
+    $fieldReport = Get-ProvisioningFieldReport -KnownFields $knownFields -Values $values
+    if ($fieldReport.Present.Count -gt 0) {
+        Write-Host "Provisioning payload fields provided: $($fieldReport.Present -join ', ')"
+    }
+    if ($fieldReport.Omitted.Count -gt 0) {
+        Write-Host "Provisioning payload fields omitted: $($fieldReport.Omitted -join ', ')"
+    }
+
+    $vmName = [string]$values['vm_name']
+    $imageName = [string]$values['image_name']
     $gbRam = [int]$values['gb_ram']
     $cpuCores = [int]$values['cpu_cores']
-    $vlanId = if (($values.ContainsKey('vlan_id')) -and ($values['vlan_id'] -ne $null)) { [int]$values['vlan_id'] } else { $null }
-    $clusterRequested = [bool]$values['vm_clustered']
+    $vlanId = $null
+    if ($values.ContainsKey('vlan_id') -and (Test-ProvisioningValuePresent -Value $values['vlan_id'])) {
+        $vlanId = [int]$values['vlan_id']
+    }
 
     $currentHost = $env:COMPUTERNAME
     Write-Host "Starting provisioning workflow for VM '$vmName' on host '$currentHost' (OS: $osFamily)."
 
-    $vmDataFolder = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $values['image_name']
+    $vmDataFolder = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName
     Write-Host "Image copied to $vmDataFolder" -ForegroundColor Green
 
     Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -VMDataFolder $vmDataFolder
 
     $registerParams = @{
-        OSFamily = $osFamily
-        GBRam = $gbRam
-        CPUcores = $cpuCores
+        OSFamily    = $osFamily
+        GBRam       = $gbRam
+        CPUcores    = $cpuCores
         VMDataFolder = $vmDataFolder
     }
-    if ($vlanId -ne $null) {
+
+    if ($null -ne $vlanId) {
         $registerParams.VLANId = $vlanId
     }
-    Invoke-ProvisioningRegisterVm @registerParams | Out-Null
 
+    Invoke-ProvisioningRegisterVm @registerParams | Out-Null
     Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName | Out-Null
 
     $env:GuestLaPw = [string]$values['guest_la_pw']
-    if (Test-ProvisioningValuePresent -Value $values['guest_domain_joinpw']) {
+    if ($values.ContainsKey('guest_domain_joinpw') -and (Test-ProvisioningValuePresent -Value $values['guest_domain_joinpw'])) {
         $env:GuestDomainJoinPw = [string]$values['guest_domain_joinpw']
     }
     else {
         Remove-Item Env:GuestDomainJoinPw -ErrorAction SilentlyContinue
     }
 
-    $publishParams = @{
-        GuestLaUid = [string]$values['guest_la_uid']
-        GuestHostName = [string]$vmName
-    }
-
-    if (Test-ProvisioningValuePresent -Value $values['guest_v4_ipaddr']) {
-        $publishParams.GuestV4IpAddr = [string]$values['guest_v4_ipaddr']
-        $publishParams.GuestV4CidrPrefix = [string]$values['guest_v4_cidrprefix']
-        $publishParams.GuestV4DefaultGw = [string]$values['guest_v4_defaultgw']
-        $publishParams.GuestV4Dns1 = [string]$values['guest_v4_dns1']
-        $publishParams.GuestV4Dns2 = [string]$values['guest_v4_dns2']
-    }
-
-    if (Test-ProvisioningValuePresent -Value $values['guest_net_dnssuffix']) {
-        $publishParams.GuestNetDnsSuffix = [string]$values['guest_net_dnssuffix']
-    }
-
-    if (($osFamily -eq 'windows') -and (Test-ProvisioningValuePresent -Value $values['guest_domain_jointarget'])) {
-        $publishParams.GuestDomainJoinTarget = [string]$values['guest_domain_jointarget']
-        $publishParams.GuestDomainJoinUid = [string]$values['guest_domain_joinuid']
-        $publishParams.GuestDomainJoinOU = [string]$values['guest_domain_joinou']
-    }
-
-    if (($osFamily -eq 'linux') -and (Test-ProvisioningValuePresent -Value $values['cnf_ansible_ssh_user'])) {
-        $publishParams.AnsibleSshUser = [string]$values['cnf_ansible_ssh_user']
-        $publishParams.AnsibleSshKey = [string]$values['cnf_ansible_ssh_key']
-    }
-
+    $publishParams = New-ProvisioningPublishParameters -Values $values -OsFamily $osFamily
     Invoke-ProvisioningPublishProvisioningData @publishParams
 
-    if ($clusterRequested) {
+    if ($vmClustered) {
         Invoke-ProvisioningClusterEnrollment -VmName $vmName
     }
 

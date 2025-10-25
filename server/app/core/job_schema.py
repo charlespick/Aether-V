@@ -150,7 +150,13 @@ def validate_job_submission(values: Dict[str, Any], schema: Optional[Dict[str, A
     if errors:
         raise SchemaValidationError(errors)
 
-    return sanitized
+    cleaned = {
+        field_id: value
+        for field_id, value in sanitized.items()
+        if not _is_missing(value)
+    }
+
+    return cleaned
 
 
 def _is_missing(value: Any) -> bool:
