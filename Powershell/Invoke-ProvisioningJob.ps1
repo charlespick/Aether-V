@@ -2,11 +2,7 @@
 param(
     [Parameter(ValueFromPipeline = $true)]
     [AllowNull()]
-    [object]$InputObject,
-
-    [Parameter()]
-    [AllowEmptyString()]
-    [string]$InputFile
+    [object]$InputObject
 )
 
 begin {
@@ -88,23 +84,12 @@ function Read-ProvisioningJobDefinition {
     param(
         [Parameter()]
         [AllowNull()]
-        [object[]]$PipelinedInput,
-
-        [Parameter()]
-        [AllowEmptyString()]
-        [string]$InputFile
+        [object[]]$PipelinedInput
     )
 
     $rawInput = $null
 
-    if (Test-ProvisioningValuePresent -Value $InputFile) {
-        if (-not (Test-Path -LiteralPath $InputFile -PathType Leaf)) {
-            throw "Input file '$InputFile' was not found."
-        }
-
-        $rawInput = Get-Content -LiteralPath $InputFile -Raw -ErrorAction Stop
-    }
-    elseif ($PipelinedInput -and $PipelinedInput.Count -gt 0) {
+    if ($PipelinedInput -and $PipelinedInput.Count -gt 0) {
         $stringified = @()
         foreach ($item in $PipelinedInput) {
             if ($null -eq $item) {
@@ -139,7 +124,7 @@ function Read-ProvisioningJobDefinition {
     }
 
     if (-not (Test-ProvisioningValuePresent -Value $rawInput)) {
-        throw "No job definition supplied via pipeline, file, or standard input."
+        throw "No job definition supplied via pipeline or standard input."
     }
 
     $parsed = $null
@@ -445,14 +430,10 @@ function Invoke-ProvisioningWorkflow {
     param(
         [Parameter()]
         [AllowNull()]
-        [object[]]$PipelineValues,
-
-        [Parameter()]
-        [AllowEmptyString()]
-        [string]$InputFile
+        [object[]]$PipelineValues
     )
 
-    $jobDefinition = Read-ProvisioningJobDefinition -PipelinedInput $PipelineValues -InputFile $InputFile
+    $jobDefinition = Read-ProvisioningJobDefinition -PipelinedInput $PipelineValues
 
     $schemaId = $jobDefinition.schema_id
     $schemaVersion = $jobDefinition.schema_version
@@ -584,7 +565,7 @@ function Invoke-ProvisioningWorkflow {
             $pipelineValues = $script:CollectedInput.ToArray()
         }
 
-        Invoke-ProvisioningWorkflow -PipelineValues $pipelineValues -InputFile $InputFile
+        Invoke-ProvisioningWorkflow -PipelineValues $pipelineValues
         exit 0
     }
     catch {
