@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional
 
+from winrm.exceptions import WinRMOperationTimeoutError
 from winrm.protocol import Protocol
 
 from ..core.config import settings
@@ -133,7 +134,16 @@ class WinRMService:
         try:
             command_done = False
             while not command_done:
-                stdout, stderr, exit_code, command_done = session.receive(shell_id, command_id)
+                try:
+                    stdout, stderr, exit_code, command_done = session._raw_get_command_output(
+                        shell_id,
+                        command_id,
+                    )
+                except WinRMOperationTimeoutError:
+                    # Long-running commands trigger timeout exceptions while still executing.
+                    # Keep waiting for more output.
+                    continue
+
                 if stdout:
                     on_chunk('stdout', stdout.decode('utf-8', errors='replace'))
                     logger.debug(
