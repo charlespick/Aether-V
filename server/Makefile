@@ -24,18 +24,18 @@ dev:
 	@./dev.sh
 
 build: isos
-        cd .. && docker build -f server/Dockerfile -t aetherv:latest .
+	cd .. && docker build -f server/Dockerfile -t aetherv:latest .
 
 isos:
-        @echo "Building provisioning ISOs from latest source..."
-        $(POWERSHELL) -NoLogo -NoProfile -File ../Scripts/Build-ProvisioningISOs.ps1
+	@echo "Building provisioning ISOs from latest source..."
+	$(POWERSHELL) -NoLogo -NoProfile -File ../Scripts/Build-ProvisioningISOs.ps1
 
 run:
 	docker run -p 8000:8000 --env-file .env aetherv:latest
 
 test:
 	@echo "Tests not yet implemented"
-	# pytest tests/
+# pytest tests/
 
 deploy:
 	kubectl apply -k k8s/
