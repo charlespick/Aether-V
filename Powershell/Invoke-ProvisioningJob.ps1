@@ -1,13 +1,35 @@
 [CmdletBinding()]
-param()
+param(
+    [Parameter(ValueFromPipeline = $true)]
+    [AllowNull()]
+    [object]$InputObject,
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
+    [Parameter()]
+    [AllowEmptyString()]
+    [string]$InputFile
+)
 
-$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-Get-ChildItem -Path (Join-Path $scriptRoot 'Provisioning.*.ps1') -File |
-    Sort-Object Name |
-    ForEach-Object { . $_.FullName }
+begin {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+
+    $script:CollectedInput = New-Object System.Collections.Generic.List[object]
+}
+
+process {
+    if ($PSBoundParameters.ContainsKey('InputObject')) {
+        $null = $script:CollectedInput.Add($InputObject)
+    }
+}
+
+end {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+
+    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    Get-ChildItem -Path (Join-Path $scriptRoot 'Provisioning.*.ps1') -File |
+        Sort-Object Name |
+        ForEach-Object { . $_.FullName }
 
 function ConvertTo-Hashtable {
     [CmdletBinding()]
@@ -63,11 +85,61 @@ function Test-ProvisioningValuePresent {
 
 function Read-ProvisioningJobDefinition {
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object[]]$PipelinedInput,
 
-    $rawInput = [Console]::In.ReadToEnd()
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$InputFile
+    )
+
+    $rawInput = $null
+
+    if (Test-ProvisioningValuePresent -Value $InputFile) {
+        if (-not (Test-Path -LiteralPath $InputFile -PathType Leaf)) {
+            throw "Input file '$InputFile' was not found."
+        }
+
+        $rawInput = Get-Content -LiteralPath $InputFile -Raw -ErrorAction Stop
+    }
+    elseif ($PipelinedInput -and $PipelinedInput.Count -gt 0) {
+        $stringified = @()
+        foreach ($item in $PipelinedInput) {
+            if ($null -eq $item) {
+                continue
+            }
+
+            if ($item -is [string]) {
+                $stringified += [string]$item
+                continue
+            }
+
+            if ($item -is [System.Collections.IDictionary]) {
+                $stringified += ($item | ConvertTo-Json -Depth 16 -Compress)
+                continue
+            }
+
+            if ($item -is [System.Management.Automation.PSObject]) {
+                $stringified += (($item | ConvertTo-Json -Depth 16 -Compress))
+                continue
+            }
+
+            $stringified += [string]$item
+        }
+
+        if ($stringified.Count -gt 0) {
+            $rawInput = [string]::Join([Environment]::NewLine, $stringified)
+        }
+    }
+
     if (-not (Test-ProvisioningValuePresent -Value $rawInput)) {
-        throw "No job definition provided on standard input."
+        $rawInput = [Console]::In.ReadToEnd()
+    }
+
+    if (-not (Test-ProvisioningValuePresent -Value $rawInput)) {
+        throw "No job definition supplied via pipeline, file, or standard input."
     }
 
     $parsed = $null
@@ -368,8 +440,19 @@ function Invoke-ProvisioningClusterEnrollment {
     }
 }
 
-try {
-    $jobDefinition = Read-ProvisioningJobDefinition
+function Invoke-ProvisioningWorkflow {
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object[]]$PipelineValues,
+
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$InputFile
+    )
+
+    $jobDefinition = Read-ProvisioningJobDefinition -PipelinedInput $PipelineValues -InputFile $InputFile
 
     $schemaId = $jobDefinition.schema_id
     $schemaVersion = $jobDefinition.schema_version
@@ -493,13 +576,23 @@ try {
     }
 
     Write-Host "Provisioning workflow completed for VM '$vmName'." -ForegroundColor Green
-    exit 0
 }
-catch {
-    Write-Error ("Provisioning job failed: " + $_.Exception.Message)
-    exit 1
-}
-finally {
-    Remove-Item Env:GuestLaPw -ErrorAction SilentlyContinue
-    Remove-Item Env:GuestDomainJoinPw -ErrorAction SilentlyContinue
+
+    try {
+        $pipelineValues = @()
+        if ($script:CollectedInput) {
+            $pipelineValues = $script:CollectedInput.ToArray()
+        }
+
+        Invoke-ProvisioningWorkflow -PipelineValues $pipelineValues -InputFile $InputFile
+        exit 0
+    }
+    catch {
+        Write-Error ("Provisioning job failed: " + $_.Exception.Message)
+        exit 1
+    }
+    finally {
+        Remove-Item Env:GuestLaPw -ErrorAction SilentlyContinue
+        Remove-Item Env:GuestDomainJoinPw -ErrorAction SilentlyContinue
+    }
 }
