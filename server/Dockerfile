@@ -1,5 +1,5 @@
 # Multi-stage build for Aether-V Orchestrator
-# Note: ISOs should be pre-built using GitHub Actions before Docker build
+# Provisioning ISOs are rebuilt via `make build` before this Dockerfile runs
 
 # Stage 1: Base image with Python
 FROM python:3.11-slim AS base

@@ -2,14 +2,110 @@
 import logging
 from base64 import b64encode
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional
 
+from winrm.exceptions import WinRMOperationTimeoutError
 from winrm.protocol import Protocol
 
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _WinRMStreamState:
+    """Track streaming progress and provide consistent logging."""
+
+    hostname: str
+    command_id: str
+    on_chunk: Callable[[str, str], None]
+    stdout_sent: int = 0
+    stderr_sent: int = 0
+    stdout_bytes: int = 0
+    stderr_bytes: int = 0
+    stdout_chunks: int = 0
+    stderr_chunks: int = 0
+    timeouts: int = 0
+    last_stream_activity: float = field(default_factory=perf_counter)
+
+    def process(self, stream_name: str, payload: bytes) -> None:
+        """Send only the newly observed bytes for the given stream."""
+
+        if not payload:
+            return
+
+        if stream_name == "stdout":
+            new_payload, total_sent = self._extract_new_bytes(payload, self.stdout_sent)
+            if not new_payload:
+                return
+            self.stdout_sent = total_sent
+            self.stdout_bytes += len(new_payload)
+            self.stdout_chunks += 1
+            chunk_index = self.stdout_chunks
+        else:
+            new_payload, total_sent = self._extract_new_bytes(payload, self.stderr_sent)
+            if not new_payload:
+                return
+            self.stderr_sent = total_sent
+            self.stderr_bytes += len(new_payload)
+            self.stderr_chunks += 1
+            chunk_index = self.stderr_chunks
+
+        decoded = new_payload.decode("utf-8", errors="replace")
+        self.on_chunk(stream_name, decoded)
+        self.last_stream_activity = perf_counter()
+        logger.debug(
+            "Streamed %d %s bytes from %s for command %s (chunk #%d)",
+            len(new_payload),
+            stream_name,
+            self.hostname,
+            self.command_id,
+            chunk_index,
+        )
+
+    def register_timeout(self) -> None:
+        """Record a WinRM operation timeout while waiting for output."""
+
+        self.timeouts += 1
+        idle = perf_counter() - self.last_stream_activity
+        logger.debug(
+            "WinRM streaming timeout while waiting for output from %s (command=%s, idle=%.2fs, timeouts=%d)",
+            self.hostname,
+            self.command_id,
+            idle,
+            self.timeouts,
+        )
+
+    def log_summary(self, exit_code: Optional[int], duration: float) -> None:
+        """Emit a summary of the streamed session."""
+
+        logger.info(
+            "Streaming PowerShell command %s on %s finished (exit_code=%s, duration=%.2fs, stdout=%d bytes in %d chunks, stderr=%d bytes in %d chunks, timeouts=%d)",
+            self.command_id,
+            self.hostname,
+            exit_code if exit_code is not None else "<unknown>",
+            duration,
+            self.stdout_bytes,
+            self.stdout_chunks,
+            self.stderr_bytes,
+            self.stderr_chunks,
+            self.timeouts,
+        )
+
+    @staticmethod
+    def _extract_new_bytes(payload: bytes, total_sent: int) -> tuple[bytes, int]:
+        """Return bytes that have not yet been emitted for a stream."""
+
+        payload_length = len(payload)
+        if payload_length < total_sent:
+            # Some WinRM providers only return the newest bytes. Treat the payload
+            # as fresh data and advance the sent counter incrementally.
+            return payload, total_sent + payload_length
+
+        new_payload = payload[total_sent:]
+        return new_payload, payload_length
 
 
 def _format_output_preview(output: str, *, max_length: int = 400) -> str:
@@ -128,33 +224,51 @@ class WinRMService:
             hostname,
         )
 
-        exit_code = 0
+        stream_state = _WinRMStreamState(
+            hostname=hostname,
+            command_id=command_id,
+            on_chunk=on_chunk,
+        )
+        exit_code: Optional[int] = None
         start_time = perf_counter()
         try:
             command_done = False
             while not command_done:
-                stdout, stderr, exit_code, command_done = session.receive(shell_id, command_id)
-                if stdout:
-                    on_chunk('stdout', stdout.decode('utf-8', errors='replace'))
-                    logger.debug(
-                        "Received %d stdout bytes from %s (streaming)",
-                        len(stdout),
-                        hostname,
+                try:
+                    stdout, stderr, chunk_exit_code, command_done = self._get_command_output_raw(
+                        session,
+                        shell_id,
+                        command_id,
                     )
-                if stderr:
-                    on_chunk('stderr', stderr.decode('utf-8', errors='replace'))
-                    logger.debug(
-                        "Received %d stderr bytes from %s (streaming)",
-                        len(stderr),
-                        hostname,
-                    )
+                except WinRMOperationTimeoutError:
+                    # Long-running commands trigger timeout exceptions while still executing.
+                    # Keep waiting for more output.
+                    stream_state.register_timeout()
+                    continue
+
+                stream_state.process("stdout", stdout)
+                stream_state.process("stderr", stderr)
+                if command_done:
+                    exit_code = chunk_exit_code
         finally:
             try:
                 session.cleanup_command(shell_id, command_id)
             finally:
                 session.close_shell(shell_id)
         duration = perf_counter() - start_time
-        return exit_code, duration
+        stream_state.log_summary(exit_code, duration)
+        return exit_code or 0, duration
+
+    @staticmethod
+    def _get_command_output_raw(
+        session: Protocol, shell_id: str, command_id: str
+    ) -> tuple[bytes, bytes, int, bool]:
+        """Retrieve the next chunk of command output using available APIs."""
+
+        getter = getattr(session, "get_command_output_raw", None)
+        if getter is None:
+            getter = getattr(session, "_raw_get_command_output")
+        return getter(shell_id, command_id)
 
     def get_session(self, hostname: str) -> Protocol:
         """Return a brand new WinRM session for a host."""
