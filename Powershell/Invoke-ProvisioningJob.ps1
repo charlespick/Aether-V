@@ -42,11 +42,11 @@ function Test-ProvisioningValuePresent {
 function Get-ProvisioningOsFamily {
     param([hashtable]$Values)
 
-    if ($Values.ContainsKey('os_family') -and (Test-ProvisioningValuePresent $Values['os_family'])) {
+    if ($Values.ContainsKey('os_family') -and (Test-ProvisioningValuePresent -Value $Values['os_family'])) {
         return ($Values['os_family'].ToString().ToLowerInvariant())
     }
 
-    if (-not (Test-ProvisioningValuePresent $Values['image_name'])) {
+    if (-not (Test-ProvisioningValuePresent -Value $Values['image_name'])) {
         throw "Job definition missing 'image_name'; unable to determine OS family."
     }
 
@@ -89,7 +89,7 @@ function Test-AllOrNoneParameterSet {
 
     $provided = @()
     foreach ($member in $Members) {
-        if ($Values.ContainsKey($member) -and (Test-ProvisioningValuePresent $Values[$member])) {
+        if ($Values.ContainsKey($member) -and (Test-ProvisioningValuePresent -Value $Values[$member])) {
             $provided += $member
         }
     }
@@ -112,7 +112,7 @@ function Update-OsSpecificConfiguration {
     )
 
     if ($OsFamily -eq 'windows') {
-        if ((Test-ProvisioningValuePresent $Values['cnf_ansible_ssh_user']) -or (Test-ProvisioningValuePresent $Values['cnf_ansible_ssh_key'])) {
+        if ((Test-ProvisioningValuePresent -Value $Values['cnf_ansible_ssh_user']) -or (Test-ProvisioningValuePresent -Value $Values['cnf_ansible_ssh_key'])) {
             Write-Warning "Ansible SSH credentials are not supported for Windows systems. Clearing all Ansible SSH variables."
             foreach ($field in @('cnf_ansible_ssh_user', 'cnf_ansible_ssh_key')) {
                 $Values[$field] = ''
@@ -125,7 +125,7 @@ function Update-OsSpecificConfiguration {
         $domainDataProvided = $false
 
         foreach ($field in $domainJoinFields) {
-            if (Test-ProvisioningValuePresent $Values[$field]) {
+            if (Test-ProvisioningValuePresent -Value $Values[$field]) {
                 $domainDataProvided = $true
                 break
             }
@@ -169,7 +169,7 @@ function Invoke-ProvisioningClusterEnrollment {
 
 try {
     $inputText = [Console]::In.ReadToEnd()
-    if (-not (Test-ProvisioningValuePresent $inputText)) {
+    if (-not (Test-ProvisioningValuePresent -Value $inputText)) {
         throw "No job definition provided on standard input."
     }
 
@@ -200,7 +200,7 @@ try {
     $values = ConvertTo-Hashtable $jobDefinition.fields
 
     foreach ($required in @('vm_name', 'image_name', 'gb_ram', 'cpu_cores', 'guest_la_uid', 'guest_la_pw')) {
-        if (-not (Test-ProvisioningValuePresent $values[$required])) {
+        if (-not (Test-ProvisioningValuePresent -Value $values[$required])) {
             throw "Job definition missing required field '$required'."
         }
     }
@@ -240,7 +240,7 @@ try {
     Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName | Out-Null
 
     $env:GuestLaPw = [string]$values['guest_la_pw']
-    if (Test-ProvisioningValuePresent $values['guest_domain_joinpw']) {
+    if (Test-ProvisioningValuePresent -Value $values['guest_domain_joinpw']) {
         $env:GuestDomainJoinPw = [string]$values['guest_domain_joinpw']
     }
     else {
@@ -252,7 +252,7 @@ try {
         GuestHostName = [string]$vmName
     }
 
-    if (Test-ProvisioningValuePresent $values['guest_v4_ipaddr']) {
+    if (Test-ProvisioningValuePresent -Value $values['guest_v4_ipaddr']) {
         $publishParams.GuestV4IpAddr = [string]$values['guest_v4_ipaddr']
         $publishParams.GuestV4CidrPrefix = [string]$values['guest_v4_cidrprefix']
         $publishParams.GuestV4DefaultGw = [string]$values['guest_v4_defaultgw']
@@ -260,17 +260,17 @@ try {
         $publishParams.GuestV4Dns2 = [string]$values['guest_v4_dns2']
     }
 
-    if (Test-ProvisioningValuePresent $values['guest_net_dnssuffix']) {
+    if (Test-ProvisioningValuePresent -Value $values['guest_net_dnssuffix']) {
         $publishParams.GuestNetDnsSuffix = [string]$values['guest_net_dnssuffix']
     }
 
-    if (($osFamily -eq 'windows') -and (Test-ProvisioningValuePresent $values['guest_domain_jointarget'])) {
+    if (($osFamily -eq 'windows') -and (Test-ProvisioningValuePresent -Value $values['guest_domain_jointarget'])) {
         $publishParams.GuestDomainJoinTarget = [string]$values['guest_domain_jointarget']
         $publishParams.GuestDomainJoinUid = [string]$values['guest_domain_joinuid']
         $publishParams.GuestDomainJoinOU = [string]$values['guest_domain_joinou']
     }
 
-    if (($osFamily -eq 'linux') -and (Test-ProvisioningValuePresent $values['cnf_ansible_ssh_user'])) {
+    if (($osFamily -eq 'linux') -and (Test-ProvisioningValuePresent -Value $values['cnf_ansible_ssh_user'])) {
         $publishParams.AnsibleSshUser = [string]$values['cnf_ansible_ssh_user']
         $publishParams.AnsibleSshKey = [string]$values['cnf_ansible_ssh_key']
     }
