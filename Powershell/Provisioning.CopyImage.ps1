@@ -50,7 +50,7 @@ function Invoke-ProvisioningCopyImage {
         Copy-Item -Path $imagePath -Destination $destinationPath -Force -ErrorAction Stop
     }
     catch {
-        throw "Failed to copy golden image '$ImageName' to $destinationPath: $_"
+        throw "Failed to copy golden image '$ImageName' to ${destinationPath}: $_"
     }
 
     return $destinationPath

@@ -28,7 +28,7 @@ function Invoke-ProvisioningCopyProvisioningIso {
             Write-Host "Copied provisioning ISO to $destinationPath" -ForegroundColor Green
         }
         catch {
-            throw "Failed to copy provisioning ISO from $SourcePath to $DestinationFolder: $_"
+            throw "Failed to copy provisioning ISO from $SourcePath to ${DestinationFolder}: $_"
         }
     }
 
