@@ -164,6 +164,17 @@ Before service integration, host setup required manual execution of installation
 - Verify version file content matches container
 - Ensure WinRM user can write to installation directory
 
+### HTTP 503 Responses During Startup
+
+**Symptom:** Hyper-V hosts receive `503 Service Temporarily Unavailable` when downloading agent artifacts.
+
+**Explanation:** Kubernetes ingress only forwards traffic to pods that report ready through `/readyz`. During startup the orchestrator now returns an HTTP 200 response with status values such as `deploying_agents` or `initializing` while background deployment and inventory refresh complete. Older container builds returned HTTP 503 during this window, which caused ingress to serve a 503 page to hosts attempting to download scripts.
+
+**Solutions:**
+- Ensure you are running a container version that reports the transitional readiness statuses described above.
+- If 503 responses persist, verify ingress routing for the agent download path and confirm the orchestrator pod is healthy.
+- The orchestrator automatically retries failed artifact downloads up to `AGENT_DOWNLOAD_MAX_ATTEMPTS` times with a pause of `AGENT_DOWNLOAD_RETRY_INTERVAL` seconds between attempts, so transient ingress warm-up delays are handled automatically.
+
 ### Files Not Accessible to VMs
 
 **Symptom:** VM provisioning fails to find scripts/ISOs

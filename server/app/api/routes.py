@@ -57,9 +57,15 @@ async def readiness_check():
     # Otherwise ensure the inventory service has successfully completed
     # an initial refresh before reporting ready.
     if not inventory_service.last_refresh:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Inventory not yet initialized"
+        if host_deployment_service.is_startup_in_progress():
+            readiness_status = "deploying_agents"
+        else:
+            readiness_status = "initializing"
+
+        return HealthResponse(
+            status=readiness_status,
+            version=settings.app_version,
+            timestamp=datetime.utcnow(),
         )
 
     return HealthResponse(
