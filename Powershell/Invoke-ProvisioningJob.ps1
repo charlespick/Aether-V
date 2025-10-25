@@ -58,7 +58,19 @@ function Get-ProvisioningOsFamily {
         }
     }
 
-    $linuxPrefixes = @('ubuntu', 'rhel', 'centos', 'rocky linux', 'almalinux', 'oracle linux', 'debian', 'suse', 'opensuse', 'fedora')
+    $linuxPrefixes = @(
+        'ubuntu',
+        'rhel',
+        'red hat enterprise linux',
+        'centos',
+        'rocky linux',
+        'almalinux',
+        'oracle linux',
+        'debian',
+        'suse',
+        'opensuse',
+        'fedora'
+    )
     foreach ($prefix in $linuxPrefixes) {
         if ($imageName.StartsWith($prefix)) {
             return 'linux'
@@ -93,23 +105,40 @@ function Test-AllOrNoneParameterSet {
     }
 }
 
-function Assert-OsSpecificConstraints {
+function Update-OsSpecificConfiguration {
     param(
         [string]$OsFamily,
         [hashtable]$Values
     )
 
     if ($OsFamily -eq 'windows') {
-        if (Test-ProvisioningValuePresent $Values['cnf_ansible_ssh_user'] -or Test-ProvisioningValuePresent $Values['cnf_ansible_ssh_key']) {
-            throw "Ansible SSH configuration is not supported for Windows guests."
+        if ((Test-ProvisioningValuePresent $Values['cnf_ansible_ssh_user']) -or (Test-ProvisioningValuePresent $Values['cnf_ansible_ssh_key'])) {
+            Write-Warning "Ansible SSH credentials are not supported for Windows systems. Clearing all Ansible SSH variables."
+            foreach ($field in @('cnf_ansible_ssh_user', 'cnf_ansible_ssh_key')) {
+                $Values[$field] = ''
+            }
         }
     }
 
     if ($OsFamily -eq 'linux') {
-        if (Test-ProvisioningValuePresent $Values['guest_domain_joinuid'] -or Test-ProvisioningValuePresent $Values['guest_domain_jointarget'] -or Test-ProvisioningValuePresent $Values['guest_domain_joinou'] -or Test-ProvisioningValuePresent $Values['guest_domain_joinpw']) {
-            throw "Active Directory domain join parameters are not supported for Linux guests."
+        $domainJoinFields = @('guest_domain_joinuid', 'guest_domain_jointarget', 'guest_domain_joinou', 'guest_domain_joinpw')
+        $domainDataProvided = $false
+
+        foreach ($field in $domainJoinFields) {
+            if (Test-ProvisioningValuePresent $Values[$field]) {
+                $domainDataProvided = $true
+                break
+            }
+        }
+
+        if ($domainDataProvided) {
+            Write-Warning "Domain join is not supported for Linux systems. Clearing all domain join variables."
+            foreach ($field in $domainJoinFields) {
+                $Values[$field] = ''
+            }
         }
     }
+    return $Values
 }
 
 function Invoke-ProvisioningClusterEnrollment {
@@ -178,7 +207,7 @@ try {
 
     $vmName = $values['vm_name']
     $osFamily = Get-ProvisioningOsFamily -Values $values
-    Assert-OsSpecificConstraints -OsFamily $osFamily -Values $values
+    $values = Update-OsSpecificConfiguration -OsFamily $osFamily -Values $values
 
     Test-AllOrNoneParameterSet -SetName 'Static IPv4 configuration' -Members @('guest_v4_ipaddr', 'guest_v4_cidrprefix', 'guest_v4_defaultgw', 'guest_v4_dns1', 'guest_v4_dns2') -Values $values
     Test-AllOrNoneParameterSet -SetName 'Windows domain join' -Members @('guest_domain_jointarget', 'guest_domain_joinuid', 'guest_domain_joinpw', 'guest_domain_joinou') -Values $values
@@ -186,7 +215,7 @@ try {
 
     $gbRam = [int]$values['gb_ram']
     $cpuCores = [int]$values['cpu_cores']
-    $vlanId = if ($values.ContainsKey('vlan_id') -and $values['vlan_id'] -ne $null) { [int]$values['vlan_id'] } else { $null }
+    $vlanId = if (($values.ContainsKey('vlan_id')) -and ($values['vlan_id'] -ne $null)) { [int]$values['vlan_id'] } else { $null }
     $clusterRequested = [bool]$values['vm_clustered']
 
     $currentHost = $env:COMPUTERNAME
@@ -235,13 +264,13 @@ try {
         $publishParams.GuestNetDnsSuffix = [string]$values['guest_net_dnssuffix']
     }
 
-    if ($osFamily -eq 'windows' -and Test-ProvisioningValuePresent $values['guest_domain_jointarget']) {
+    if (($osFamily -eq 'windows') -and (Test-ProvisioningValuePresent $values['guest_domain_jointarget'])) {
         $publishParams.GuestDomainJoinTarget = [string]$values['guest_domain_jointarget']
         $publishParams.GuestDomainJoinUid = [string]$values['guest_domain_joinuid']
         $publishParams.GuestDomainJoinOU = [string]$values['guest_domain_joinou']
     }
 
-    if ($osFamily -eq 'linux' -and Test-ProvisioningValuePresent $values['cnf_ansible_ssh_user']) {
+    if (($osFamily -eq 'linux') -and (Test-ProvisioningValuePresent $values['cnf_ansible_ssh_user'])) {
         $publishParams.AnsibleSshUser = [string]$values['cnf_ansible_ssh_user']
         $publishParams.AnsibleSshKey = [string]$values['cnf_ansible_ssh_key']
     }
