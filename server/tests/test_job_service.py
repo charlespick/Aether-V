@@ -2,6 +2,7 @@ import sys
 import types
 import uuid
 from datetime import datetime
+from typing import List, Tuple
 from unittest import IsolatedAsyncioTestCase, skipIf
 
 
@@ -137,6 +138,85 @@ class JobServiceTests(IsolatedAsyncioTestCase):
                 (job.job_id, ["STDERR: error-line"]),
             ],
         )
+
+    async def test_stream_decoder_handles_split_clixml_payloads(self):
+        job = Job(
+            job_id="job-stream-xml",
+            job_type="provision_vm",
+            status=JobStatus.RUNNING,
+            created_at=datetime.utcnow(),
+            parameters={"definition": {}},
+            output=[],
+        )
+
+        async with self.job_service._lock:
+            self.job_service.jobs[job.job_id] = job
+
+        captured: List[Tuple[str, List[str]]] = []
+
+        async def fake_broadcast(job_id, lines):
+            captured.append((job_id, list(lines)))
+
+        self.job_service._broadcast_job_output = fake_broadcast  # type: ignore[assignment]
+
+        chunk1 = "#< CLIXML\r\n"
+        chunk2 = (
+            "<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\">"
+            "<Obj><S>Line one</S><S>Line two</S></Obj></Objs>\r\nAfter XML line\n"
+        )
+
+        await self.job_service._handle_stream_chunk(job.job_id, "stdout", chunk1)
+        await self.job_service._handle_stream_chunk(job.job_id, "stdout", chunk2)
+        await self.job_service._finalize_job_streams(job.job_id)
+
+        async with self.job_service._lock:
+            stored_output = list(self.job_service.jobs[job.job_id].output)
+
+        self.assertEqual(
+            stored_output,
+            ["Line one", "Line two", "After XML line"],
+        )
+
+        self.assertEqual(
+            captured,
+            [(job.job_id, ["Line one", "Line two", "After XML line"])],
+        )
+
+    async def test_stream_decoder_handles_split_sentinel_across_chunks(self):
+        job = Job(
+            job_id="job-stream-split",
+            job_type="provision_vm",
+            status=JobStatus.RUNNING,
+            created_at=datetime.utcnow(),
+            parameters={"definition": {}},
+            output=[],
+        )
+
+        async with self.job_service._lock:
+            self.job_service.jobs[job.job_id] = job
+
+        captured: List[Tuple[str, List[str]]] = []
+
+        async def fake_broadcast(job_id, lines):
+            captured.append((job_id, list(lines)))
+
+        self.job_service._broadcast_job_output = fake_broadcast  # type: ignore[assignment]
+
+        chunk1 = "#< CLI"
+        chunk2 = (
+            "XML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\">"
+            "<Obj><S>Split payload</S></Obj></Objs>\n"
+        )
+
+        await self.job_service._handle_stream_chunk(job.job_id, "stdout", chunk1)
+        await self.job_service._handle_stream_chunk(job.job_id, "stdout", chunk2)
+        await self.job_service._finalize_job_streams(job.job_id)
+
+        async with self.job_service._lock:
+            stored_output = list(self.job_service.jobs[job.job_id].output)
+
+        self.assertEqual(stored_output, ["Split payload"])
+        self.assertEqual(captured, [(job.job_id, ["Split payload"])])
 
     async def test_broadcast_job_event_targets_specific_and_aggregate_topics(self):
         payload = {"example": True}
