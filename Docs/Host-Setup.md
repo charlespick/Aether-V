@@ -14,8 +14,9 @@ Hosts download those artifacts from the HTTP endpoint defined by `AGENT_DOWNLOAD
 URL (including scheme and the `/agent` mount path) that Hyper-V hosts can reach.
 
 **Default Location:**
+
 ```
-C:\Program Files\Home Lab Virtual Machine Manager
+C:\Program Files\Aether-V
 ```
 
 ### Use Cases for Custom Installation Directories
@@ -26,16 +27,17 @@ Use separate directories to run multiple versions of the service against the sam
 
 ```bash
 # Production deployment
-HOST_INSTALL_DIRECTORY=C:\Program Files\Home Lab Virtual Machine Manager
+HOST_INSTALL_DIRECTORY=C:\Program Files\Aether-V
 
 # Development deployment
-HOST_INSTALL_DIRECTORY=C:\Program Files\Home Lab Virtual Machine Manager (Devel)
+HOST_INSTALL_DIRECTORY=C:\Program Files\Aether-V (Devel)
 
 # Testing deployment
-HOST_INSTALL_DIRECTORY=C:\Program Files\Home Lab Virtual Machine Manager (Test)
+HOST_INSTALL_DIRECTORY=C:\Program Files\Aether-V (Test)
 ```
 
 Each service instance will:
+
 - Deploy its artifacts to its own directory
 - Manage its own version tracking
 - Operate independently without interfering with other instances
@@ -74,6 +76,7 @@ When the service starts, it:
 The service deploys the following to `{HOST_INSTALL_DIRECTORY}` on each host:
 
 **PowerShell Scripts:**
+
 - `Invoke-ProvisioningJob.ps1` - Master orchestrator that reads JSON job definitions and invokes the helper scripts
 - `Provisioning.CopyImage.ps1` - Copies VM image files from template location
 - `Provisioning.CopyProvisioningISO.ps1` - Copies the appropriate provisioning ISO to VM folder
@@ -82,10 +85,12 @@ The service deploys the following to `{HOST_INSTALL_DIRECTORY}` on each host:
 - `Provisioning.PublishProvisioningData.ps1` - Publishes provisioning data to VM via Hyper-V KVP
 
 **ISOs:**
+
 - `WindowsProvisioning.iso` - Windows provisioning service and modules
 - `LinuxProvisioning.iso` - Cloud-init compatible Linux provisioning
 
 **Version Tracking:**
+
 - `version` - Version file matching container version
 
 ### Version Management
@@ -115,28 +120,32 @@ added to the agent directory at build time.
 Before service integration, host setup required manual execution of installation scripts:
 
 **Scripts Installation** (via `InstallHostScripts.ps1`):
+
 - Checked local `scriptsversion` file
 - Fetched latest version from GitHub
 - Downloaded scripts via GitHub API
-- Saved to `C:\Program Files\Home Lab Virtual Machine Manager\`
+- Saved to `C:\Program Files\Aether-V\`
 - Updated `scriptsversion` file
 
 **ISOs Installation** (via `InstallHostProvisioningISOs.ps1`):
-- Checked local `isosversion` file  
+
+- Checked local `isosversion` file
 - Queried GitHub Releases API (stable or prerelease)
 - Downloaded ISOs from release assets
-- Saved to `C:\Program Files\Home Lab Virtual Machine Manager\`
+- Saved to `C:\Program Files\Aether-V\`
 - Updated `isosversion` file
 
 ### Migration to Service-Integrated Approach
 
 **What Changed:**
+
 - ❌ Manual script execution → ✅ Automatic on service startup
 - ❌ Two version files per host → ✅ Single version file
 - ❌ External GitHub dependencies → ✅ Self-contained in container
 - ❌ Branch-based dev mode → ✅ Flexible directory configuration
 
 **Benefits:**
+
 - No manual host setup required
 - Transparent to users
 - Version consistency guaranteed
@@ -151,6 +160,7 @@ Before service integration, host setup required manual execution of installation
 **Symptom:** Service logs show directory creation errors
 
 **Solutions:**
+
 - Verify WinRM user has write permissions to parent directory
 - Check Windows path length limits (260 characters)
 - Ensure path doesn't contain invalid characters
@@ -160,6 +170,7 @@ Before service integration, host setup required manual execution of installation
 **Symptom:** Service continuously redeploys artifacts
 
 **Solutions:**
+
 - Check version file exists: `Test-Path "{HOST_INSTALL_DIRECTORY}\version"`
 - Verify version file content matches container
 - Ensure WinRM user can write to installation directory
@@ -171,6 +182,7 @@ Before service integration, host setup required manual execution of installation
 **Explanation:** Kubernetes ingress only forwards traffic to pods that report ready through `/readyz`. During startup the orchestrator now returns an HTTP 200 response with status values such as `deploying_agents` or `initializing` while background deployment and inventory refresh complete. Older container builds returned HTTP 503 during this window, which caused ingress to serve a 503 page to hosts attempting to download scripts.
 
 **Solutions:**
+
 - Ensure you are running a container version that reports the transitional readiness statuses described above.
 - If 503 responses persist, verify ingress routing for the agent download path and confirm the orchestrator pod is healthy.
 - The orchestrator automatically retries failed artifact downloads up to `AGENT_DOWNLOAD_MAX_ATTEMPTS` times with a pause of `AGENT_DOWNLOAD_RETRY_INTERVAL` seconds between attempts, so transient ingress warm-up delays are handled automatically.
@@ -180,6 +192,7 @@ Before service integration, host setup required manual execution of installation
 **Symptom:** VM provisioning fails to find scripts/ISOs
 
 **Solutions:**
+
 - Verify installation directory path in service configuration
 - Ensure `Provisioning.CopyProvisioningISO.ps1` uses correct paths
 - Check PowerShell scripts reference `HOST_INSTALL_DIRECTORY` correctly
@@ -190,7 +203,7 @@ To test your `HOST_INSTALL_DIRECTORY` configuration:
 
 ```powershell
 # On the Hyper-V host, verify directory and contents
-$installDir = "C:\Program Files\Home Lab Virtual Machine Manager (Test)"
+$installDir = "C:\Program Files\Aether-V (Test)"
 Test-Path $installDir
 Get-ChildItem $installDir
 
@@ -215,7 +228,7 @@ kind: ConfigMap
 metadata:
   name: aetherv-dev-config
 data:
-  HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Home Lab Virtual Machine Manager (Devel)"
+  HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Aether-V (Devel)"
   HYPERV_HOSTS: "hyperv01.dev.local,hyperv02.dev.local"
 ```
 
@@ -225,13 +238,14 @@ For running multiple test environments:
 
 ```bash
 # Test Environment 1
-HOST_INSTALL_DIRECTORY=C:\Program Files\Home Lab Virtual Machine Manager (Test1)
+HOST_INSTALL_DIRECTORY=C:\Program Files\Aether-V (Test1)
 
-# Test Environment 2  
-HOST_INSTALL_DIRECTORY=C:\Program Files\Home Lab Virtual Machine Manager (Test2)
+# Test Environment 2
+HOST_INSTALL_DIRECTORY=C:\Program Files\Aether-V (Test2)
 ```
 
 Each environment maintains its own:
+
 - Artifact versions
 - Deployment state
 - Configuration isolation

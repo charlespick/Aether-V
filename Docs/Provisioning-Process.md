@@ -37,6 +37,7 @@ The service executes these steps when provisioning a new VM:
 #### 1. Pre-Provisioning
 
 - **OS Family Detection**: Determines whether the image is Windows or Linux based on image name patterns when the `os_family` field is omitted
+
   - Windows: `Windows*`, `Microsoft Windows*`
   - Linux: `Ubuntu*`, `RHEL*`, `CentOS*`, `Rocky Linux*`, `AlmaLinux*`, `Oracle Linux*`, `Debian*`, `SUSE*`, `openSUSE*`, `Fedora*`
 
@@ -53,6 +54,7 @@ Provisioning.CopyImage.ps1 -VMName "vm-name" -ImageName "image-template"
 ```
 
 **Actions:**
+
 - Locates golden image in cluster storage
 - Creates new VM data folder
 - Copies VHDX to VM folder
@@ -65,6 +67,7 @@ Provisioning.CopyProvisioningISO.ps1 -OSFamily "windows|linux" -VMDataFolder "pa
 ```
 
 **Actions:**
+
 - Determines correct ISO (Windows or Linux provisioning)
 - Copies ISO from `{HOST_INSTALL_DIRECTORY}` to VM folder
 - ISO will be attached when VM is registered
@@ -77,6 +80,7 @@ Provisioning.RegisterVM.ps1 -OSFamily "windows|linux" -GBRam 4 -CPUcores 2 `
 ```
 
 **Actions:**
+
 - Registers VM with Hyper-V
 - Configures memory and CPU allocation
 - Attaches VHDX and provisioning ISO
@@ -90,6 +94,7 @@ Provisioning.WaitForProvisioningKey.ps1 -VMName "vm-name"
 ```
 
 **Actions:**
+
 - Monitors Hyper-V KVP exchange
 - Waits for VM to write "ProvisioningReady" key
 - Signals that guest is ready to receive configuration
@@ -106,10 +111,12 @@ Provisioning.PublishProvisioningData.ps1 -GuestHostName "vm-name" `
 ```
 
 **Environment Variables (for secrets):**
+
 - `GuestLaPw` - Local administrator password
 - `GuestDomainJoinPw` - Domain join password (Windows only)
 
 **Actions:**
+
 - Encrypts sensitive data
 - Validates that static IPv4 requests include the required fields (IP address, CIDR prefix, default gateway) and that secondary DNS is only provided when a primary DNS server is present
 - Publishes configuration to VM via Hyper-V KVP
@@ -125,6 +132,7 @@ Add-ClusterVirtualMachineRole -VMName "vm-name"
 ```
 
 **Requirements:**
+
 - Failover Clustering feature installed
 - VM registered on cluster-capable host
 
@@ -170,12 +178,14 @@ Add-ClusterVirtualMachineRole -VMName "vm-name"
 ### Security Considerations
 
 **Credential Handling:**
+
 - Passwords passed via environment variables (not command line)
 - Guest credentials encrypted with VM-specific key via KVP
 - Credentials not exposed in process listings or logs
 - Service logs configured with `no_log` for sensitive operations
 
 **KVP Security:**
+
 - Data encrypted using Hyper-V integration services
 - Only accessible from within guest VM
 - Keys deleted after guest retrieves configuration
@@ -194,11 +204,12 @@ The original implementation used Ansible to orchestrate provisioning:
   gather_facts: no
   vars:
     develop: false
-    install_directory: "{{ 'Home Lab Virtual Machine Manager (Devel)' 
-                           if develop else 'Home Lab Virtual Machine Manager' }}"
+    install_directory: "{{ 'Aether-V (Devel)'
+      if develop else 'Aether-V' }}"
 ```
 
 **Key Characteristics:**
+
 - Ansible playbook executed from AWX or command line
 - Direct WinRM commands to Hyper-V host
 - Sequential task execution with error handling
@@ -206,15 +217,15 @@ The original implementation used Ansible to orchestrate provisioning:
 
 ### Workflow Differences
 
-| Aspect | Ansible Playbook | Service-Integrated |
-|--------|-----------------|-------------------|
-| **Execution** | External Ansible/AWX | Internal job service |
-| **State** | Playbook run state | In-memory job tracking |
-| **Parallelism** | Ansible parallelism | Async Python workers |
-| **Host Selection** | Ansible inventory | Service configuration |
-| **Error Handling** | Playbook retry logic | Service job retry |
-| **Logging** | Ansible logs | Service API logs |
-| **Installation Dir** | `develop` boolean | `HOST_INSTALL_DIRECTORY` config |
+| Aspect               | Ansible Playbook     | Service-Integrated              |
+| -------------------- | -------------------- | ------------------------------- |
+| **Execution**        | External Ansible/AWX | Internal job service            |
+| **State**            | Playbook run state   | In-memory job tracking          |
+| **Parallelism**      | Ansible parallelism  | Async Python workers            |
+| **Host Selection**   | Ansible inventory    | Service configuration           |
+| **Error Handling**   | Playbook retry logic | Service job retry               |
+| **Logging**          | Ansible logs         | Service API logs                |
+| **Installation Dir** | `develop` boolean    | `HOST_INSTALL_DIRECTORY` config |
 
 ### Migration Path
 
@@ -226,6 +237,7 @@ The service maintains **exact orchestration parity** with the original Ansible p
 4. Same KVP-based guest communication
 
 **Enhancements:**
+
 - More flexible installation directory configuration
 - Better integration with modern orchestration (Kubernetes)
 - API-first design for automation (Terraform, etc.)
@@ -236,12 +248,14 @@ The service maintains **exact orchestration parity** with the original Ansible p
 ### Golden Image Preparation
 
 **Windows Images:**
+
 - Run `sysprep` with generalize option
 - Install Hyper-V integration services
 - Consider AVMA (Automatic VM Activation) for licensing
 - Include any common software/updates in golden image
 
 **Linux Images:**
+
 - Install `cloud-init` configured for NoCloud datasource
 - Install Hyper-V KVP daemons (hv_kvp_daemon)
 - Ensure KVP services start automatically
@@ -250,11 +264,13 @@ The service maintains **exact orchestration parity** with the original Ansible p
 ### Network Configuration
 
 **Static IP Assignment:**
+
 - Ensure IP addresses don't conflict with DHCP ranges
 - Verify gateway and DNS are reachable from VLAN
 - Consider DNS registration after provisioning completes
 
 **VLAN Configuration:**
+
 - Confirm VLAN exists on physical switches
 - Verify Hyper-V virtual switch supports VLAN tagging
 - Test connectivity after provisioning
@@ -262,12 +278,14 @@ The service maintains **exact orchestration parity** with the original Ansible p
 ### Domain Join Considerations
 
 **Windows Domain Join:**
+
 - Use service account with computer object creation rights
 - Specify target OU if computer objects need specific GPOs
 - Ensure DNS resolution works for domain controllers
 - Consider pre-creating computer objects for tighter control
 
 **Troubleshooting Domain Join:**
+
 - Check domain join account permissions
 - Verify network connectivity from VM to domain controllers
 - Ensure DNS can resolve domain name
@@ -286,21 +304,25 @@ The service maintains **exact orchestration parity** with the original Ansible p
 ### Common Issues
 
 **VM Fails to Start:**
+
 - Check Hyper-V event logs on host
 - Verify VHDX file integrity
 - Ensure sufficient host resources (RAM, CPU)
 
 **Provisioning Timeout:**
+
 - Verify provisioning ISO attached correctly
 - Check guest OS can read ISO (integration services)
 - Review guest logs for provisioning service errors
 
 **Network Configuration Not Applied:**
+
 - Confirm static IP parameters correct
 - Verify guest networking service running
 - Check for IP conflicts on network
 
 **Domain Join Fails:**
+
 - Validate domain join credentials
 - Ensure DNS resolution working
 - Check domain controller accessibility

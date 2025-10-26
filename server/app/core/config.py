@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     dummy_data: bool = False  # Enable dummy data for development/testing
 
     # Host deployment settings
-    host_install_directory: str = "C:\\Program Files\\Home Lab Virtual Machine Manager"
+    host_install_directory: str = "C:\\Program Files\\Aether-V"
     agent_startup_concurrency: int = 4  # Parallel host deployments during startup
 
     # Agent artifact settings
@@ -115,10 +115,10 @@ _config_validation_result: Optional["ConfigValidationResult"] = None
 def set_session_secret(secret: str) -> None:
     """
     Set the actual session secret being used by the application.
-    
+
     This should be called once during application initialization in main.py
     with either the configured secret or a generated temporary secret.
-    
+
     Args:
         secret: The session secret string
     """
@@ -129,10 +129,10 @@ def set_session_secret(secret: str) -> None:
 def get_session_secret() -> Optional[str]:
     """
     Get the actual session secret being used by the application.
-    
+
     This allows WebSocket authentication to decrypt session cookies using the same
     secret as the session middleware, whether it's from configuration or generated.
-    
+
     Returns:
         The session secret string, or None if not yet initialized
     """
