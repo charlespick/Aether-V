@@ -3,7 +3,7 @@
 
 set -e
 
-echo "🚀 Aether-V Orchestrator - Development Setup (Docker)"
+echo "🚀 Aether-V Server - Development Setup (Docker)"
 echo ""
 
 # Check if .env exists
@@ -41,7 +41,7 @@ fi
 echo ""
 echo "✅ Setup complete!"
 echo ""
-echo "🎯 Starting Aether-V Orchestrator in Docker..."
+echo "🎯 Starting Aether-V Server in Docker..."
 echo "   - Web UI: http://localhost:8000"
 echo "   - API Docs: http://localhost:8000/docs"
 echo "   - Health Check: http://localhost:8000/healthz"
@@ -52,7 +52,7 @@ echo ""
 
 # Run the application in Docker with volume mount for hot reload
 docker run --rm -it \
-    --name hlvmm-dev \
+    --name aetherv-dev \
     -p 8000:8000 \
     -v "$(pwd):/app" \
     -v "$(pwd)/.env:/app/.env" \

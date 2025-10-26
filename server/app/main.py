@@ -47,7 +47,7 @@ def _build_metadata_payload() -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    logger.info("Starting Aether-V Orchestrator")
+    logger.info("Starting Aether-V Server")
     logger.info(f"Version: {build_metadata.version}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
@@ -289,7 +289,7 @@ async def root(request: Request):
         logger.error(f"Error in root route: {type(e).__name__}: {e}")
         # Return a minimal HTML response to prevent 502 errors
         return HTMLResponse(
-            content="<html><body><h1>Aether-V Orchestrator</h1><p>Loading...</p><script>setTimeout(function(){location.reload()}, 2000);</script></body></html>",
+            content="<html><body><h1>Aether-V Server</h1><p>Loading...</p><script>setTimeout(function(){location.reload()}, 2000);</script></body></html>",
             status_code=200
         )
 

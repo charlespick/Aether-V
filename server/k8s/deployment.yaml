@@ -1,25 +1,25 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: aetherv-orchestrator
+  name: aetherv-server
   namespace: aetherv
   labels:
-    app: aetherv-orchestrator
+    app: aetherv-server
 spec:
   replicas: 1
   strategy:
     type: Recreate  # Only one instance due to in-memory state
   selector:
     matchLabels:
-      app: aetherv-orchestrator
+      app: aetherv-server
   template:
     metadata:
       labels:
-        app: aetherv-orchestrator
+        app: aetherv-server
     spec:
       containers:
-      - name: orchestrator
-        image: ghcr.io/charlespick/aetherv-orchestrator:latest
+      - name: server
+        image: ghcr.io/charlespick/aetherv-server:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8000

@@ -1,1 +1,1 @@
-"""Aether-V Orchestrator application."""
+"""Aether-V Server application."""

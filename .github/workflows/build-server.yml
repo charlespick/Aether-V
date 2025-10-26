@@ -11,6 +11,7 @@ on:
       - 'Linux/**'
       - 'Powershell/**'
       - 'version'
+      - 'Makefile'
       - '.github/workflows/build-server.yml'
   pull_request:
     branches:
@@ -22,12 +23,13 @@ on:
       - 'Linux/**'
       - 'Powershell/**'
       - 'version'
+      - 'Makefile'
       - '.github/workflows/build-server.yml'
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: aetherv-orchestrator
+  IMAGE_NAME: aetherv-server
 
 jobs:
   build-and-push:
@@ -92,13 +94,9 @@ jobs:
           const sha = context.payload.pull_request.head.sha.substring(0, 7);
           const branch = context.payload.pull_request.head.ref;
           
-          const comment = `## 🐳 Container Build Completed
+          const comment = `## Container Build Completed
           
-          The Aether-V Orchestrator container has been built successfully!
-          
-          **Build Process:**
-          - ✅ ISOs built with modular provisioning system
-          - ✅ Container built with pre-built ISOs
+          The Aether-V Server container has been built successfully!
           
           **Image Details:**
           - Branch: \`${branch}\`
@@ -108,12 +106,8 @@ jobs:
           
           **Tags:**
           \`\`\`
-          ${process.env.REGISTRY}/${context.repo.owner}/${process.env.IMAGE_NAME}:pr-${prNumber}
           ${process.env.REGISTRY}/${context.repo.owner}/${process.env.IMAGE_NAME}:${branch}-${sha}
           \`\`\`
-          
-          **Artifacts:**
-          - Provisioning ISOs are available as build artifacts
           
           Note: Images are only pushed for merged commits, not PR builds.`;
           

@@ -1,4 +1,4 @@
-# Multi-stage build for Aether-V Orchestrator
+# Multi-stage build for Aether-V Server Docker image
 # Provisioning ISOs are rebuilt via `make build` before this Dockerfile runs
 
 # Stage 1: Base image with Python

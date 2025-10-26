@@ -1,7 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: aetherv-orchestrator
+  name: aetherv-server
   namespace: aetherv
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
@@ -23,6 +23,6 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: aetherv-orchestrator
+            name: aetherv-server
             port:
               name: http

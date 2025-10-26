@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Application settings
-    app_name: str = "Aether-V Orchestrator"
+    app_name: str = "Aether-V Server"
     debug: bool = False
     environment_name: str = "Production Environment"
 

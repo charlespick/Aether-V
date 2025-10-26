@@ -13,5 +13,5 @@ resources:
 
 # Optional: Add common labels
 commonLabels:
-  app.kubernetes.io/name: aetherv-orchestrator
-  app.kubernetes.io/component: orchestrator
+  app.kubernetes.io/name: aetherv-server
+  app.kubernetes.io/component: server

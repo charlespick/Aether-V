@@ -1,6 +1,6 @@
 # Configuration
 
-This document describes all configuration inputs that the Aether-V Orchestrator reads
+This document describes all configuration inputs that the Aether-V Server reads
 from environment variables. Values can be provided by a local `.env` file, Docker
 runtime configuration, or Kubernetes ConfigMap/Secret objects.
 

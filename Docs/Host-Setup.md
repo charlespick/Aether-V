@@ -46,10 +46,10 @@ You can use any valid Windows path:
 
 ```bash
 # Custom location outside Program Files
-HOST_INSTALL_DIRECTORY=C:\CustomPath\HLVMM
+HOST_INSTALL_DIRECTORY=C:\CustomPath\aetherv
 
 # Network location (ensure service has access)
-HOST_INSTALL_DIRECTORY=\\FileServer\Share\HLVMM
+HOST_INSTALL_DIRECTORY=\\FileServer\Share\aetherv
 ```
 
 **Note:** Ensure the WinRM user has write permissions to the target directory.

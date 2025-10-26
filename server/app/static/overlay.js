@@ -145,7 +145,7 @@ class SettingsOverlay extends BaseOverlay {
     async render() {
         const aboutData = await this.fetchAboutInfo();
         const build = aboutData?.build || {};
-        const productName = this.escapeHtml(aboutData?.name || 'Aether-V Orchestrator');
+        const productName = this.escapeHtml(aboutData?.name || 'Aether-V');
         const description = this.escapeHtml(
             aboutData?.description || 'Hyper-V Virtual Machine Management Platform'
         );
