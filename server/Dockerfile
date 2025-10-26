@@ -134,12 +134,12 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 # Copy application code and schema definitions
 COPY server/app /app/app
 COPY Schemas /app/Schemas
-COPY --from=build-info /out/build-info.json /app/app/build-info.json
 
 # Prepare unified agent artifact directory
 RUN mkdir -p /app/agent
 
-# Copy the curated agent artifacts (scripts, ISOs, version)
+# Copy build metadata and the curated agent artifacts (scripts, ISOs, version)
+COPY --from=build-info /out/build-info.json /app/agent/build-info.json
 COPY --from=agent-artifacts /artifacts/ /app/agent/
 
 # Create non-root user

@@ -69,7 +69,8 @@ def _parse_build_time(raw_value: Optional[str]) -> Optional[datetime]:
 def _load_build_metadata() -> BuildMetadata:
     """Load build metadata and version information from container artifacts."""
 
-    metadata_path = Path(__file__).resolve().parent / "build-info.json"
+    version_path = Path(settings.version_file_path)
+    metadata_path = version_path.with_name("build-info.json")
     metadata: dict = {}
 
     if metadata_path.exists():
@@ -77,20 +78,21 @@ def _load_build_metadata() -> BuildMetadata:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             logger.error("Invalid build metadata JSON: %s", exc)
+        except OSError as exc:
+            logger.error("Failed to read build metadata file %s: %s", metadata_path, exc)
     else:
         logger.warning("Build metadata file not found at %s", metadata_path)
 
     version_value = "unknown"
     try:
-        with open(settings.version_file_path, "r", encoding="utf-8") as version_file:
-            version_value = version_file.read().strip() or "unknown"
+        version_value = version_path.read_text(encoding="utf-8").strip() or "unknown"
     except FileNotFoundError:
         logger.error(
             "Version file missing at %s; container version will be reported as 'unknown'",
-            settings.version_file_path,
+            version_path,
         )
     except OSError as exc:
-        logger.error("Failed to read version file %s: %s", settings.version_file_path, exc)
+        logger.error("Failed to read version file %s: %s", version_path, exc)
 
     build_time = _parse_build_time(metadata.get("build_time"))
 
