@@ -143,6 +143,32 @@ class SettingsOverlay extends BaseOverlay {
     }
 
     async render() {
+        const aboutData = await this.fetchAboutInfo();
+        const build = aboutData?.build || {};
+        const productName = this.escapeHtml(aboutData?.name || 'Aether-V Orchestrator');
+        const description = this.escapeHtml(
+            aboutData?.description || 'Hyper-V Virtual Machine Management Platform'
+        );
+
+        const details = [
+            { label: 'Version', value: build.version },
+            { label: 'Source', value: this.formatGitRef(build) },
+            { label: 'Commit', value: this.formatCommit(build.git_commit) },
+            { label: 'Repository State', value: build.git_state },
+            { label: 'Source Control', value: build.source_control },
+            { label: 'Built', value: this.formatBuildTime(build.build_time) },
+            { label: 'Build Host', value: build.build_host },
+        ].filter(item => item.value);
+
+        const detailMarkup = details.length
+            ? details.map(item => `
+                <div class="about-item">
+                    <span class="about-label">${this.escapeHtml(item.label)}</span>
+                    <span class="about-value">${this.escapeHtml(String(item.value))}</span>
+                </div>
+            `).join('')
+            : '<p class="empty">Build metadata unavailable.</p>';
+
         return `
             <div class="settings-section">
                 <h3>Navigation Settings</h3>
@@ -197,9 +223,11 @@ class SettingsOverlay extends BaseOverlay {
             <div class="settings-section">
                 <h3>About</h3>
                 <div class="about-info">
-                    <p><strong>Aether-V Orchestrator</strong></p>
-                    <p>Version: 0.1.0</p>
-                    <p>Hyper-V Virtual Machine Management Platform</p>
+                    <p><strong>${productName}</strong></p>
+                    <p>${description}</p>
+                    <div class="about-grid">
+                        ${detailMarkup}
+                    </div>
                 </div>
             </div>
 
@@ -242,6 +270,49 @@ class SettingsOverlay extends BaseOverlay {
 
         // Immediately refresh the navigation tree to apply show hosts setting
         loadInventory();
+    }
+
+    async fetchAboutInfo() {
+        const fallbackBuild = window?.appConfig?.build;
+        try {
+            const response = await fetch('/api/v1/about', { credentials: 'same-origin' });
+            if (response.ok) {
+                return await response.json();
+            }
+        } catch (error) {
+            console.error('Failed to load about information', error);
+        }
+        if (fallbackBuild) {
+            return {
+                name: window?.appConfig?.app_name || null,
+                build: fallbackBuild,
+            };
+        }
+        return null;
+    }
+
+    formatBuildTime(value) {
+        if (!value) return null;
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) {
+            return value;
+        }
+        return parsed.toUTCString();
+    }
+
+    formatCommit(commit) {
+        if (!commit) return null;
+        return commit.length > 12 ? `${commit.slice(0, 12)}…` : commit;
+    }
+
+    formatGitRef(build) {
+        if (!build || !build.git_ref) {
+            return null;
+        }
+        if (build.git_state && build.git_state !== 'branch') {
+            return `${build.git_ref} (${build.git_state})`;
+        }
+        return build.git_ref;
     }
 }
 

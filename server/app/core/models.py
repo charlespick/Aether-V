@@ -125,11 +125,33 @@ class InventoryResponse(BaseModel):
     last_refresh: Optional[datetime] = None
 
 
+class BuildInfo(BaseModel):
+    """Information about the running container build."""
+
+    version: str
+    source_control: str = "unknown"
+    git_commit: Optional[str] = None
+    git_ref: Optional[str] = None
+    git_state: Optional[str] = None
+    build_time: Optional[datetime] = None
+    build_host: Optional[str] = None
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
+
     status: str
     version: str
     timestamp: datetime
+    build: Optional[BuildInfo] = None
+
+
+class AboutResponse(BaseModel):
+    """Metadata returned for the About screen."""
+
+    name: str
+    description: Optional[str] = None
+    build: BuildInfo
 
 
 class NotificationsResponse(BaseModel):
