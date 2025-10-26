@@ -9,7 +9,7 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import PureWindowsPath
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from xml.etree import ElementTree
 
 from ..core.config import settings
@@ -23,6 +23,131 @@ from .inventory_service import inventory_service
 logger = logging.getLogger(__name__)
 
 
+class _PowerShellStreamDecoder:
+    """Stateful normaliser for streamed PowerShell output."""
+
+    _CLIXML_PREFIX = "#< CLIXML"
+    _CLIXML_END_TAG = "</Objs>"
+
+    def __init__(
+        self,
+        parse_clixml: Callable[[str], Optional[str]],
+        strip_clixml: Callable[[str], str],
+        decode_hex: Callable[[str], str],
+    ) -> None:
+        self._parse_clixml = parse_clixml
+        self._strip_clixml = strip_clixml
+        self._decode_hex = decode_hex
+        self._plain_buffer: str = ""
+        self._clixml_buffer: Optional[str] = None
+
+    def push(self, chunk: str) -> List[str]:
+        if not chunk:
+            return []
+
+        sanitized = chunk.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
+        if not sanitized:
+            return []
+
+        lines: List[str] = []
+
+        if self._clixml_buffer is not None:
+            self._clixml_buffer += sanitized
+            remaining = ""
+        else:
+            remaining = sanitized
+
+        while True:
+            if self._clixml_buffer is not None:
+                closing_index = self._clixml_buffer.find(self._CLIXML_END_TAG)
+                if closing_index == -1:
+                    break
+
+                end_index = closing_index + len(self._CLIXML_END_TAG)
+                payload = self._clixml_buffer[:end_index]
+                leftover = self._clixml_buffer[end_index:]
+
+                decoded = self._parse_clixml(payload)
+                if decoded is None:
+                    decoded = self._strip_clixml(payload)
+                if decoded:
+                    lines.extend(self._append_plain(decoded))
+
+                self._clixml_buffer = None
+                remaining = leftover
+                continue
+
+            if not remaining:
+                break
+
+            tail_length = max(0, len(self._CLIXML_PREFIX) - 1)
+            tail = self._plain_buffer[-tail_length:] if tail_length else ""
+            combined = tail + remaining
+            combined_index = combined.find(self._CLIXML_PREFIX)
+            if combined_index == -1:
+                lines.extend(self._append_plain(remaining))
+                break
+
+            if combined_index < len(tail):
+                sentinel_start_in_plain = len(self._plain_buffer) - len(tail) + combined_index
+                sentinel_plain_part = self._plain_buffer[sentinel_start_in_plain:]
+                self._plain_buffer = self._plain_buffer[:sentinel_start_in_plain]
+                lines.extend(self._drain_plain_lines())
+                self._clixml_buffer = sentinel_plain_part + remaining
+                remaining = ""
+                continue
+
+            sentinel_index = combined_index - len(tail)
+            before = remaining[:sentinel_index]
+            if before:
+                lines.extend(self._append_plain(before))
+
+            self._clixml_buffer = remaining[sentinel_index:]
+            remaining = ""
+
+        return lines
+
+    def finalize(self) -> List[str]:
+        lines: List[str] = []
+
+        if self._clixml_buffer:
+            decoded = self._parse_clixml(self._clixml_buffer)
+            if decoded is None:
+                decoded = self._strip_clixml(self._clixml_buffer)
+            if decoded:
+                lines.extend(self._append_plain(decoded))
+            self._clixml_buffer = None
+
+        lines.extend(self._drain_plain_lines(final=True))
+        return lines
+
+    def _append_plain(self, text: str) -> List[str]:
+        if not text:
+            return []
+        normalized = self._decode_hex(text)
+        self._plain_buffer += normalized
+        return self._drain_plain_lines()
+
+    def _drain_plain_lines(self, final: bool = False) -> List[str]:
+        lines: List[str] = []
+        while True:
+            newline_index = self._plain_buffer.find("\n")
+            if newline_index == -1:
+                break
+            line = self._plain_buffer[:newline_index]
+            self._plain_buffer = self._plain_buffer[newline_index + 1 :]
+            if line.strip():
+                lines.append(line)
+
+        if final:
+            tail = self._plain_buffer
+            self._plain_buffer = ""
+            if tail.strip():
+                lines.append(tail)
+
+        return lines
+
+
 class JobService:
     """Service for tracking and executing submitted jobs."""
 
@@ -33,6 +158,7 @@ class JobService:
         self._queue: Optional[asyncio.Queue[Optional[str]]] = None
         self._worker_tasks: List[asyncio.Task[None]] = []
         self._started = False
+        self._stream_decoders: Dict[Tuple[str, str], _PowerShellStreamDecoder] = {}
 
     async def start(self) -> None:
         """Initialise the job queue worker."""
@@ -209,13 +335,15 @@ class JobService:
 
         command_future = loop.run_in_executor(None, run_command)
 
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            stream_type, payload = item
-            await self._handle_stream_chunk(job.job_id, stream_type, payload)
-
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                stream_type, payload = item
+                await self._handle_stream_chunk(job.job_id, stream_type, payload)
+        finally:
+            await self._finalize_job_streams(job.job_id)
         exit_code = await command_future
         if exit_code != 0:
             raise RuntimeError(f"Provisioning script exited with code {exit_code}")
@@ -224,7 +352,16 @@ class JobService:
         if not payload:
             return
 
-        lines = self._normalize_stream_payload(payload)
+        decoder = self._stream_decoders.get((job_id, stream.lower()))
+        if decoder is None:
+            decoder = _PowerShellStreamDecoder(
+                parse_clixml=self._parse_clixml_payload,
+                strip_clixml=self._strip_clixml_markup,
+                decode_hex=self._decode_hex_escapes,
+            )
+            self._stream_decoders[(job_id, stream.lower())] = decoder
+
+        lines = decoder.push(payload)
         if not lines:
             return
 
@@ -233,27 +370,16 @@ class JobService:
 
         await self._append_job_output(job_id, *lines)
 
-    def _normalize_stream_payload(self, payload: str) -> List[str]:
-        """Return human-friendly log lines for streamed job output."""
-
-        if not payload:
-            return []
-
-        sanitized = payload.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
-        if not sanitized.strip():
-            return []
-
-        contains_clixml = "#< CLIXML" in sanitized or "<Objs" in sanitized
-        if contains_clixml:
-            parsed = self._parse_clixml_payload(sanitized)
-            if parsed is None:
-                sanitized = self._strip_clixml_markup(sanitized)
-            else:
-                sanitized = parsed
-
-        sanitized = sanitized.replace("\r\n", "\n").replace("\r", "\n")
-        lines = [line for line in sanitized.split("\n") if line.strip()]
-        return lines
+    async def _finalize_job_streams(self, job_id: str) -> None:
+        pending_keys = [key for key in self._stream_decoders if key[0] == job_id]
+        for key in pending_keys:
+            decoder = self._stream_decoders.pop(key)
+            trailing = decoder.finalize()
+            if not trailing:
+                continue
+            if key[1] == "stderr":
+                trailing = [f"STDERR: {line}" for line in trailing]
+            await self._append_job_output(job_id, *trailing)
 
     _CLIXML_PREFIX = "#< CLIXML"
     _CLIXML_TEXT_TAGS = {"S", "AV"}
