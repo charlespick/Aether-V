@@ -1061,6 +1061,27 @@ tbody tr:last-child td {
     margin: 4px 0;
 }
 
+.about-grid {
+    display: grid;
+    grid-template-columns: minmax(140px, 200px) 1fr;
+    gap: 8px 16px;
+    margin-top: 12px;
+}
+
+.about-item {
+    display: contents;
+}
+
+.about-label {
+    font-weight: 600;
+    color: var(--muted-ink);
+}
+
+.about-value {
+    font-family: var(--mono-font, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace);
+    word-break: break-all;
+}
+
 /* Job Details Overlay Styles */
 .job-details {
     font-size: 14px;

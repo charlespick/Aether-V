@@ -25,7 +25,72 @@ RUN apt-get update && \
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 3: Collect agent artifacts (scripts, ISOs, version)
+# Stage 3: Capture build metadata
+FROM base AS build-info
+
+WORKDIR /src
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY . /src
+
+RUN set -eux; \
+    mkdir -p /out; \
+    python - <<'PY'
+import datetime
+import json
+import socket
+import subprocess
+from pathlib import Path
+
+
+def run_git(args):
+    try:
+        return subprocess.check_output(["git", *args], stderr=subprocess.STDOUT).decode().strip()
+    except Exception:
+        return None
+
+
+metadata = {
+    "source_control": "unknown",
+}
+
+if Path(".git").exists():
+    metadata["source_control"] = "git"
+    commit = run_git(["rev-parse", "HEAD"])
+    if commit:
+        metadata["git_commit"] = commit
+
+    ref = run_git(["symbolic-ref", "-q", "--short", "HEAD"])
+    state = "branch" if ref else None
+
+    if not ref:
+        ref = run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+        if ref == "HEAD":
+            state = "detached"
+        elif ref:
+            state = "branch"
+
+    if ref:
+        metadata["git_ref"] = ref
+    if state:
+        metadata["git_state"] = state
+else:
+    metadata["source_control"] = "absent"
+
+version_file = Path("version")
+metadata["version"] = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "unknown"
+
+metadata["build_time"] = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+metadata["build_host"] = socket.gethostname()
+
+output_path = Path("/out/build-info.json")
+output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+PY
+
+# Stage 4: Collect agent artifacts (scripts, ISOs, version)
 FROM base AS agent-artifacts
 
 WORKDIR /src
@@ -69,6 +134,7 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 # Copy application code and schema definitions
 COPY server/app /app/app
 COPY Schemas /app/Schemas
+COPY --from=build-info /out/build-info.json /app/app/build-info.json
 
 # Prepare unified agent artifact directory
 RUN mkdir -p /app/agent

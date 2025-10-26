@@ -10,10 +10,12 @@ import secrets
 
 from ..core.models import (
     Host, VM, Job, VMDeleteRequest, InventoryResponse,
-    HealthResponse, NotificationsResponse, JobSubmission
+    HealthResponse, NotificationsResponse, JobSubmission,
+    AboutResponse, BuildInfo,
 )
 from ..core.auth import get_current_user, oauth
 from ..core.config import settings, get_config_validation_result
+from ..core.build_info import build_metadata
 from ..core.job_schema import (
     SchemaValidationError,
     get_job_schema,
@@ -29,13 +31,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _current_build_info() -> BuildInfo:
+    """Return build metadata formatted for API responses."""
+
+    return BuildInfo(
+        version=build_metadata.version,
+        source_control=build_metadata.source_control,
+        git_commit=build_metadata.git_commit,
+        git_ref=build_metadata.git_ref,
+        git_state=build_metadata.git_state,
+        build_time=build_metadata.build_time,
+        build_host=build_metadata.build_host,
+    )
+
+
 @router.get("/healthz", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Health check endpoint."""
     return HealthResponse(
         status="healthy",
-        version=settings.app_version,
-        timestamp=datetime.utcnow()
+        version=build_metadata.version,
+        timestamp=datetime.utcnow(),
+        build=_current_build_info(),
     )
 
 
@@ -50,8 +67,9 @@ async def readiness_check():
     if config_result and config_result.has_errors:
         return HealthResponse(
             status="config_error",
-            version=settings.app_version,
+            version=build_metadata.version,
             timestamp=datetime.utcnow(),
+            build=_current_build_info(),
         )
 
     # Otherwise ensure the inventory service has successfully completed
@@ -64,14 +82,27 @@ async def readiness_check():
 
         return HealthResponse(
             status=readiness_status,
-            version=settings.app_version,
+            version=build_metadata.version,
             timestamp=datetime.utcnow(),
+            build=_current_build_info(),
         )
 
     return HealthResponse(
         status="ready",
-        version=settings.app_version,
-        timestamp=datetime.utcnow()
+        version=build_metadata.version,
+        timestamp=datetime.utcnow(),
+        build=_current_build_info(),
+    )
+
+
+@router.get("/api/v1/about", response_model=AboutResponse, tags=["About"])
+async def get_about(user: dict = Depends(get_current_user)):
+    """Return metadata for the About screen."""
+
+    return AboutResponse(
+        name=settings.app_name,
+        description="Hyper-V Virtual Machine Management Platform",
+        build=_current_build_info(),
     )
 
 

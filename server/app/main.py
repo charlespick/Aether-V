@@ -11,6 +11,7 @@ import uvicorn
 import secrets
 
 from .core.config import settings, get_config_validation_result, set_session_secret
+from .core.build_info import build_metadata
 from .core.config_validation import run_config_checks
 from .api.routes import router
 from .services.inventory_service import inventory_service
@@ -29,11 +30,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _build_metadata_payload() -> dict:
+    """Serialize build metadata for template consumption."""
+
+    return {
+        "version": build_metadata.version,
+        "source_control": build_metadata.source_control,
+        "git_commit": build_metadata.git_commit,
+        "git_ref": build_metadata.git_ref,
+        "git_state": build_metadata.git_state,
+        "build_time": build_metadata.build_time_iso,
+        "build_host": build_metadata.build_host,
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     logger.info("Starting Aether-V Orchestrator")
-    logger.info(f"Version: {settings.app_version}")
+    logger.info(f"Version: {build_metadata.version}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
 
@@ -101,7 +116,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title=settings.app_name,
-    version=settings.app_version,
+    version=build_metadata.version,
     description="Lightweight orchestration service for Hyper-V virtual machines",
     lifespan=lifespan
 )
@@ -226,7 +241,8 @@ async def root(request: Request):
                     "request": request,
                     "environment_name": environment_name,
                     "result": config_result,
-                    "app_version": settings.app_version,
+                    "build_metadata": build_metadata,
+                    "build_metadata_payload": _build_metadata_payload(),
                     "checked_at": checked_at,
                 },
                 status_code=status.HTTP_200_OK,
@@ -256,6 +272,9 @@ async def root(request: Request):
                     "websocket_ping_interval": settings.websocket_ping_interval * 1000,
                     "job_schema": get_job_schema(),
                     "agent_deployment": host_deployment_service.get_startup_summary(),
+                    "build_metadata": build_metadata,
+                    "build_metadata_payload": _build_metadata_payload(),
+                    "app_name": settings.app_name,
                 },
             )
 

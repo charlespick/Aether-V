@@ -145,7 +145,16 @@
 
         <div class="meta">
             <div>Checked at: {{ checked_at or 'unknown' }}</div>
-            <div>Application version: {{ app_version }}</div>
+            <div>Version: {{ build_metadata.version }}</div>
+            {% if build_metadata.git_ref %}
+                <div>Source: {{ build_metadata.git_ref }}</div>
+            {% endif %}
+            {% if build_metadata.git_commit %}
+                <div>Commit: {{ build_metadata.git_commit }}</div>
+            {% endif %}
+            {% if build_metadata.build_time_iso %}
+                <div>Built: {{ build_metadata.build_time_iso }}</div>
+            {% endif %}
         </div>
 
         <div class="actions">
