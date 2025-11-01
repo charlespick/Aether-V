@@ -523,6 +523,9 @@ function Invoke-ProvisioningWorkflow {
     Write-Host "Starting provisioning workflow for VM '$vmName' on host '$currentHost' (OS: $osFamily)."
 
     $vmDataFolder = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName
+    if (-not (Test-Path -LiteralPath $vmDataFolder -PathType Container)) {
+        throw "Image copy reported destination '$vmDataFolder', but the folder does not exist."
+    }
     Write-Host "Image copied to $vmDataFolder" -ForegroundColor Green
 
     Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -VMDataFolder $vmDataFolder
@@ -538,7 +541,13 @@ function Invoke-ProvisioningWorkflow {
         $registerParams.VLANId = $vlanId
     }
 
-    Invoke-ProvisioningRegisterVm @registerParams | Out-Null
+    $registeredVm = Invoke-ProvisioningRegisterVm @registerParams
+    if (-not $registeredVm) {
+        throw "VM registration did not return a VM object for '$vmName'."
+    }
+
+    Write-Host "VM '$vmName' successfully registered and is in state '$($registeredVm.State)'." -ForegroundColor Green
+
     Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName | Out-Null
 
     $env:GuestLaPw = [string]$values['guest_la_pw']

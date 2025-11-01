@@ -16,6 +16,22 @@ function Invoke-ProvisioningCopyProvisioningIso {
         }
     }
 
+    function Test-ProvisioningFileExistsAndNonZero {
+        param(
+            [Parameter(Mandatory = $true)][string]$Path,
+            [Parameter(Mandatory = $true)][string]$Description
+        )
+
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            throw "$Description was expected at '$Path' but was not found."
+        }
+
+        $fileInfo = Get-Item -LiteralPath $Path
+        if ($fileInfo.Length -le 0) {
+            throw "$Description at '$Path' is zero bytes."
+        }
+    }
+
     function Invoke-CopyIso {
         param(
             [string]$SourcePath,
@@ -30,6 +46,8 @@ function Invoke-ProvisioningCopyProvisioningIso {
         catch {
             throw "Failed to copy provisioning ISO from $SourcePath to ${DestinationFolder}: $_"
         }
+
+        Test-ProvisioningFileExistsAndNonZero -Path $destinationPath -Description "Copied provisioning ISO"
     }
 
     Invoke-ValidateFolder -Path $VMDataFolder
@@ -40,15 +58,11 @@ function Invoke-ProvisioningCopyProvisioningIso {
 
     switch ($OSFamily.ToLowerInvariant()) {
         "linux" {
-            if (-not (Test-Path -LiteralPath $linuxIsoPath -PathType Leaf)) {
-                throw "The Linux provisioning ISO file does not exist at '$linuxIsoPath'."
-            }
+            Test-ProvisioningFileExistsAndNonZero -Path $linuxIsoPath -Description "Linux provisioning ISO"
             Invoke-CopyIso -SourcePath $linuxIsoPath -DestinationFolder $VMDataFolder
         }
         "windows" {
-            if (-not (Test-Path -LiteralPath $windowsIsoPath -PathType Leaf)) {
-                throw "The Windows provisioning ISO file does not exist at '$windowsIsoPath'."
-            }
+            Test-ProvisioningFileExistsAndNonZero -Path $windowsIsoPath -Description "Windows provisioning ISO"
             Invoke-CopyIso -SourcePath $windowsIsoPath -DestinationFolder $VMDataFolder
         }
         default {

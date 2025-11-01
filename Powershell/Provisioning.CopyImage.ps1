@@ -47,10 +47,30 @@ function Invoke-ProvisioningCopyImage {
 
     try {
         New-Item -ItemType Directory -Path $destinationPath -Force | Out-Null
+    }
+    catch {
+        throw "Failed to create destination folder '$destinationPath' for VM '$VMName': $_"
+    }
+
+    if (-not (Test-Path -LiteralPath $destinationPath -PathType Container)) {
+        throw "Destination folder verification failed: '$destinationPath' was not created."
+    }
+
+    try {
         Copy-Item -Path $imagePath -Destination $destinationPath -Force -ErrorAction Stop
     }
     catch {
-        throw "Failed to copy golden image '$ImageName' to ${destinationPath}: $_"
+        throw "Failed to copy golden image '$ImageName' to '${destinationPath}': $_"
+    }
+
+    $clonedImagePath = Join-Path -Path $destinationPath -ChildPath $imageFilename
+    if (-not (Test-Path -LiteralPath $clonedImagePath -PathType Leaf)) {
+        throw "Image copy verification failed: '$clonedImagePath' was not found after copy operation."
+    }
+
+    $clonedImageInfo = Get-Item -LiteralPath $clonedImagePath
+    if ($clonedImageInfo.Length -le 0) {
+        throw "Image copy verification failed: '$clonedImagePath' is zero bytes."
     }
 
     return $destinationPath
