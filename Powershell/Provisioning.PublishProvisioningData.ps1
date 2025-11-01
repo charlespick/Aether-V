@@ -185,7 +185,8 @@ function Invoke-ProvisioningPublishProvisioningData {
             if ($chunkResult) {
                 $chunks[$chunkIndex] = $chunkResult
                 $chunkKeys += $chunkKey
-            } else {
+            }
+            else {
                 break
             }
         }
@@ -418,7 +419,8 @@ function Invoke-ProvisioningPublishProvisioningData {
                 $rsa = [System.Security.Cryptography.RSACng]::new()
                 try {
                     $rsa.KeySize = [int]($modulus.Length * 8)
-                } catch {
+                }
+                catch {
                     # If the platform rejects the explicit size, fall back to the default
                 }
                 $rsa.ImportParameters($rsaParameters)
@@ -457,7 +459,7 @@ function Invoke-ProvisioningPublishProvisioningData {
         $encryptedAesKey = $rsa.Encrypt($aes.Key, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
         $encodedKey = ConvertTo-Base64Url -Bytes $encryptedAesKey
 
-        Set-VMKeyValuePair -VMName $VmName -Name "hlvmm.meta.aes_key" -Value $encodedKey
+        Set-VMKeyValuePair -VMName $VmName -Name "hlvmm.meta.shared_aes_key" -Value $encodedKey
     }
 
     Write-Host "Waiting for guest provisioning public key..."
@@ -503,6 +505,6 @@ function Invoke-ProvisioningPublishProvisioningData {
         Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.ansible_ssh_key" -Value $AnsibleSshKey
     }
 
-    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.host_provisioning_system_state" -Value "publisheddetails"
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.host_provisioning_system_state" -Value "provisioningdatapublished"
     Write-Host "Provisioning data published for VM '$GuestHostName'."
 }

@@ -84,10 +84,11 @@ function Invoke-ProvisioningWaitForProvisioningKey {
     Write-Host "Preparing KVP channel for VM '$VMName'..."
     Set-ProvisioningKvpValue -Name "hlvmm.meta.host_provisioning_system_state" -Value "waitingforpublickey"
 
-    $scriptsVersionPath = Join-Path -Path $PSScriptRoot -ChildPath "scriptsversion"
-    $scriptsVersion = if (Test-Path -LiteralPath $scriptsVersionPath) {
-        Get-Content -LiteralPath $scriptsVersionPath -Raw
-    } else {
+    $versionPath = Join-Path -Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -ChildPath "version"
+    $scriptsVersion = if (Test-Path -LiteralPath $versionPath) {
+        (Get-Content -LiteralPath $versionPath -Raw).Trim()
+    }
+    else {
         "unknown"
     }
     Set-ProvisioningKvpValue -Name "hlvmm.meta.version" -Value $scriptsVersion
