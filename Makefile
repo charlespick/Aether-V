@@ -68,5 +68,6 @@ clean:
 	find . -type f -name "*.pyo" -delete
 	find . -type f -name "*.log" -delete
 	rm -rf server/.pytest_cache server/htmlcov server/.coverage
-	rm -rf build/artifacts 2>/dev/null || true
+	rm -rf build/ 2>/dev/null || true
+	rm -rf ISOs/ 2>/dev/null || true
 	@echo "✅ Cleanup complete"

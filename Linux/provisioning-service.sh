@@ -316,69 +316,13 @@ update_phase_status() {
     echo "$phase" > "$phase_file"
 }
 
-# Function to copy version file from CD-ROM before ejecting
-copy_version_file() {
-    local cidata_device=$(blkid -t LABEL=CIDATA -o device 2>/dev/null | head -1)
-    local version_copied=false
-    
-    if [[ -n "$cidata_device" ]]; then
-        # Create temporary mount point
-        local temp_mount="/tmp/cidata_mount"
-        mkdir -p "$temp_mount"
-        
-        # Mount the device
-        if mount "$cidata_device" "$temp_mount" 2>/dev/null; then
-            echo "Mounted CIDATA device at $temp_mount"
-            
-            # Copy version file if it exists
-            if [[ -f "$temp_mount/version" ]]; then
-                local target_dir="/var/lib/hyperv"
-                mkdir -p "$target_dir"
-                cp "$temp_mount/version" "$target_dir/version"
-                echo "Copied version file from CD-ROM to $target_dir/version"
-                version_copied=true
-            else
-                echo "Warning: Version file not found on CD-ROM"
-            fi
-            
-            # Unmount
-            umount "$temp_mount"
-            rmdir "$temp_mount"
-        else
-            echo "Warning: Failed to mount CIDATA device for version file copy"
-        fi
-    fi
-    
-    return $([ "$version_copied" = true ] && echo 0 || echo 1)
-}
 
-# Function to eject CD-ROM drives
-eject_cdroms() {
-    local cidata_device=$(blkid -t LABEL=CIDATA -o device 2>/dev/null | head -1)
-    
-    if [[ -n "$cidata_device" ]]; then
-        # Unmount if necessary
-        local mount_point=$(mount | grep "^$cidata_device " | awk '{print $3}')
-        [[ -n "$mount_point" ]] && umount "$mount_point" 2>/dev/null
-        
-        # Eject the device
-        eject "$cidata_device" 2>/dev/null
-        echo "Ejected CIDATA device: $cidata_device"
-    fi
-}
+
+
 
 phase_one() {
     echo "Starting phase one..."
     update_phase_status "phase_one"
-
-    # Copy version file from CD-ROM before ejecting
-    if ! copy_version_file; then
-        echo "ERROR: Failed to copy version file from CD-ROM"
-        return 1
-    fi
-
-    # Eject CD-ROM drives early to prevent interference with reboots
-    eject_cdroms
 
     # Wait until hlvmm.meta.host_provisioning_system_state equals waitingforpublickey
     echo "Waiting for host to signal 'waitingforpublickey'..."

@@ -11,10 +11,12 @@ $RepoRoot = Split-Path -Parent $ScriptDir
 $ISOOutputFolder = Join-Path -Path $RepoRoot -ChildPath $OutputPath
 $BuildFolder = Join-Path -Path $RepoRoot -ChildPath "build"
 
-# Ensure the output directory exists
-if (-not (Test-Path $ISOOutputFolder)) {
-    New-Item -ItemType Directory -Path $ISOOutputFolder -Force | Out-Null
+# Clean and create output directory
+if (Test-Path $ISOOutputFolder) {
+    Write-Host "Cleaning existing ISOs directory..."
+    Remove-Item -Path $ISOOutputFolder -Recurse -Force
 }
+New-Item -ItemType Directory -Path $ISOOutputFolder -Force | Out-Null
 
 # Clean and create build directory
 if (Test-Path $BuildFolder) {
@@ -41,6 +43,17 @@ Write-Host "Preparing Linux build directory..."
 Copy-Item -Path $LinuxSourceFolder -Destination $LinuxBuildFolder -Recurse -Force
 Copy-Item -Path $VersionFile -Destination (Join-Path -Path $LinuxBuildFolder -ChildPath "version") -Force
 
+# Create linux-cidata directory for the final cloud-init ISO
+$LinuxCidataFolder = Join-Path -Path $BuildFolder -ChildPath "linux-cidata"
+New-Item -ItemType Directory -Path $LinuxCidataFolder -Force | Out-Null
+
+# Create a minimal meta-data file for cloud-init
+$MetaDataContent = @"
+instance-id: hlvmm-provisioning
+local-hostname: hlvmm-guest
+"@
+$MetaDataContent | Out-File -FilePath (Join-Path -Path $LinuxCidataFolder -ChildPath "meta-data") -Encoding UTF8 -NoNewline
+
 # Dynamically discover Linux modules
 $LinuxModulesPath = Join-Path -Path $LinuxBuildFolder -ChildPath "modules"
 $LinuxModules = @()
@@ -55,12 +68,8 @@ foreach ($module in $LinuxModules) {
 
 # Process user-data template to inject multiple script contents
 $MainScript = Join-Path -Path $LinuxBuildFolder -ChildPath "provisioning-service.sh"
-$UserDataTemplate = Join-Path -Path $LinuxBuildFolder -ChildPath "user-data"
 
 Write-Host "Processing Linux user-data template..."
-
-# Read the original user-data template
-$UserDataContent = Get-Content -Path $UserDataTemplate -Raw
 
 # Start building the new content
 $NewUserDataContent = @"
@@ -105,7 +114,24 @@ foreach ($module in $LinuxModules) {
 $ServiceIndex = $ModuleIndex
 $NewUserDataContent += @"
 
-# $ServiceIndex. Write the systemd service unit
+# $ServiceIndex. Write provisioning version file
+  - path: /var/lib/hyperv/version
+    permissions: '0644'
+    owner: root:root
+    content: |
+"@
+
+# Add version file content with proper indentation
+$VersionContent = Get-Content -Path $VersionFile
+foreach ($line in $VersionContent) {
+    $NewUserDataContent += "`n      $line"
+}
+
+$NewUserDataContent += "`n"
+
+# $($ServiceIndex + 1). Write the systemd service unit
+$NewUserDataContent += @"
+
   - path: /etc/systemd/system/provisioning.service
     permissions: '0644'
     owner: root:root
@@ -123,8 +149,10 @@ $NewUserDataContent += @"
       [Install]
       WantedBy=multi-user.target
 
-# $($ServiceIndex + 1). Start provisioning service
+# $($ServiceIndex + 2). Start provisioning service
 runcmd:
+  - mkdir -p /usr/local/bin/modules
+  - mkdir -p /var/lib/hyperv
   # Wait a moment for KVP daemon to initialize
   - sleep 5
   - systemctl daemon-reload
@@ -132,8 +160,8 @@ runcmd:
   - systemctl start provisioning.service
 "@
 
-# Write the processed user-data to the build directory
-$NewUserDataContent | Out-File -FilePath (Join-Path -Path $LinuxBuildFolder -ChildPath "user-data") -Encoding UTF8 -NoNewline
+# Write the processed user-data to the linux-cidata directory
+$NewUserDataContent | Out-File -FilePath (Join-Path -Path $LinuxCidataFolder -ChildPath "user-data") -Encoding UTF8 -NoNewline
 
 Write-Host "Linux user-data processed with $($LinuxModules.Count) modules"
 
@@ -151,7 +179,8 @@ foreach ($tool in $ToolPriority) {
 if (-not $ISOTool) {
     Write-Warning "No ISO creation tool found. Please install xorriso, genisoimage, or mkisofs."
     Write-Host "Skipping ISO creation, but files have been prepared in build directory."
-} else {
+}
+else {
     Write-Host "Using ISO creation tool: $ISOTool"
 
     # Create Windows Provisioning ISO
@@ -168,7 +197,8 @@ if (-not $ISOTool) {
 
     if ($ISOTool -eq "xorriso") {
         $WinArgs = @("-as", "mkisofs", "-volid", "WINPROVISIONING") + $WinArgs + @($WindowsBuildFolder)
-    } else {
+    }
+    else {
         $WinArgs = @("-V", "WINPROVISIONING") + $WinArgs + @($WindowsBuildFolder)
     }
 
@@ -186,10 +216,14 @@ if (-not $ISOTool) {
         "-o", $LinuxISOOutputPath
     )
 
+    # Use the linux-cidata folder which contains the properly generated cloud-init files
+    $LinuxCidataFolder = Join-Path -Path $BuildFolder -ChildPath "linux-cidata"
+
     if ($ISOTool -eq "xorriso") {
-        $LinuxArgs = @("-as", "mkisofs", "-volid", "CIDATA", "-rational-rock") + $LinuxArgs + @($LinuxBuildFolder)
-    } else {
-        $LinuxArgs = @("-V", "CIDATA") + $LinuxArgs + @($LinuxBuildFolder)
+        $LinuxArgs = @("-as", "mkisofs", "-volid", "CIDATA", "-rational-rock") + $LinuxArgs + @($LinuxCidataFolder)
+    }
+    else {
+        $LinuxArgs = @("-V", "CIDATA") + $LinuxArgs + @($LinuxCidataFolder)
     }
 
     & $ISOTool @LinuxArgs
