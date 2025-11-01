@@ -8,3 +8,4 @@ docker-compose.override.yml
 # Codespaces generated files
 ModuleAnalysisCache-*
 StartupProfileData-NonInteractive
+.vscode/
