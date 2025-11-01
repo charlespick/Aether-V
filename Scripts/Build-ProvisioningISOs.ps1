@@ -26,6 +26,7 @@ $WindowsSourceFolder = Join-Path -Path $RepoRoot -ChildPath "Windows"
 $LinuxSourceFolder = Join-Path -Path $RepoRoot -ChildPath "Linux"
 $WindowsBuildFolder = Join-Path -Path $BuildFolder -ChildPath "windows"
 $LinuxBuildFolder = Join-Path -Path $BuildFolder -ChildPath "linux"
+$LinuxCIDATAFolder = Join-Path -Path $BuildFolder -ChildPath "linux-cidata"
 $VersionFile = Join-Path -Path $RepoRoot -ChildPath "version"
 
 Write-Host "HLVMM Modular Provisioning ISO Builder"
@@ -39,7 +40,6 @@ Copy-Item -Path $VersionFile -Destination (Join-Path -Path $WindowsBuildFolder -
 # Copy Linux files to build directory
 Write-Host "Preparing Linux build directory..."
 Copy-Item -Path $LinuxSourceFolder -Destination $LinuxBuildFolder -Recurse -Force
-Copy-Item -Path $VersionFile -Destination (Join-Path -Path $LinuxBuildFolder -ChildPath "version") -Force
 
 # Dynamically discover Linux modules
 $LinuxModulesPath = Join-Path -Path $LinuxBuildFolder -ChildPath "modules"
@@ -56,6 +56,11 @@ foreach ($module in $LinuxModules) {
 # Process user-data template to inject multiple script contents
 $MainScript = Join-Path -Path $LinuxBuildFolder -ChildPath "provisioning-service.sh"
 $UserDataTemplate = Join-Path -Path $LinuxBuildFolder -ChildPath "user-data"
+$VersionContent = ""
+if (-not (Test-Path $VersionFile)) {
+    throw "Version file not found at $VersionFile"
+}
+$VersionContent = (Get-Content -Path $VersionFile -Raw).Trim()
 
 Write-Host "Processing Linux user-data template..."
 
@@ -102,7 +107,18 @@ foreach ($module in $LinuxModules) {
 }
 
 # Add the service and startup configuration
-$ServiceIndex = $ModuleIndex
+$NewUserDataContent += "`n# $ModuleIndex. Write provisioning version file`n"
+$NewUserDataContent += "  - path: /var/lib/hyperv/version`n"
+$NewUserDataContent += "    permissions: '0644'`n"
+$NewUserDataContent += "    owner: root:root`n"
+$NewUserDataContent += "    content: |`n"
+if ([string]::IsNullOrWhiteSpace($VersionContent)) {
+    Write-Warning "Version file was empty; writing placeholder value"
+    $VersionContent = "unknown"
+}
+$NewUserDataContent += "      $VersionContent`n"
+
+$ServiceIndex = $ModuleIndex + 1
 $NewUserDataContent += @"
 
 # $ServiceIndex. Write the systemd service unit
@@ -125,6 +141,8 @@ $NewUserDataContent += @"
 
 # $($ServiceIndex + 1). Start provisioning service
 runcmd:
+  - mkdir -p /usr/local/bin/modules
+  - mkdir -p /var/lib/hyperv
   # Wait a moment for KVP daemon to initialize
   - sleep 5
   - systemctl daemon-reload
@@ -136,6 +154,14 @@ runcmd:
 $NewUserDataContent | Out-File -FilePath (Join-Path -Path $LinuxBuildFolder -ChildPath "user-data") -Encoding UTF8 -NoNewline
 
 Write-Host "Linux user-data processed with $($LinuxModules.Count) modules"
+
+# Prepare clean CIDATA directory containing only cloud-init payload
+if (Test-Path $LinuxCIDATAFolder) {
+    Remove-Item -Path $LinuxCIDATAFolder -Recurse -Force
+}
+New-Item -ItemType Directory -Path $LinuxCIDATAFolder -Force | Out-Null
+Copy-Item -Path (Join-Path -Path $LinuxBuildFolder -ChildPath "meta-data") -Destination (Join-Path -Path $LinuxCIDATAFolder -ChildPath "meta-data") -Force
+Copy-Item -Path (Join-Path -Path $LinuxBuildFolder -ChildPath "user-data") -Destination (Join-Path -Path $LinuxCIDATAFolder -ChildPath "user-data") -Force
 
 # Check which ISO creation tool is available
 $ISOTool = $null
@@ -187,9 +213,9 @@ if (-not $ISOTool) {
     )
 
     if ($ISOTool -eq "xorriso") {
-        $LinuxArgs = @("-as", "mkisofs", "-volid", "CIDATA", "-rational-rock") + $LinuxArgs + @($LinuxBuildFolder)
+        $LinuxArgs = @("-as", "mkisofs", "-volid", "CIDATA", "-rational-rock") + $LinuxArgs + @($LinuxCIDATAFolder)
     } else {
-        $LinuxArgs = @("-V", "CIDATA") + $LinuxArgs + @($LinuxBuildFolder)
+        $LinuxArgs = @("-V", "CIDATA") + $LinuxArgs + @($LinuxCIDATAFolder)
     }
 
     & $ISOTool @LinuxArgs
