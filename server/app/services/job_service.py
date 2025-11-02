@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from xml.etree import ElementTree
 
 from ..core.config import settings
+from ..core.job_schema import redact_job_parameters
 from ..core.models import Job, JobStatus, JobSubmission, VMDeleteRequest, NotificationLevel
 from .host_deployment_service import host_deployment_service
 from .notification_service import notification_service
@@ -160,6 +161,16 @@ class JobService:
         self._started = False
         self._stream_decoders: Dict[Tuple[str, str], _PowerShellStreamDecoder] = {}
 
+    def _prepare_job_response(self, job: Job) -> Job:
+        """Return a deep-copied job with sensitive data redacted."""
+
+        job_copy = job.model_copy(deep=True)
+        try:
+            job_copy.parameters = redact_job_parameters(job_copy.parameters)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Failed to redact job parameters for %s", job.job_id)
+        return job_copy
+
     async def start(self) -> None:
         """Initialise the job queue worker."""
 
@@ -219,11 +230,11 @@ class JobService:
             self.jobs[job_id] = job
 
         await self._sync_job_notification(job)
-        await self._broadcast_job_status(job.model_copy(deep=True))
+        await self._broadcast_job_status(job)
 
         await self._queue.put(job_id)
         logger.info("Queued provisioning job %s for host %s", job_id, target_host or "<unspecified>")
-        return job.model_copy(deep=True)
+        return self._prepare_job_response(job)
 
     async def submit_delete_job(self, request: VMDeleteRequest) -> Job:
         """Persist a VM deletion job request for future orchestration."""
@@ -242,20 +253,20 @@ class JobService:
             self.jobs[job_id] = job
 
         logger.info("Queued delete job %s for VM %s", job_id, request.vm_name)
-        return job.model_copy(deep=True)
+        return self._prepare_job_response(job)
 
     async def get_job(self, job_id: str) -> Optional[Job]:
         """Return a previously submitted job."""
 
         async with self._lock:
             job = self.jobs.get(job_id)
-            return job.model_copy(deep=True) if job else None
+            return self._prepare_job_response(job) if job else None
 
     async def get_all_jobs(self) -> List[Job]:
         """Return all tracked jobs."""
 
         async with self._lock:
-            return [job.model_copy(deep=True) for job in self.jobs.values()]
+            return [self._prepare_job_response(job) for job in self.jobs.values()]
 
     async def _worker(self) -> None:
         assert self._queue is not None
@@ -506,8 +517,9 @@ class JobService:
             job.notification_id = notification.id
 
     async def _broadcast_job_status(self, job: Job) -> None:
-        payload = job.model_dump(mode="json")
-        await self._broadcast_job_event(job.job_id, "status", payload)
+        prepared = self._prepare_job_response(job)
+        payload = prepared.model_dump(mode="json")
+        await self._broadcast_job_event(prepared.job_id, "status", payload)
 
     async def _broadcast_job_output(self, job_id: str, lines: List[str]) -> None:
         if not lines:
@@ -570,8 +582,9 @@ class JobService:
                 setattr(job, field, value)
             job_copy = job.model_copy(deep=True)
 
-        await self._after_job_update(job_copy, previous_status, changes)
-        return job_copy
+        prepared = self._prepare_job_response(job_copy)
+        await self._after_job_update(prepared, previous_status, changes)
+        return prepared
 
     async def _append_job_output(self, job_id: str, *messages: Optional[str]) -> List[str]:
         lines: List[str] = []
