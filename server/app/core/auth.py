@@ -14,7 +14,7 @@ import hashlib
 import base64
 import json
 from enum import Enum
-from typing import Optional, Dict, Any, List, Set
+from typing import Optional, Dict, Any, List, Set, Iterable
 from functools import lru_cache
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -49,7 +49,7 @@ def _split_config_values(raw_value: Optional[str]) -> List[str]:
     return values
 
 
-def _normalize_claim_values(values: List[str]) -> Set[str]:
+def _normalize_claim_values(values: Iterable[str]) -> Set[str]:
     """Normalize claim values for case-insensitive comparison."""
 
     normalized: Set[str] = set()
@@ -61,6 +61,17 @@ def _normalize_claim_values(values: List[str]) -> Set[str]:
         if ":" in value:
             normalized.add(value.rsplit(":", 1)[-1].lower())
     return normalized
+
+
+def _extract_scope_claims(claims: Dict[str, Any]) -> List[str]:
+    """Return all scope values present in scp/scope claims."""
+
+    scopes: List[str] = []
+    for claim_name in ("scp", "scope"):
+        raw_value = claims.get(claim_name)
+        if isinstance(raw_value, str):
+            scopes.extend(scope for scope in raw_value.split() if scope)
+    return scopes
 
 # JWKS caching utility for security and performance
 class JWKSCache:
@@ -329,10 +340,7 @@ def extract_user_roles(user_info: dict) -> list[str]:
         roles.extend(user_info["app_roles"])
 
     # OAuth scopes may be space-delimited strings
-    if isinstance(user_info.get("scp"), str):
-        roles.extend(scope for scope in user_info["scp"].split(" ") if scope)
-    if isinstance(user_info.get("scope"), str):
-        roles.extend(scope for scope in user_info["scope"].split(" ") if scope)
+    roles.extend(_extract_scope_claims(user_info))
 
     return list(set(roles))  # Remove duplicates
 
@@ -385,12 +393,9 @@ def determine_permissions(claims: dict, user_roles: Optional[List[str]] = None) 
     claim_values: Set[str] = set(user_roles or extract_user_roles(claims))
 
     # Ensure scopes are considered even if not present in user_roles input
-    if isinstance(claims.get("scp"), str):
-        claim_values.update(claims["scp"].split())
-    if isinstance(claims.get("scope"), str):
-        claim_values.update(claims["scope"].split())
+    claim_values.update(_extract_scope_claims(claims))
 
-    normalized_claims = _normalize_claim_values(list(claim_values))
+    normalized_claims = _normalize_claim_values(claim_values)
     granted: Set[Permission] = set()
 
     for permission, expected_values in configured_permissions.items():
@@ -596,6 +601,21 @@ async def validate_oidc_token(token: str) -> dict:
     except Exception as e:
         logger.error(f"Unexpected token validation error: {type(e).__name__}: {e}")
         raise JoseError(f"Token validation failed: {type(e).__name__}")
+
+
+def _require_session_permissions(
+    session_data: dict, client_ip: str, warning_message: str
+) -> Optional[List[str]]:
+    """Ensure session permissions are present, logging a warning otherwise."""
+
+    permissions = session_data.get("permissions")
+    if permissions:
+        return permissions
+
+    logger.warning(warning_message, client_ip)
+    return None
+
+
 def validate_session_data(session_data: dict, client_ip: str = "unknown") -> Optional[dict]:
     """
     Shared session validation logic for both HTTP and WebSocket.
@@ -616,12 +636,12 @@ def validate_session_data(session_data: dict, client_ip: str = "unknown") -> Opt
             from datetime import datetime, timedelta
             auth_time = datetime.fromisoformat(auth_timestamp)
             if datetime.now() - auth_time < timedelta(hours=24):
-                permissions = session_data.get("permissions")
+                permissions = _require_session_permissions(
+                    session_data,
+                    client_ip,
+                    "Session for %s missing permission metadata; requiring re-authentication",
+                )
                 if not permissions:
-                    logger.warning(
-                        "Session for %s missing permission metadata; requiring re-authentication",
-                        client_ip,
-                    )
                     return None
 
                 username = get_identity_display_name(session_data)
@@ -638,12 +658,12 @@ def validate_session_data(session_data: dict, client_ip: str = "unknown") -> Opt
                 logger.debug(f"Session expired for client from {client_ip}")
         else:
             # No timestamp, assume valid for backward compatibility
-            permissions = session_data.get("permissions")
+            permissions = _require_session_permissions(
+                session_data,
+                client_ip,
+                "Legacy session without permissions detected from %s; forcing re-authentication",
+            )
             if not permissions:
-                logger.warning(
-                    "Legacy session without permissions detected from %s; forcing re-authentication",
-                    client_ip,
-                )
                 return None
 
             username = get_identity_display_name(session_data)
@@ -701,7 +721,7 @@ async def authenticate_with_token(token: str, client_ip: str = "unknown") -> Opt
             detail="Principal lacks required permissions",
         )
 
-    identity_type = enriched_info.get("identity_type") or determine_identity_type(enriched_info)
+    identity_type = enriched_info.get("identity_type")
     display_name = get_identity_display_name(enriched_info)
     enriched_info["auth_type"] = (
         "oidc_service_principal" if identity_type == "service_principal" else "oidc_user"
@@ -785,7 +805,7 @@ def get_dev_user() -> dict:
     """
     return {
         "sub": "dev-user",
-        "roles": [settings.oidc_writer_permissions],
+        "roles": [],
         "permissions": [
             Permission.READER.value,
             Permission.WRITER.value,

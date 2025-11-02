@@ -17,7 +17,6 @@ from ..core.auth import (
     Permission,
     authenticate_with_token,
     enrich_identity,
-    get_current_user,
     get_dev_user,
     get_identity_display_name,
     has_permission,
@@ -747,6 +746,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
                 client_ip,
                 exc.detail,
             )
+            return None
         except Exception as e:
             logger.error(
                 f"WebSocket token authentication failed from {client_ip}: {e}")
