@@ -499,13 +499,6 @@ function Invoke-ProvisioningPublishProvisioningData {
         }
     }
 
-    function ConvertTo-Base64Url {
-        param(
-            [byte[]]$Bytes
-        )
-        return ([Convert]::ToBase64String($Bytes).TrimEnd('=') -replace '\+', '-' -replace '/', '_')
-    }
-
     function Publish-EncryptedSecret {
         param(
             [string]$VmName,
@@ -524,7 +517,7 @@ function Invoke-ProvisioningPublishProvisioningData {
         Publish-KvpEncryptedValue -VmName $VmName -Key $Key -Value $Secret -AesKey $aesKeyBase64
 
         $encryptedAesKey = $rsa.Encrypt($aes.Key, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
-        $encodedKey = ConvertTo-Base64Url -Bytes $encryptedAesKey
+        $encodedKey = [Convert]::ToBase64String($encryptedAesKey)
 
         Set-VMKeyValuePair -VMName $VmName -Name "hlvmm.meta.shared_aes_key" -Value $encodedKey
     }
