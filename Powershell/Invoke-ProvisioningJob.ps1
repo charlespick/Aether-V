@@ -24,8 +24,8 @@ end {
 
     $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
     Get-ChildItem -Path (Join-Path $scriptRoot 'Provisioning.*.ps1') -File |
-        Sort-Object Name |
-        ForEach-Object { . $_.FullName }
+    Sort-Object Name |
+    ForEach-Object { . $_.FullName }
 
     function ConvertTo-Hashtable {
         [CmdletBinding()]
@@ -227,7 +227,7 @@ end {
             }
         }
 
-        if ($providedMembers.Count -gt 0 -and $providedMembers.Count -ne $Members.Count) {
+        if ($providedMembers -and $providedMembers.Count -gt 0 -and $providedMembers.Count -ne $Members.Count) {
             $missing = @()
             foreach ($member in $Members) {
                 if (-not ($providedMembers -contains $member)) {
@@ -384,7 +384,7 @@ end {
             }
         }
 
-        if ($coreProvided.Count -gt 0 -and $coreProvided.Count -ne $coreFields.Count) {
+        if ($coreProvided -and $coreProvided.Count -gt 0 -and $coreProvided.Count -ne $coreFields.Count) {
             throw "Static IPv4 configuration requires fields: $($coreFields -join ', ')"
         }
 

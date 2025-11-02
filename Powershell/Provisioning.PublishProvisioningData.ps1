@@ -28,7 +28,16 @@ function Invoke-ProvisioningPublishProvisioningData {
 
     $ipv4CoreValues = @($GuestV4IpAddr, $GuestV4CidrPrefix, $GuestV4DefaultGw)
     $ipv4CoreProvided = $ipv4CoreValues | Where-Object { $_ }
-    if ($ipv4CoreProvided.Count -gt 0) {
+    
+    # Ensure $ipv4CoreProvided is always an array for Count property access
+    if ($null -eq $ipv4CoreProvided) {
+        $ipv4CoreProvided = @()
+    }
+    elseif ($ipv4CoreProvided -isnot [Array]) {
+        $ipv4CoreProvided = @($ipv4CoreProvided)
+    }
+    
+    if ($ipv4CoreProvided -and $ipv4CoreProvided.Count -gt 0) {
         if (-not ($GuestV4IpAddr -and $GuestV4CidrPrefix -and $GuestV4DefaultGw)) {
             throw "Static IPv4 configuration requires GuestV4IpAddr, GuestV4CidrPrefix, and GuestV4DefaultGw when any of those fields are supplied."
         }
@@ -83,26 +92,38 @@ function Invoke-ProvisioningPublishProvisioningData {
         }
 
         try {
-            $kvpSettings = ($vm.GetRelated("Msvm_KvpExchangeComponent")[0]).GetRelated("Msvm_KvpExchangeComponentSettingData")
-            $hostItems = @($kvpSettings.HostExchangeItems)
+            $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")[0]
+            $kvpSettings = $kvpComponent.GetRelated("Msvm_KvpExchangeComponentSettingData")
+            
+            $rawHostItems = $kvpSettings.HostExchangeItems
+            
+            if ($null -eq $rawHostItems) {
+                $hostItems = @()
+            }
+            elseif ($rawHostItems -is [Array]) {
+                $hostItems = $rawHostItems
+            }
+            else {
+                $hostItems = @($rawHostItems)
+            }
         }
         catch {
             throw "Failed to get KVP settings: $_"
         }
 
-        if ($hostItems.Count -gt 0) {
+        if ($hostItems -and $hostItems.Count -gt 0) {
             $toRemove = @()
 
             foreach ($item in $hostItems) {
                 $match = ([xml]$item).SelectSingleNode(
                     "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']"
                 )
-                if ($match -ne $null) {
+                if ($null -ne $match) {
                     $toRemove += $item
                 }
             }
 
-            if ($toRemove.Count -gt 0) {
+            if ($toRemove -and $toRemove.Count -gt 0) {
                 try {
                     $null = $VmMgmt.RemoveKvpItems($vm, $toRemove)
                 }

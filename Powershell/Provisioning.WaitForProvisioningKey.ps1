@@ -13,37 +13,93 @@ function Invoke-ProvisioningWaitForProvisioningKey {
             [string]$Value
         )
 
-        $vmMgmt = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_VirtualSystemManagementService
-        $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+        try {
+            $vmMgmt = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_VirtualSystemManagementService
+        }
+        catch {
+            throw "Failed to get VM management service: $_"
+        }
+
+        try {
+            $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+        }
+        catch {
+            throw "Failed to get VM '$VMName': $_"
+        }
 
         if (-not $vm) {
             throw "VM '$VMName' not found when updating KVP '$Name'."
         }
 
-        $kvpSettings = ($vm.GetRelated("Msvm_KvpExchangeComponent")[0]).GetRelated("Msvm_KvpExchangeComponentSettingData")
-        $hostItems = @($kvpSettings.HostExchangeItems)
-        if ($hostItems.Count -gt 0) {
+        try {
+            $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")[0]
+            $kvpSettings = $kvpComponent.GetRelated("Msvm_KvpExchangeComponentSettingData")
+            
+            $rawHostItems = $kvpSettings.HostExchangeItems
+            
+            if ($null -eq $rawHostItems) {
+                $hostItems = @()
+            }
+            elseif ($rawHostItems -is [Array]) {
+                $hostItems = $rawHostItems
+            }
+            else {
+                $hostItems = @($rawHostItems)
+            }
+        }
+        catch {
+            throw "Failed to get KVP settings: $_"
+        }
+
+        if ($hostItems -and $hostItems.Count -gt 0) {
             $toRemove = @()
             foreach ($item in $hostItems) {
-                $match = ([xml]$item).SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
-                if ($match -ne $null) {
-                    $toRemove += $item
+                try {
+                    $match = ([xml]$item).SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
+                    if ($null -ne $match) {
+                        $toRemove += $item
+                    }
+                }
+                catch {
+                    # Ignore individual item processing errors
                 }
             }
-            if ($toRemove.Count -gt 0) {
-                $null = $vmMgmt.RemoveKvpItems($vm, $toRemove)
+            
+            if ($toRemove -and $toRemove.Count -gt 0) {
+                try {
+                    $null = $vmMgmt.RemoveKvpItems($vm, $toRemove)
+                }
+                catch {
+                    throw "Failed to remove existing KVP items: $_"
+                }
             }
         }
 
-        $kvpDataItem = ([WMIClass][String]::Format("\\{0}\{1}:{2}",
-                $vmMgmt.ClassPath.Server,
-                $vmMgmt.ClassPath.NamespacePath,
-                "Msvm_KvpExchangeDataItem")).CreateInstance()
+        try {
+            $kvpDataItem = ([WMIClass][String]::Format("\\{0}\{1}:{2}",
+                    $vmMgmt.ClassPath.Server,
+                    $vmMgmt.ClassPath.NamespacePath,
+                    "Msvm_KvpExchangeDataItem")).CreateInstance()
+        }
+        catch {
+            throw "Failed to create KVP data item: $_"
+        }
 
-        $kvpDataItem.Name = $Name
-        $kvpDataItem.Data = $Value
-        $kvpDataItem.Source = 0
-        $null = $vmMgmt.AddKvpItems($vm, $kvpDataItem.PSBase.GetText(1))
+        try {
+            $kvpDataItem.Name = $Name
+            $kvpDataItem.Data = $Value
+            $kvpDataItem.Source = 0
+        }
+        catch {
+            throw "Failed to set KVP item properties: $_"
+        }
+
+        try {
+            $null = $vmMgmt.AddKvpItems($vm, $kvpDataItem.PSBase.GetText(1))
+        }
+        catch {
+            throw "Failed to add KVP item '$Name': $_"
+        }
     }
 
     function Get-ProvisioningKvpValue {
@@ -53,11 +109,13 @@ function Invoke-ProvisioningWaitForProvisioningKey {
 
         try {
             $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
+            
             if (-not $vm) {
                 return $null
             }
 
             $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")
+            
             if (-not $kvpComponent) {
                 return $null
             }
@@ -65,10 +123,19 @@ function Invoke-ProvisioningWaitForProvisioningKey {
             # Check if GuestExchangeItems property exists and is accessible
             $guestItems = $null
             try {
-                $guestItems = $kvpComponent.GuestExchangeItems
+                $rawGuestItems = $kvpComponent.GuestExchangeItems
+                
+                if ($null -eq $rawGuestItems) {
+                    return $null
+                }
+                elseif ($rawGuestItems -is [Array]) {
+                    $guestItems = $rawGuestItems
+                }
+                else {
+                    $guestItems = @($rawGuestItems)
+                }
             }
             catch {
-                # GuestExchangeItems might not be available yet - this is normal during early boot
                 return $null
             }
 
@@ -84,15 +151,15 @@ function Invoke-ProvisioningWaitForProvisioningKey {
 
                     $xml = [xml]$item
                     $match = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
-                    if ($match -ne $null) {
+                    if ($null -ne $match) {
                         $dataNode = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()")
                         if ($dataNode) {
-                            return $dataNode.Value
+                            $value = $dataNode.Value
+                            return $value
                         }
                     }
                 }
                 catch {
-                    # Ignore individual item processing errors and continue
                     continue
                 }
             }
@@ -100,7 +167,6 @@ function Invoke-ProvisioningWaitForProvisioningKey {
             return $null
         }
         catch {
-            # Log the error but don't fail - this is expected during guest startup
             return $null
         }
     }
@@ -123,6 +189,7 @@ function Invoke-ProvisioningWaitForProvisioningKey {
     while ($elapsed -lt $TimeoutSeconds) {
         try {
             $guestState = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_system_state"
+            
             if ($guestState -eq "waitingforaeskey") {
                 Write-Host "Guest signalled readiness for AES key exchange." -ForegroundColor Green
                 return $true
