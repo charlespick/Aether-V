@@ -28,7 +28,16 @@ function Invoke-ProvisioningPublishProvisioningData {
 
     $ipv4CoreValues = @($GuestV4IpAddr, $GuestV4CidrPrefix, $GuestV4DefaultGw)
     $ipv4CoreProvided = $ipv4CoreValues | Where-Object { $_ }
-    if ($ipv4CoreProvided.Count -gt 0) {
+    
+    # Ensure $ipv4CoreProvided is always an array for Count property access
+    if ($null -eq $ipv4CoreProvided) {
+        $ipv4CoreProvided = @()
+    }
+    elseif ($ipv4CoreProvided -isnot [Array]) {
+        $ipv4CoreProvided = @($ipv4CoreProvided)
+    }
+    
+    if ($ipv4CoreProvided -and $ipv4CoreProvided.Count -gt 0) {
         if (-not ($GuestV4IpAddr -and $GuestV4CidrPrefix -and $GuestV4DefaultGw)) {
             throw "Static IPv4 configuration requires GuestV4IpAddr, GuestV4CidrPrefix, and GuestV4DefaultGw when any of those fields are supplied."
         }
@@ -83,26 +92,38 @@ function Invoke-ProvisioningPublishProvisioningData {
         }
 
         try {
-            $kvpSettings = ($vm.GetRelated("Msvm_KvpExchangeComponent")[0]).GetRelated("Msvm_KvpExchangeComponentSettingData")
-            $hostItems = @($kvpSettings.HostExchangeItems)
+            $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")[0]
+            $kvpSettings = $kvpComponent.GetRelated("Msvm_KvpExchangeComponentSettingData")
+            
+            $rawHostItems = $kvpSettings.HostExchangeItems
+            
+            if ($null -eq $rawHostItems) {
+                $hostItems = @()
+            }
+            elseif ($rawHostItems -is [Array]) {
+                $hostItems = $rawHostItems
+            }
+            else {
+                $hostItems = @($rawHostItems)
+            }
         }
         catch {
             throw "Failed to get KVP settings: $_"
         }
 
-        if ($hostItems.Count -gt 0) {
+        if ($hostItems -and $hostItems.Count -gt 0) {
             $toRemove = @()
 
             foreach ($item in $hostItems) {
                 $match = ([xml]$item).SelectSingleNode(
                     "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']"
                 )
-                if ($match -ne $null) {
+                if ($null -ne $match) {
                     $toRemove += $item
                 }
             }
 
-            if ($toRemove.Count -gt 0) {
+            if ($toRemove -and $toRemove.Count -gt 0) {
                 try {
                     $null = $VmMgmt.RemoveKvpItems($vm, $toRemove)
                 }
@@ -149,60 +170,107 @@ function Invoke-ProvisioningPublishProvisioningData {
             [string]$Name
         )
 
-        $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
-            Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+        try {
+            $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
+                Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
 
-        $directResult = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems | % { `
-                $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
-                    "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
-            if ($GuestExchangeItemXml -ne $null) {
-                $GuestExchangeItemXml.SelectSingleNode(`
-                        "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+            if (-not $vm) {
+                return $null
             }
-        }
 
-        if ($directResult) {
-            return $directResult
-        }
+            $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")
+            if (-not $kvpComponent) {
+                return $null
+            }
 
-        $chunks = @{}
-        $chunkKeys = @()
+            # Try to get guest exchange items with error handling
+            $guestItems = $null
+            try {
+                $guestItems = $kvpComponent.GuestExchangeItems
+            }
+            catch {
+                return $null
+            }
 
-        $allKvpItems = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems
+            if (-not $guestItems) {
+                return $null
+            }
 
-        for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
-            $chunkKey = "$Name._$chunkIndex"
+            # Ensure $guestItems is treated as an array
+            if ($guestItems -isnot [Array]) {
+                $guestItems = @($guestItems)
+            }
 
-            $chunkResult = $allKvpItems | % { `
+            $directResult = $guestItems | ForEach-Object { 
+                try {
+                    if ([string]::IsNullOrEmpty($_)) {
+                        return $null
+                    }
                     $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
-                        "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$chunkKey']")
-                if ($GuestExchangeItemXml -ne $null) {
-                    $GuestExchangeItemXml.SelectSingleNode(`
-                            "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+                            "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
+                    if ($GuestExchangeItemXml -ne $null) {
+                        $GuestExchangeItemXml.SelectSingleNode(`
+                                "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+                    }
+                }
+                catch {
+                    return $null
                 }
             }
 
-            if ($chunkResult) {
-                $chunks[$chunkIndex] = $chunkResult
-                $chunkKeys += $chunkKey
-            } else {
-                break
+            if ($directResult) {
+                return $directResult
             }
-        }
 
-        if ($chunks.Count -gt 0) {
-            $reconstructedValue = ""
+            $chunks = @{}
+            $chunkKeys = @()
 
-            for ($i = 0; $i -lt $chunks.Count; $i++) {
-                if ($chunks.ContainsKey($i)) {
-                    $reconstructedValue += $chunks[$i]
+            for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
+                $chunkKey = "$Name._$chunkIndex"
+
+                $chunkResult = $guestItems | ForEach-Object { 
+                    try {
+                        if ([string]::IsNullOrEmpty($_)) {
+                            return $null
+                        }
+                        $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
+                                "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$chunkKey']")
+                        if ($GuestExchangeItemXml -ne $null) {
+                            $GuestExchangeItemXml.SelectSingleNode(`
+                                    "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+                        }
+                    }
+                    catch {
+                        return $null
+                    }
+                }
+
+                if ($chunkResult) {
+                    $chunks[$chunkIndex] = $chunkResult
+                    $chunkKeys += $chunkKey
+                }
+                else {
+                    break
                 }
             }
 
-            return $reconstructedValue
-        }
+            if ($chunks -and $chunks.Count -gt 0) {
+                $reconstructedValue = ""
 
-        return $null
+                for ($i = 0; $i -lt $chunks.Count; $i++) {
+                    if ($chunks.ContainsKey($i)) {
+                        $reconstructedValue += $chunks[$i]
+                    }
+                }
+
+                return $reconstructedValue
+            }
+
+            return $null
+        }
+        catch {
+            return $null
+        }
     }
 
     function Publish-KvpEncryptedValue {
@@ -418,7 +486,8 @@ function Invoke-ProvisioningPublishProvisioningData {
                 $rsa = [System.Security.Cryptography.RSACng]::new()
                 try {
                     $rsa.KeySize = [int]($modulus.Length * 8)
-                } catch {
+                }
+                catch {
                     # If the platform rejects the explicit size, fall back to the default
                 }
                 $rsa.ImportParameters($rsaParameters)
@@ -457,15 +526,24 @@ function Invoke-ProvisioningPublishProvisioningData {
         $encryptedAesKey = $rsa.Encrypt($aes.Key, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
         $encodedKey = ConvertTo-Base64Url -Bytes $encryptedAesKey
 
-        Set-VMKeyValuePair -VMName $VmName -Name "hlvmm.meta.aes_key" -Value $encodedKey
+        Set-VMKeyValuePair -VMName $VmName -Name "hlvmm.meta.shared_aes_key" -Value $encodedKey
     }
 
     Write-Host "Waiting for guest provisioning public key..."
     $publicKey = $null
     for ($i = 0; $i -lt 120; $i++) {
-        $publicKey = Get-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.guest_provisioning_public_key"
-        if ($publicKey) {
-            break
+        try {
+            $publicKey = Get-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.guest_provisioning_public_key"
+            if ($publicKey) {
+                break
+            }
+        }
+        catch {
+            # Ignore errors - guest might not be ready yet
+        }
+        
+        if ($i % 10 -eq 0) {
+            Write-Host "Still waiting for guest public key... ($i/120 seconds elapsed)"
         }
         Start-Sleep -Seconds 1
     }
@@ -503,6 +581,6 @@ function Invoke-ProvisioningPublishProvisioningData {
         Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.ansible_ssh_key" -Value $AnsibleSshKey
     }
 
-    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.host_provisioning_system_state" -Value "publisheddetails"
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.host_provisioning_system_state" -Value "provisioningdatapublished"
     Write-Host "Provisioning data published for VM '$GuestHostName'."
 }

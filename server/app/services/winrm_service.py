@@ -302,7 +302,7 @@ class WinRMService:
             getattr(session, "locale", "unknown"),
         )
         return session
-    
+
     def close_session(self, hostname: str):
         """Close cached WinRM sessions (no-op for per-operation sessions)."""
 
@@ -312,7 +312,7 @@ class WinRMService:
         """Close all WinRM sessions (no-op for per-operation sessions)."""
 
         logger.debug("close_all_sessions called, but sessions are not cached")
-    
+
     def execute_ps_script(
         self,
         hostname: str,
@@ -322,13 +322,13 @@ class WinRMService:
     ) -> tuple[str, str, int]:
         """
         Execute a PowerShell script on a remote host.
-        
+
         Args:
             hostname: Target Hyper-V host
             script_path: Path to PowerShell script on the host
             parameters: Script parameters as key-value pairs
             environment: Environment variables to set
-        
+
         Returns:
             Tuple of (stdout, stderr, exit_code)
         """
@@ -406,9 +406,9 @@ class WinRMService:
                 return stdout_str, stderr_str, exit_code
 
             except Exception as e:
-                logger.exception("WinRM script execution failed on %s", hostname)
+                logger.exception("WinRM script execution failed on %s: %s", hostname, e)
                 raise
-    
+
     def execute_ps_command(
         self,
         hostname: str,
@@ -416,11 +416,11 @@ class WinRMService:
     ) -> tuple[str, str, int]:
         """
         Execute a PowerShell command directly.
-        
+
         Args:
             hostname: Target Hyper-V host
             command: PowerShell command to execute
-        
+
         Returns:
             Tuple of (stdout, stderr, exit_code)
         """
@@ -429,11 +429,15 @@ class WinRMService:
             truncated_command = command.replace("\n", " ")
             if len(truncated_command) > 120:
                 truncated_command = f"{truncated_command[:117]}..."
-            logger.info("Executing PowerShell command on %s: %s", hostname, truncated_command)
-            logger.debug("Full PowerShell command on %s: %s", hostname, command)
+            logger.info("Executing PowerShell command on %s: %s",
+                        hostname, truncated_command)
+            logger.debug("Full PowerShell command on %s: %s",
+                         hostname, command)
 
-            encoded_command = b64encode(command.encode('utf-16le')).decode('ascii')
-            ps_args = self._build_powershell_command(["-EncodedCommand", encoded_command])
+            encoded_command = b64encode(
+                command.encode('utf-16le')).decode('ascii')
+            ps_args = self._build_powershell_command(
+                ["-EncodedCommand", encoded_command])
 
             try:
                 start_time = perf_counter()
@@ -476,7 +480,8 @@ class WinRMService:
                 return stdout_str, stderr_str, exit_code
 
             except Exception as e:
-                logger.exception("WinRM command execution failed on %s", hostname)
+                logger.exception(
+                    "WinRM command execution failed on %s: %s", hostname, e)
                 raise
 
     def stream_ps_command(
@@ -491,11 +496,15 @@ class WinRMService:
             truncated_command = command.replace("\n", " ")
             if len(truncated_command) > 120:
                 truncated_command = f"{truncated_command[:117]}..."
-            logger.info("Streaming PowerShell command on %s: %s", hostname, truncated_command)
-            logger.debug("Full streaming PowerShell command on %s: %s", hostname, command)
+            logger.info("Streaming PowerShell command on %s: %s",
+                        hostname, truncated_command)
+            logger.debug(
+                "Full streaming PowerShell command on %s: %s", hostname, command)
 
-            encoded_command = b64encode(command.encode('utf-16le')).decode('ascii')
-            ps_args = self._build_powershell_command(["-EncodedCommand", encoded_command])
+            encoded_command = b64encode(
+                command.encode('utf-16le')).decode('ascii')
+            ps_args = self._build_powershell_command(
+                ["-EncodedCommand", encoded_command])
 
             try:
                 exit_code, duration = self._stream_powershell_command(
@@ -505,7 +514,8 @@ class WinRMService:
                     on_chunk,
                 )
             except Exception as exc:
-                logger.exception("WinRM streaming execution failed on %s", hostname)
+                logger.exception(
+                    "WinRM streaming execution failed on %s: %s", hostname, exc)
                 raise
             logger.info(
                 "Streaming command on %s completed in %.2fs with exit code %s",
@@ -515,7 +525,6 @@ class WinRMService:
             )
 
             return exit_code
-
 
     def _dispose_session(self, session: Protocol):
         """Attempt to close transport resources for a WinRM session."""
