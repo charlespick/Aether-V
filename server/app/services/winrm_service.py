@@ -481,7 +481,7 @@ class WinRMService:
 
             except Exception as e:
                 logger.exception(
-                    "WinRM command execution failed on %s", hostname)
+                    "WinRM command execution failed on %s: %s", hostname, e)
                 raise
 
     def stream_ps_command(
@@ -515,7 +515,7 @@ class WinRMService:
                 )
             except Exception as exc:
                 logger.exception(
-                    "WinRM streaming execution failed on %s", hostname)
+                    "WinRM streaming execution failed on %s: %s", hostname, exc)
                 raise
             logger.info(
                 "Streaming command on %s completed in %.2fs with exit code %s",
