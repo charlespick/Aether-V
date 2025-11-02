@@ -175,13 +175,18 @@ function Invoke-ProvisioningPublishProvisioningData {
                 return $null
             }
 
+            # Ensure $guestItems is treated as an array
+            if ($guestItems -isnot [Array]) {
+                $guestItems = @($guestItems)
+            }
+
             $directResult = $guestItems | ForEach-Object { 
                 try {
                     if ([string]::IsNullOrEmpty($_)) {
                         return $null
                     }
                     $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
-                        "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
+                            "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
                     if ($GuestExchangeItemXml -ne $null) {
                         $GuestExchangeItemXml.SelectSingleNode(`
                                 "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
@@ -208,7 +213,7 @@ function Invoke-ProvisioningPublishProvisioningData {
                             return $null
                         }
                         $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
-                            "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$chunkKey']")
+                                "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$chunkKey']")
                         if ($GuestExchangeItemXml -ne $null) {
                             $GuestExchangeItemXml.SelectSingleNode(`
                                     "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
@@ -228,7 +233,7 @@ function Invoke-ProvisioningPublishProvisioningData {
                 }
             }
 
-            if ($chunks.Count -gt 0) {
+            if ($chunks -and $chunks.Count -gt 0) {
                 $reconstructedValue = ""
 
                 for ($i = 0; $i -lt $chunks.Count; $i++) {
