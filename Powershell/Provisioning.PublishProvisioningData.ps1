@@ -149,61 +149,102 @@ function Invoke-ProvisioningPublishProvisioningData {
             [string]$Name
         )
 
-        $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
-            Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+        try {
+            $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class `
+                Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
 
-        $directResult = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems | % { `
-                $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
-                    "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
-            if ($GuestExchangeItemXml -ne $null) {
-                $GuestExchangeItemXml.SelectSingleNode(`
-                        "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+            if (-not $vm) {
+                return $null
             }
-        }
 
-        if ($directResult) {
-            return $directResult
-        }
+            $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")
+            if (-not $kvpComponent) {
+                return $null
+            }
 
-        $chunks = @{}
-        $chunkKeys = @()
+            # Try to get guest exchange items with error handling
+            $guestItems = $null
+            try {
+                $guestItems = $kvpComponent.GuestExchangeItems
+            }
+            catch {
+                return $null
+            }
 
-        $allKvpItems = $vm.GetRelated("Msvm_KvpExchangeComponent").GuestExchangeItems
+            if (-not $guestItems) {
+                return $null
+            }
 
-        for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
-            $chunkKey = "$Name._$chunkIndex"
-
-            $chunkResult = $allKvpItems | % { `
+            $directResult = $guestItems | ForEach-Object { 
+                try {
+                    if ([string]::IsNullOrEmpty($_)) {
+                        return $null
+                    }
                     $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
-                        "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$chunkKey']")
-                if ($GuestExchangeItemXml -ne $null) {
-                    $GuestExchangeItemXml.SelectSingleNode(`
-                            "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+                        "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
+                    if ($GuestExchangeItemXml -ne $null) {
+                        $GuestExchangeItemXml.SelectSingleNode(`
+                                "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+                    }
+                }
+                catch {
+                    return $null
                 }
             }
 
-            if ($chunkResult) {
-                $chunks[$chunkIndex] = $chunkResult
-                $chunkKeys += $chunkKey
+            if ($directResult) {
+                return $directResult
             }
-            else {
-                break
-            }
-        }
 
-        if ($chunks.Count -gt 0) {
-            $reconstructedValue = ""
+            $chunks = @{}
+            $chunkKeys = @()
 
-            for ($i = 0; $i -lt $chunks.Count; $i++) {
-                if ($chunks.ContainsKey($i)) {
-                    $reconstructedValue += $chunks[$i]
+            for ($chunkIndex = 0; $chunkIndex -le 29; $chunkIndex++) {
+                $chunkKey = "$Name._$chunkIndex"
+
+                $chunkResult = $guestItems | ForEach-Object { 
+                    try {
+                        if ([string]::IsNullOrEmpty($_)) {
+                            return $null
+                        }
+                        $GuestExchangeItemXml = ([XML]$_).SelectSingleNode(`
+                            "/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$chunkKey']")
+                        if ($GuestExchangeItemXml -ne $null) {
+                            $GuestExchangeItemXml.SelectSingleNode(`
+                                    "/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()").Value
+                        }
+                    }
+                    catch {
+                        return $null
+                    }
+                }
+
+                if ($chunkResult) {
+                    $chunks[$chunkIndex] = $chunkResult
+                    $chunkKeys += $chunkKey
+                }
+                else {
+                    break
                 }
             }
 
-            return $reconstructedValue
-        }
+            if ($chunks.Count -gt 0) {
+                $reconstructedValue = ""
 
-        return $null
+                for ($i = 0; $i -lt $chunks.Count; $i++) {
+                    if ($chunks.ContainsKey($i)) {
+                        $reconstructedValue += $chunks[$i]
+                    }
+                }
+
+                return $reconstructedValue
+            }
+
+            return $null
+        }
+        catch {
+            return $null
+        }
     }
 
     function Publish-KvpEncryptedValue {
@@ -465,9 +506,18 @@ function Invoke-ProvisioningPublishProvisioningData {
     Write-Host "Waiting for guest provisioning public key..."
     $publicKey = $null
     for ($i = 0; $i -lt 120; $i++) {
-        $publicKey = Get-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.guest_provisioning_public_key"
-        if ($publicKey) {
-            break
+        try {
+            $publicKey = Get-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.guest_provisioning_public_key"
+            if ($publicKey) {
+                break
+            }
+        }
+        catch {
+            # Ignore errors - guest might not be ready yet
+        }
+        
+        if ($i % 10 -eq 0) {
+            Write-Host "Still waiting for guest public key... ($i/120 seconds elapsed)"
         }
         Start-Sleep -Seconds 1
     }

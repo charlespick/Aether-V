@@ -4,7 +4,7 @@ function Invoke-ProvisioningWaitForProvisioningKey {
         [Parameter(Mandatory = $true)]
         [string]$VMName,
 
-        [int]$TimeoutSeconds = 600
+        [int]$TimeoutSeconds = 300
     )
 
     function Set-ProvisioningKvpValue {
@@ -51,34 +51,58 @@ function Invoke-ProvisioningWaitForProvisioningKey {
             [string]$Name
         )
 
-        $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter "ElementName='$VMName'"
-        if (-not $vm) {
-            return $null
-        }
+        try {
+            $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
+            if (-not $vm) {
+                return $null
+            }
 
-        $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")
-        if (-not $kvpComponent) {
-            return $null
-        }
+            $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")
+            if (-not $kvpComponent) {
+                return $null
+            }
 
-        $guestItems = $kvpComponent.GuestExchangeItems
-        foreach ($item in $guestItems) {
+            # Check if GuestExchangeItems property exists and is accessible
+            $guestItems = $null
             try {
-                $xml = [xml]$item
-                $match = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
-                if ($match -ne $null) {
-                    $dataNode = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()")
-                    if ($dataNode) {
-                        return $dataNode.Value
-                    }
-                }
+                $guestItems = $kvpComponent.GuestExchangeItems
             }
             catch {
-                Write-Warning "Error processing KVP item: $_"
+                # GuestExchangeItems might not be available yet - this is normal during early boot
+                return $null
             }
-        }
 
-        return $null
+            if (-not $guestItems) {
+                return $null
+            }
+
+            foreach ($item in $guestItems) {
+                try {
+                    if ([string]::IsNullOrEmpty($item)) {
+                        continue
+                    }
+
+                    $xml = [xml]$item
+                    $match = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
+                    if ($match -ne $null) {
+                        $dataNode = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()")
+                        if ($dataNode) {
+                            return $dataNode.Value
+                        }
+                    }
+                }
+                catch {
+                    # Ignore individual item processing errors and continue
+                    continue
+                }
+            }
+
+            return $null
+        }
+        catch {
+            # Log the error but don't fail - this is expected during guest startup
+            return $null
+        }
     }
 
     Write-Host "Preparing KVP channel for VM '$VMName'..."
@@ -97,27 +121,41 @@ function Invoke-ProvisioningWaitForProvisioningKey {
     Write-Host "Waiting up to $TimeoutSeconds seconds for guest provisioning readiness..."
 
     while ($elapsed -lt $TimeoutSeconds) {
-        $guestState = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_system_state"
-        if ($guestState -eq "waitingforaeskey") {
-            Write-Host "Guest signalled readiness for AES key exchange." -ForegroundColor Green
-            return $true
-        }
+        try {
+            $guestState = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_system_state"
+            if ($guestState -eq "waitingforaeskey") {
+                Write-Host "Guest signalled readiness for AES key exchange." -ForegroundColor Green
+                return $true
+            }
 
-        if ($elapsed % 30 -eq 0) {
-            $publicKey = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_public_key"
-            $statusMsg = "Elapsed: $elapsed s"
-            if ($guestState) { $statusMsg += ", State: '$guestState'" }
-            if ($publicKey) { $statusMsg += ", Public key received" }
-            Write-Host $statusMsg
+            if ($elapsed % 30 -eq 0) {
+                $publicKey = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_public_key"
+                $statusMsg = "Elapsed: $elapsed s"
+                if ($guestState) { $statusMsg += ", State: '$guestState'" }
+                if ($publicKey) { $statusMsg += ", Public key received" }
+                Write-Host $statusMsg
+            }
+        }
+        catch {
+            # Ignore all errors during the wait loop - guest might not be ready yet
+            if ($elapsed % 60 -eq 0) {
+                Write-Host "Elapsed: $elapsed s - Guest KVP not yet accessible (normal during boot)"
+            }
         }
 
         Start-Sleep -Seconds $intervalSeconds
         $elapsed += $intervalSeconds
     }
 
-    $finalState = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_system_state"
-    $finalPublicKey = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_public_key"
-    $publicKeyState = if ($finalPublicKey) { "received" } else { "not received" }
+    try {
+        $finalState = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_system_state"
+        $finalPublicKey = Get-ProvisioningKvpValue -Name "hlvmm.meta.guest_provisioning_public_key"
+        $publicKeyState = if ($finalPublicKey) { "received" } else { "not received" }
 
-    throw "Guest on VM '$VMName' did not reach 'waitingforaeskey' within $TimeoutSeconds seconds. Final state: '$finalState', Public key: $publicKeyState."
+        throw "Guest on VM '$VMName' did not reach 'waitingforaeskey' within $TimeoutSeconds seconds. Final state: '$finalState', Public key: $publicKeyState."
+    }
+    catch {
+        # If we can't even get the final state, provide a simpler error message
+        throw "Guest on VM '$VMName' did not reach 'waitingforaeskey' within $TimeoutSeconds seconds. KVP communication may not be available yet."
+    }
 }
