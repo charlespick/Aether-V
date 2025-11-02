@@ -20,8 +20,12 @@ for the UI banner.
 | `ALLOW_DEV_AUTH`                | `false`                      | When disabling auth     | Safety latch when `AUTH_ENABLED=false`; must be `true` before disabling auth.                                        |
 | `OIDC_ISSUER_URL`               | _(unset)_                    | Yes (when auth enabled) | OpenID Connect issuer/authority URL, e.g. `https://login.microsoftonline.com/<tenant>/v2.0`.                         |
 | `OIDC_CLIENT_ID`                | _(unset)_                    | Yes (when auth enabled) | OIDC application client ID that matches the IdP registration.                                                        |
-| `OIDC_ROLE_NAME`                | `vm-admin`                   | No                      | Role or group required for access. Use `*` to allow any authenticated principal.                                     |
+| `OIDC_API_AUDIENCE`             | _(unset)_                    | Recommended             | Expected audience URI for API access tokens (for example `api://<client-id>`).                                       |
+| `OIDC_READER_PERMISSIONS`       | `Aether.Reader`              | Yes                     | Comma/space separated scopes or app roles that grant read-only API access.                                           |
+| `OIDC_WRITER_PERMISSIONS`       | `Aether.Writer`              | Yes                     | Scopes or roles that allow create/update/delete operations.                                                          |
+| `OIDC_ADMIN_PERMISSIONS`        | `Aether.Admin`               | Optional                | Elevated scopes or roles for future administrative features.                                                         |
 | `OIDC_REDIRECT_URI`             | _(unset)_                    | Yes (when auth enabled) | Callback URL registered with the IdP; must match the deployment hostname.                                            |
+| `OIDC_ROLE_NAME`                | _(unset)_                    | Legacy                  | Optional single-role fallback for backwards compatibility with older deployments.                                   |
 | `OIDC_FORCE_HTTPS`              | `true`                       | No                      | Enforce HTTPS redirects during login. Set `false` only for local HTTP testing.                                       |
 | `JWKS_CACHE_TTL`                | `300`                        | No                      | Seconds to cache the OIDC signing keys. Increase if rate-limited by the IdP.                                         |
 | `MAX_TOKEN_AGE`                 | `3600`                       | No                      | Maximum accepted token age in seconds. Align with the IdP token lifetime.                                            |
@@ -53,10 +57,21 @@ never committed to source control.
 | Variable             | Purpose                                   | Notes                                                                                                                                    |
 | -------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `OIDC_CLIENT_SECRET` | Client secret for the OIDC application.   | Required when using interactive login.                                                                                                   |
-| `API_TOKEN`          | Static token for API-based automation.    | Optional but required when integrating unattended callers. Generate with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. |
 | `SESSION_SECRET_KEY` | Key used to sign session cookies.         | Optional for development; required in production to keep sessions stable across restarts.                                                |
 | `WINRM_USERNAME`     | Username for connecting to Hyper-V hosts. | Typically a domain account with necessary privileges.                                                                                    |
 | `WINRM_PASSWORD`     | Password for the WinRM account.           | Consider using certificates for enhanced security.                                                                                       |
+
+Service principals and other non-interactive callers authenticate by requesting OAuth tokens directly from the identity provider (for example, using a Microsoft Entra application client ID and secret) and presenting those bearer tokens to Aether-V. Access tokens should be requested with the API audience (for example `api://<client-id>/.default`) so the resulting token contains the configured app roles. No static API keys are required or supported.
+
+## Stateless authorization mapping
+
+Aether-V derives permissions from token claims so deployments remain stateless. Configure the environment variables listed above so they match the scopes or app roles defined in Microsoft Entra ID:
+
+- **Reader** (`OIDC_READER_PERMISSIONS`): allows access to `GET` endpoints and WebSocket subscriptions. Tokens typically expose these as OAuth scopes in the `scp` or `scope` claim for user flows, or app roles in the `roles` claim for service principals.
+- **Writer** (`OIDC_WRITER_PERMISSIONS`): grants the reader capabilities plus create/update/delete operations. Map this to the scopes or app roles that correspond to modification privileges.
+- **Admin** (`OIDC_ADMIN_PERMISSIONS`): reserved for future administrative APIs. Configure it now to match any privileged roles you plan to issue.
+
+Tokens are validated against the configured issuer, signing keys (JWKS), and the acceptable audiences (`OIDC_API_AUDIENCE`, `OIDC_CLIENT_ID`, or `api://<client-id>`). User tokens should carry the required scopes in the `scp` claim, while workload identities should emit matching app roles in the `roles` claim.
 
 ## Where values are consumed
 

@@ -22,12 +22,15 @@ class Settings(BaseSettings):
     oidc_issuer_url: Optional[str] = None
     oidc_client_id: Optional[str] = None
     oidc_client_secret: Optional[str] = None
-    oidc_role_name: str = "vm-admin"
+    oidc_api_audience: Optional[str] = None
+    oidc_reader_permissions: str = "Aether.Reader"
+    oidc_writer_permissions: str = "Aether.Writer"
+    oidc_admin_permissions: str = "Aether.Admin"
+    oidc_role_name: Optional[str] = None  # Legacy fallback
     oidc_redirect_uri: Optional[str] = None
     oidc_force_https: bool = True  # Always use HTTPS for OIDC callbacks
 
-    # API settings - for non-interactive authentication
-    api_token: Optional[str] = None  # Optional static token for automation
+    # Session management settings
     session_secret_key: Optional[str] = None  # Session middleware secret key
 
     # Security settings

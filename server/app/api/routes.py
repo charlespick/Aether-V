@@ -13,7 +13,18 @@ from ..core.models import (
     HealthResponse, NotificationsResponse, JobSubmission,
     AboutResponse, BuildInfo,
 )
-from ..core.auth import get_current_user, oauth
+from ..core.auth import (
+    Permission,
+    authenticate_with_token,
+    enrich_identity,
+    get_dev_user,
+    get_identity_display_name,
+    has_permission,
+    oauth,
+    require_permission,
+    validate_oidc_token,
+    validate_session_data,
+)
 from ..core.config import settings, get_config_validation_result
 from ..core.build_info import build_metadata
 from ..core.job_schema import (
@@ -96,7 +107,7 @@ async def readiness_check():
 
 
 @router.get("/api/v1/about", response_model=AboutResponse, tags=["About"])
-async def get_about(user: dict = Depends(get_current_user)):
+async def get_about(user: dict = Depends(require_permission(Permission.READER))):
     """Return metadata for the About screen."""
 
     return AboutResponse(
@@ -107,7 +118,7 @@ async def get_about(user: dict = Depends(get_current_user)):
 
 
 @router.get("/api/v1/inventory", response_model=InventoryResponse, tags=["Inventory"])
-async def get_inventory(user: dict = Depends(get_current_user)):
+async def get_inventory(user: dict = Depends(require_permission(Permission.READER))):
     """Get complete inventory of clusters, hosts and VMs."""
     clusters = inventory_service.get_all_clusters()
     hosts = inventory_service.get_connected_hosts()
@@ -128,25 +139,25 @@ async def get_inventory(user: dict = Depends(get_current_user)):
 
 
 @router.get("/api/v1/hosts", response_model=List[Host], tags=["Hosts"])
-async def list_hosts(user: dict = Depends(get_current_user)):
+async def list_hosts(user: dict = Depends(require_permission(Permission.READER))):
     """List all Hyper-V hosts."""
     return inventory_service.get_all_hosts()
 
 
 @router.get("/api/v1/hosts/{hostname}/vms", response_model=List[VM], tags=["Hosts"])
-async def list_host_vms(hostname: str, user: dict = Depends(get_current_user)):
+async def list_host_vms(hostname: str, user: dict = Depends(require_permission(Permission.READER))):
     """List VMs on a specific host."""
     return inventory_service.get_host_vms(hostname)
 
 
 @router.get("/api/v1/vms", response_model=List[VM], tags=["VMs"])
-async def list_vms(user: dict = Depends(get_current_user)):
+async def list_vms(user: dict = Depends(require_permission(Permission.READER))):
     """List all VMs across all hosts."""
     return inventory_service.get_all_vms()
 
 
 @router.get("/api/v1/vms/{hostname}/{vm_name}", response_model=VM, tags=["VMs"])
-async def get_vm(hostname: str, vm_name: str, user: dict = Depends(get_current_user)):
+async def get_vm(hostname: str, vm_name: str, user: dict = Depends(require_permission(Permission.READER))):
     """Get details of a specific VM."""
     vm = inventory_service.get_vm(hostname, vm_name)
 
@@ -160,14 +171,15 @@ async def get_vm(hostname: str, vm_name: str, user: dict = Depends(get_current_u
 
 
 @router.get("/api/v1/schema/job-inputs", tags=["Schema"])
-async def get_job_input_schema(user: dict = Depends(get_current_user)):
+async def get_job_input_schema(user: dict = Depends(require_permission(Permission.READER))):
     """Return the active job input schema."""
     return get_job_schema()
 
 
 @router.post("/api/v1/jobs/provision", response_model=Job, tags=["Jobs"])
 async def submit_provisioning_job(
-    submission: JobSubmission, user: dict = Depends(get_current_user)
+    submission: JobSubmission,
+    user: dict = Depends(require_permission(Permission.WRITER))
 ):
     """Accept a schema-driven provisioning request."""
 
@@ -232,7 +244,10 @@ async def submit_provisioning_job(
 
 
 @router.post("/api/v1/vms/delete", response_model=Job, tags=["VMs"])
-async def delete_vm(request: VMDeleteRequest, user: dict = Depends(get_current_user)):
+async def delete_vm(
+    request: VMDeleteRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
     """Delete a VM."""
     # Check if VM exists
     vm = inventory_service.get_vm(request.hyperv_host, request.vm_name)
@@ -248,13 +263,16 @@ async def delete_vm(request: VMDeleteRequest, user: dict = Depends(get_current_u
 
 
 @router.get("/api/v1/jobs", response_model=List[Job], tags=["Jobs"])
-async def list_jobs(user: dict = Depends(get_current_user)):
+async def list_jobs(user: dict = Depends(require_permission(Permission.READER))):
     """List all jobs."""
     return await job_service.get_all_jobs()
 
 
 @router.get("/api/v1/jobs/{job_id}", response_model=Job, tags=["Jobs"])
-async def get_job(job_id: str, user: dict = Depends(get_current_user)):
+async def get_job(
+    job_id: str,
+    user: dict = Depends(require_permission(Permission.READER)),
+):
     """Get job details."""
     job = await job_service.get_job(job_id)
 
@@ -271,7 +289,7 @@ async def get_job(job_id: str, user: dict = Depends(get_current_user)):
 async def get_notifications(
     limit: Optional[int] = None,
     unread_only: bool = False,
-    user: dict = Depends(get_current_user)
+    user: dict = Depends(require_permission(Permission.READER)),
 ):
     """Get notifications."""
     if unread_only:
@@ -289,7 +307,7 @@ async def get_notifications(
 @router.put("/api/v1/notifications/{notification_id}/read", tags=["Notifications"])
 async def mark_notification_read(
     notification_id: str,
-    user: dict = Depends(get_current_user)
+    user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Mark a notification as read."""
     success = notification_service.mark_notification_read(notification_id)
@@ -302,7 +320,9 @@ async def mark_notification_read(
 
 
 @router.put("/api/v1/notifications/mark-all-read", tags=["Notifications"])
-async def mark_all_notifications_read(user: dict = Depends(get_current_user)):
+async def mark_all_notifications_read(
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
     """Mark all notifications as read."""
     count = notification_service.mark_all_read()
     return {"message": f"Marked {count} notifications as read"}
@@ -311,7 +331,7 @@ async def mark_all_notifications_read(user: dict = Depends(get_current_user)):
 @router.delete("/api/v1/notifications/{notification_id}", tags=["Notifications"])
 async def delete_notification(
     notification_id: str,
-    user: dict = Depends(get_current_user)
+    user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Delete a notification."""
     success = notification_service.delete_notification(notification_id)
@@ -390,41 +410,70 @@ async def auth_callback(request: Request):
         # Clear the state from session
         request.session.pop("oauth_state", None)
 
-        # Extract both tokens - use ID token for authentication, access token for API calls
+        # Extract both tokens - prefer the access token when present so we can inspect scopes/roles
         access_token = token.get("access_token")
         id_token = token.get("id_token")
 
         logger.info(
-            f"OAuth callback received - access_token: {'present' if access_token else 'missing'}, id_token: {'present' if id_token else 'missing'}")
+            "OAuth callback received - access_token: %s, id_token: %s",
+            "present" if access_token else "missing",
+            "present" if id_token else "missing",
+        )
 
-        # For OIDC authentication, we should validate the ID token, not the access token
-        auth_token = id_token or access_token
-        if not auth_token:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No authentication token received (neither id_token nor access_token)"
-            )
+        client_ip = request.client.host if request.client else "unknown"
+        user_info = None
+        validation_errors: List[str] = []
 
-        # Validate the token before storing
-        try:
-            from ..core.auth import validate_oidc_token
-            logger.info(
-                f"Attempting to validate {'ID token' if id_token else 'access token'}")
-            user_info = await validate_oidc_token(auth_token)
-
-            # Check for required role
-            user_roles = user_info.get("roles", [])
-            if settings.oidc_role_name not in user_roles:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"User does not have required role: {settings.oidc_role_name}",
+        if access_token:
+            try:
+                user_info = await authenticate_with_token(access_token, client_ip)
+                logger.debug("Access token provided sufficient permissions for session establishment")
+            except HTTPException as exc:
+                validation_errors.append(f"access_token:{exc.detail}")
+                logger.warning(
+                    "Access token validation rejected during OAuth callback from %s: %s",
+                    client_ip,
+                    exc.detail,
                 )
-        except Exception as e:
-            logger.error(
-                f"Token validation failed in OAuth callback: {type(e).__name__}: {e}")
+            except Exception as exc:
+                validation_errors.append(f"access_token_error:{type(exc).__name__}")
+                logger.error(
+                    "Access token validation error during OAuth callback from %s: %s",
+                    client_ip,
+                    exc,
+                )
+
+        if not user_info and id_token:
+            try:
+                logger.info("Falling back to ID token validation for OAuth callback")
+                claims = await validate_oidc_token(id_token)
+                enriched = enrich_identity(claims)
+                if not enriched.get("permissions"):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Authenticated identity lacks required permissions",
+                    )
+                user_info = enriched
+            except HTTPException as exc:
+                validation_errors.append(f"id_token:{exc.detail}")
+                logger.error(
+                    "ID token validation rejected for OAuth callback from %s: %s",
+                    client_ip,
+                    exc.detail,
+                )
+            except Exception as exc:
+                validation_errors.append(f"id_token_error:{type(exc).__name__}")
+                logger.error(
+                    "ID token validation error during OAuth callback from %s: %s",
+                    client_ip,
+                    exc,
+                )
+
+        if not user_info:
+            detail = "; ".join(validation_errors) if validation_errors else "No tokens available"
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Token validation failed: {type(e).__name__}: {str(e)}"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Unable to establish session: {detail}",
             )
 
         # Store minimal authentication data to prevent large session cookies
@@ -433,6 +482,8 @@ async def auth_callback(request: Request):
             "preferred_username": user_info.get("preferred_username"),
             "sub": user_info.get("sub"),
             "roles": user_info.get("roles", []),
+            "permissions": user_info.get("permissions", []),
+            "identity_type": user_info.get("identity_type"),
             "authenticated": True,
             "auth_timestamp": datetime.now().isoformat()
         }
@@ -488,7 +539,9 @@ async def get_auth_token(request: Request):
                             "user": {
                                 "sub": user_info.get("sub"),
                                 "preferred_username": user_info.get("preferred_username"),
-                                "roles": user_info.get("roles", [])
+                                "roles": user_info.get("roles", []),
+                                "permissions": user_info.get("permissions", []),
+                                "identity_type": user_info.get("identity_type"),
                             }
                         }
                 else:
@@ -497,7 +550,9 @@ async def get_auth_token(request: Request):
                         "user": {
                             "sub": user_info.get("sub"),
                             "preferred_username": user_info.get("preferred_username"),
-                            "roles": user_info.get("roles", [])
+                            "roles": user_info.get("roles", []),
+                            "permissions": user_info.get("permissions", []),
+                            "identity_type": user_info.get("identity_type"),
                         }
                     }
             except Exception as e:
@@ -626,8 +681,6 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
     Since FastAPI's Depends() doesn't work with WebSocket endpoints,
     we use the shared auth functions from the auth module for consistency.
     """
-    from ..core.auth import authenticate_with_token, validate_session_data, get_dev_user
-
     client_ip = websocket.client.host if websocket.client else "unknown"
 
     # Development mode: no authentication required
@@ -651,12 +704,19 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
         if user_info:
             # Use shared session validation logic
             user = validate_session_data(user_info, client_ip)
-            if user:
-                username = user.get('preferred_username', 'unknown')
+            if user and has_permission(user, Permission.READER):
+                username = get_identity_display_name(user)
                 logger.info(
                     f"WebSocket session auth successful for "
                     f"{username} from {client_ip}")
                 return user
+            elif user:
+                username = get_identity_display_name(user)
+                logger.warning(
+                    "WebSocket session auth rejected for %s from %s due to missing reader permission",
+                    username,
+                    client_ip,
+                )
     except Exception as e:
         logger.debug(
             f"Error accessing WebSocket session from {client_ip}: {e}")
@@ -667,12 +727,26 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[dict]:
         try:
             # Use shared token authentication logic
             user = await authenticate_with_token(token, client_ip)
-            if user:
-                username = user.get('preferred_username', 'api-service')
+            if user and has_permission(user, Permission.READER):
+                username = get_identity_display_name(user)
                 logger.info(
                     f"WebSocket token auth successful for "
                     f"{username} from {client_ip}")
                 return user
+            elif user:
+                username = get_identity_display_name(user)
+                logger.warning(
+                    "WebSocket token auth rejected for %s from %s due to missing reader permission",
+                    username,
+                    client_ip,
+                )
+        except HTTPException as exc:
+            logger.warning(
+                "WebSocket token authentication refused from %s: %s",
+                client_ip,
+                exc.detail,
+            )
+            return None
         except Exception as e:
             logger.error(
                 f"WebSocket token authentication failed from {client_ip}: {e}")

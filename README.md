@@ -12,7 +12,7 @@ Aether-V enables automated, secure, and scalable management of Hyper-V virtual m
 - **Unified Platform:** Web UI, REST API, and guest agents for end-to-end VM lifecycle management.
 - **Stateless Operation:** No persistent storage; service state is always derived from live Hyper-V hosts.
 - **Encrypted Provisioning Data:** VM provisioning data is injected via Hyper-V KVP, encrypted so only the VM can access secrets after provisioning.
-- **OIDC Authentication:** Enterprise-ready authentication with Microsoft Entra ID (Azure AD) support.
+- **OIDC Authentication:** Enterprise-ready authentication with Microsoft Entra ID (Azure AD) for users and service principals.
 - **Containerized & Kubernetes-ready:** Easy deployment and scaling in cloud-native environments.
 - **Auto-refresh Inventory:** Periodic updates from all hosts.
 - **No SCVMM or SQL Server Required:** Minimal infrastructure footprint.
@@ -55,7 +55,8 @@ Aether-V enables automated, secure, and scalable management of Hyper-V virtual m
 All settings are managed via environment variables (ConfigMap/Secrets):
 
 - `DEBUG`, `APP_VERSION`
-- `OIDC_ENABLED`, `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `API_TOKEN`
+- `AUTH_ENABLED`, `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_API_AUDIENCE`
+- `OIDC_READER_PERMISSIONS`, `OIDC_WRITER_PERMISSIONS`, `OIDC_ADMIN_PERMISSIONS`
 - `HYPERV_HOSTS`, `WINRM_USERNAME`, `WINRM_PASSWORD`, `WINRM_TRANSPORT`, `WINRM_PORT`
 - `INVENTORY_REFRESH_INTERVAL`
 - `HOST_INSTALL_DIRECTORY`
@@ -85,6 +86,7 @@ Interactive API docs: `/docs` (Swagger UI), `/redoc`
 - Always enable OIDC in production.
 - Use Kubernetes Secrets for credentials.
 - Enable TLS for ingress.
+- Map Microsoft Entra scopes/app roles to `OIDC_READER_PERMISSIONS`, `OIDC_WRITER_PERMISSIONS`, and `OIDC_ADMIN_PERMISSIONS`; access tokens are validated for the configured audience and signing keys.
 - Configure RBAC and use HTTPS for WinRM in production.
 
 ## Troubleshooting

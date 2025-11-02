@@ -309,14 +309,13 @@ The WebSocket implementation uses **industry-standard authentication** matching 
 
 **Authentication Flow**:
 1. **Browser clients**: Session cookies automatically included in WebSocket upgrade request (standard browser behavior)
-2. **API clients**: OIDC JWT tokens or static API tokens passed via query parameter (`/ws?token=xxx`)
+2. **API clients**: OIDC JWT tokens (user-delegated or client-credential) passed via query parameter (`/ws?token=xxx`)
 3. **No custom token system** - uses existing authentication mechanisms directly
 
 **Supported Authentication Methods**:
 1. ✅ **Session-based authentication** - Browser session cookies (same as REST API)
-2. ✅ **OIDC JWT tokens** - Direct OIDC bearer token validation
-3. ✅ **Static API token** - For automation and service accounts
-4. ✅ **Development mode** - Requires explicit `ALLOW_DEV_AUTH=true` flag
+2. ✅ **OIDC JWT tokens** - Direct OIDC bearer token validation for both users and service principals
+3. ✅ **Development mode** - Requires explicit `ALLOW_DEV_AUTH=true` flag
 
 ### Connection Management
 
@@ -339,10 +338,9 @@ The WebSocket implementation uses **industry-standard authentication** matching 
 
 **Production Mode** (AUTH_ENABLED=true):
 - ✅ All WebSocket connections require valid authentication
-- ✅ Supports OIDC JWT tokens for interactive users
-- ✅ Supports static API tokens for automation
+- ✅ Supports OIDC JWT tokens for interactive users and service principals
 - ✅ Session-based authentication for browser clients
-- ✅ Role-based access control (respects `OIDC_ROLE_NAME`)
+- ✅ Permission-aware access control aligned with `OIDC_READER_PERMISSIONS`
 - ✅ 30-minute connection time limit enforced
 
 ### WSS (WebSocket Secure) Support
@@ -367,8 +365,8 @@ WebSocket authentication respects all existing authentication environment variab
 - `OIDC_ISSUER_URL` - OIDC provider URL
 - `OIDC_CLIENT_ID` - OIDC client ID
 - `OIDC_CLIENT_SECRET` - OIDC client secret
-- `OIDC_ROLE_NAME` - Required role for access
-- `API_TOKEN` - Static token for automation
+- `OIDC_API_AUDIENCE` - Expected audience for API access tokens
+- `OIDC_READER_PERMISSIONS` / `OIDC_WRITER_PERMISSIONS` / `OIDC_ADMIN_PERMISSIONS` - Permission mapping
 - `SESSION_SECRET_KEY` - Secret for session cookies
 
 ### Security Features
@@ -376,7 +374,7 @@ WebSocket authentication respects all existing authentication environment variab
 1. **Standard Authentication**: Uses existing REST API authentication mechanisms
 2. **Connection Time Limits**: 30-minute server-side timeout prevents resource exhaustion
 3. **Automatic Refresh**: Client refreshes connection before timeout
-4. **Role Validation**: Tokens checked for required roles before connection
+4. **Permission Validation**: Tokens checked for reader permissions before connection
 5. **Audit Logging**: All authentication attempts logged with IP and user info
 6. **Secure Protocol Support**: WSS (WebSocket Secure) automatically used with HTTPS
 
