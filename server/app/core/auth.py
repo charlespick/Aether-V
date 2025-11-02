@@ -393,7 +393,8 @@ def determine_permissions(claims: dict, user_roles: Optional[List[str]] = None) 
     claim_values: Set[str] = set(user_roles or extract_user_roles(claims))
 
     # Ensure scopes are considered even if not present in user_roles input
-    claim_values.update(_extract_scope_claims(claims))
+    if user_roles is not None:
+        claim_values.update(_extract_scope_claims(claims))
 
     normalized_claims = _normalize_claim_values(claim_values)
     granted: Set[Permission] = set()
