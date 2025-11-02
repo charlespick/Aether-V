@@ -499,36 +499,6 @@ function Invoke-ProvisioningPublishProvisioningData {
         }
     }
 
-    function ConvertTo-Base64Url {
-        param(
-            [byte[]]$Bytes
-        )
-        return ([Convert]::ToBase64String($Bytes).TrimEnd('=') -replace '\+', '-' -replace '/', '_')
-    }
-
-    function Publish-EncryptedSecret {
-        param(
-            [string]$VmName,
-            [string]$Key,
-            [string]$Secret,
-            [string]$PublicKey
-        )
-
-        $rsa = Get-RsaFromGuestProvisioningKey -PublicKeyBase64 $PublicKey
-
-        $aes = [System.Security.Cryptography.AesManaged]::new()
-        $aes.KeySize = 256
-        $aes.GenerateKey()
-        $aesKeyBase64 = [Convert]::ToBase64String($aes.Key)
-
-        Publish-KvpEncryptedValue -VmName $VmName -Key $Key -Value $Secret -AesKey $aesKeyBase64
-
-        $encryptedAesKey = $rsa.Encrypt($aes.Key, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
-        $encodedKey = ConvertTo-Base64Url -Bytes $encryptedAesKey
-
-        Set-VMKeyValuePair -VMName $VmName -Name "hlvmm.meta.shared_aes_key" -Value $encodedKey
-    }
-
     Write-Host "Waiting for guest provisioning public key..."
     $publicKey = $null
     for ($i = 0; $i -lt 120; $i++) {
@@ -552,34 +522,96 @@ function Invoke-ProvisioningPublishProvisioningData {
         throw "Guest provisioning public key not received from VM '$GuestHostName'."
     }
 
-    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_host_name" -Value $GuestHostName
-    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_la_uid" -Value $GuestLaUid
+    $provisioningDataItems = @(
+        @{ ParamName = "GuestHostName"; KvpKey = "hlvmm.data.guest_host_name"; Value = $GuestHostName }
+        @{ ParamName = "GuestLaUid"; KvpKey = "hlvmm.data.guest_la_uid"; Value = $GuestLaUid }
+        @{ ParamName = "GuestLaPw"; KvpKey = "hlvmm.data.guest_la_pw"; Value = $GuestLaPw }
+        @{ ParamName = "GuestV4IpAddr"; KvpKey = "hlvmm.data.guest_v4_ip_addr"; Value = $GuestV4IpAddr }
+        @{ ParamName = "GuestV4CidrPrefix"; KvpKey = "hlvmm.data.guest_v4_cidr_prefix"; Value = $GuestV4CidrPrefix }
+        @{ ParamName = "GuestV4DefaultGw"; KvpKey = "hlvmm.data.guest_v4_default_gw"; Value = $GuestV4DefaultGw }
+        @{ ParamName = "GuestV4Dns1"; KvpKey = "hlvmm.data.guest_v4_dns1"; Value = $GuestV4Dns1 }
+        @{ ParamName = "GuestV4Dns2"; KvpKey = "hlvmm.data.guest_v4_dns2"; Value = $GuestV4Dns2 }
+        @{ ParamName = "GuestNetDnsSuffix"; KvpKey = "hlvmm.data.guest_net_dns_suffix"; Value = $GuestNetDnsSuffix }
+        @{ ParamName = "GuestDomainJoinTarget"; KvpKey = "hlvmm.data.guest_domain_join_target"; Value = $GuestDomainJoinTarget }
+        @{ ParamName = "GuestDomainJoinUid"; KvpKey = "hlvmm.data.guest_domain_join_uid"; Value = $GuestDomainJoinUid }
+        @{ ParamName = "GuestDomainJoinOU"; KvpKey = "hlvmm.data.guest_domain_join_ou"; Value = $GuestDomainJoinOU }
+        @{ ParamName = "GuestDomainJoinPw"; KvpKey = "hlvmm.data.guest_domain_join_pw"; Value = $GuestDomainJoinPw }
+        @{ ParamName = "AnsibleSshUser"; KvpKey = "hlvmm.data.ansible_ssh_user"; Value = $AnsibleSshUser }
+        @{ ParamName = "AnsibleSshKey"; KvpKey = "hlvmm.data.ansible_ssh_key"; Value = $AnsibleSshKey }
+    )
 
-    Publish-EncryptedSecret -VmName $GuestHostName -Key "hlvmm.data.guest_la_pw" -Secret $GuestLaPw -PublicKey $publicKey
+    $dataKeysForChecksum = $provisioningDataItems |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) } |
+        Sort-Object { $_.KvpKey }
 
-    if ($GuestV4IpAddr) {
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_v4_ip_addr" -Value $GuestV4IpAddr
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_v4_cidr_prefix" -Value $GuestV4CidrPrefix
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_v4_default_gw" -Value $GuestV4DefaultGw
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_v4_dns1" -Value $GuestV4Dns1
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_v4_dns2" -Value $GuestV4Dns2
+    $provisioningData = ($dataKeysForChecksum | ForEach-Object { $_.Value }) -join "|"
+
+    $sha256 = $null
+    try {
+        $utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($provisioningData)
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $hash = $sha256.ComputeHash($utf8Bytes)
+        $checksum = [Convert]::ToBase64String($hash)
+    }
+    catch {
+        throw "Failed to compute the provisioning data checksum: $_"
+    }
+    finally {
+        if ($sha256) {
+            $sha256.Dispose()
+        }
     }
 
-    if ($GuestNetDnsSuffix) {
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_net_dns_suffix" -Value $GuestNetDnsSuffix
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.provisioning_system_checksum" -Value $checksum
+
+    $aesManaged = $null
+    $aesKeyBytes = $null
+    $aesKeyBase64 = $null
+    try {
+        $aesManaged = [System.Security.Cryptography.AesManaged]::new()
+        $aesManaged.KeySize = 256
+        $aesManaged.GenerateKey()
+        $aesKeyBytes = $aesManaged.Key
+        $aesKeyBase64 = [Convert]::ToBase64String($aesKeyBytes)
+        Write-Host "Generated AES key for provisioning data encryption."
+    }
+    catch {
+        throw "Failed to generate AES key: $_"
+    }
+    finally {
+        if ($aesManaged) {
+            $aesManaged.Dispose()
+        }
     }
 
-    if ($GuestDomainJoinTarget) {
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_domain_join_target" -Value $GuestDomainJoinTarget
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_domain_join_uid" -Value $GuestDomainJoinUid
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.guest_domain_join_ou" -Value $GuestDomainJoinOU
-        Publish-EncryptedSecret -VmName $GuestHostName -Key "hlvmm.data.guest_domain_join_pw" -Secret $GuestDomainJoinPw -PublicKey $publicKey
+    $rsa = $null
+    $wrappedAesKey = $null
+    try {
+        $rsa = Get-RsaFromGuestProvisioningKey -PublicKeyBase64 $publicKey
+        $wrappedBytes = $rsa.Encrypt($aesKeyBytes, [System.Security.Cryptography.RSAEncryptionPadding]::Pkcs1)
+        $wrappedAesKey = [Convert]::ToBase64String($wrappedBytes)
+    }
+    catch {
+        throw "Failed to wrap AES key for guest provisioning: $_"
+    }
+    finally {
+        if ($rsa) {
+            $rsa.Dispose()
+        }
     }
 
-    if ($AnsibleSshUser) {
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.ansible_ssh_user" -Value $AnsibleSshUser
-        Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.data.ansible_ssh_key" -Value $AnsibleSshKey
+    Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.shared_aes_key" -Value $wrappedAesKey
+
+    Write-Host "=== PUBLISHING ENCRYPTED PROVISIONING DATA ==="
+    $keysToPublish = $dataKeysForChecksum | ForEach-Object { $_.ParamName }
+    Write-Host "Encrypting and publishing keys: $($keysToPublish -join ', ')"
+
+    foreach ($item in $dataKeysForChecksum) {
+        Write-Host "Encrypting '$($item.ParamName)' as '$($item.KvpKey)' (length: $($item.Value.Length))"
+        Publish-KvpEncryptedValue -VmName $GuestHostName -Key $item.KvpKey -Value $item.Value -AesKey $aesKeyBase64
     }
+
+    Start-Sleep -Seconds 30
 
     Set-VMKeyValuePair -VMName $GuestHostName -Name "hlvmm.meta.host_provisioning_system_state" -Value "provisioningdatapublished"
     Write-Host "Provisioning data published for VM '$GuestHostName'."
