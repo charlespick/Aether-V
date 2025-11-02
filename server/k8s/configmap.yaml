@@ -16,7 +16,11 @@ data:
   OIDC_ISSUER_URL: "https://login.microsoftonline.com/<tenant-id>/v2.0"
   OIDC_CLIENT_ID: "<client-id>"
   OIDC_REDIRECT_URI: "https://aetherv.example.com/auth/callback"
-  # OIDC_ROLE_NAME: "vm-admin"  # Default: vm-admin (use "*" to allow any user)
+  # OIDC_API_AUDIENCE: "api://<client-id>"  # Optional explicit API audience override
+  OIDC_READER_PERMISSIONS: "Aether.Reader"
+  OIDC_WRITER_PERMISSIONS: "Aether.Writer"
+  OIDC_ADMIN_PERMISSIONS: "Aether.Admin"
+  # OIDC_ROLE_NAME: "vm-admin"  # Legacy fallback role mapping (optional)
   # OIDC_FORCE_HTTPS: "true"  # Default: true (set false only for local HTTP testing)
 
   # Security

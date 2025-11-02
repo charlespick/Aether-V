@@ -13,7 +13,8 @@ import secrets
 import hashlib
 import base64
 import json
-from typing import Optional, Dict, Any, Union
+from enum import Enum
+from typing import Optional, Dict, Any, List, Set
 from functools import lru_cache
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -27,6 +28,39 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
+
+# Fine-grained permission levels understood by the API router
+class Permission(str, Enum):
+    READER = "reader"
+    WRITER = "writer"
+    ADMIN = "admin"
+
+
+def _split_config_values(raw_value: Optional[str]) -> List[str]:
+    """Split comma or whitespace separated configuration values."""
+
+    if not raw_value:
+        return []
+
+    values: List[str] = []
+    for chunk in str(raw_value).replace(";", ",").split(","):
+        parts = [part.strip() for part in chunk.split() if part.strip()]
+        values.extend(parts)
+    return values
+
+
+def _normalize_claim_values(values: List[str]) -> Set[str]:
+    """Normalize claim values for case-insensitive comparison."""
+
+    normalized: Set[str] = set()
+    for value in values:
+        lowered = value.lower()
+        normalized.add(lowered)
+        if "/" in value:
+            normalized.add(value.rsplit("/", 1)[-1].lower())
+        if ":" in value:
+            normalized.add(value.rsplit(":", 1)[-1].lower())
+    return normalized
 
 # JWKS caching utility for security and performance
 class JWKSCache:
@@ -101,7 +135,7 @@ if settings.auth_enabled and settings.oidc_issuer_url:
         metadata = discover_oidc_metadata(settings.oidc_issuer_url)
         jwks_uri = metadata.get("jwks_uri")
         if jwks_uri:
-            jwks_cache = JWKSCache(jwks_uri, ttl=300)  # 5 minute TTL
+            jwks_cache = JWKSCache(jwks_uri, ttl=settings.jwks_cache_ttl)
             logger.info(f"Initialized JWKS cache for {jwks_uri}")
     except Exception as e:
         logger.error(f"Failed to initialize JWKS cache: {e}")
@@ -212,9 +246,8 @@ async def get_current_user(
     Validate authentication and return user info.
     
     Supports concurrent authentication modes:
-    - OIDC bearer token (JWT) - for interactive users
+    - OIDC bearer tokens (JWT) for both interactive users and service principals
     - Session-based authentication (cookies) - for browser requests after OIDC login
-    - Static API token - for automation/service accounts
     - Development mode (no auth) - only if explicitly enabled
     
     Security: All authentication failures are logged for audit purposes.
@@ -253,7 +286,7 @@ async def get_current_user(
     token = credentials.credentials
     auth_failures = []
     
-    # Try token authentication (API token or OIDC JWT)
+    # Try token authentication using OIDC-issued bearer tokens
     try:
         user = await authenticate_with_token(token, client_ip)
         if user:
@@ -278,24 +311,135 @@ async def get_current_user(
 def extract_user_roles(user_info: dict) -> list[str]:
     """Extract user roles from various Azure AD token claims."""
     roles = []
-    
+
     # Direct roles claim
     if "roles" in user_info and isinstance(user_info["roles"], list):
         roles.extend(user_info["roles"])
-    
+
     # Azure AD groups
     if "groups" in user_info and isinstance(user_info["groups"], list):
         roles.extend(user_info["groups"])
-    
+
     # Well-known IDs (built-in Azure AD roles)
     if "wids" in user_info and isinstance(user_info["wids"], list):
         roles.extend(user_info["wids"])
-    
+
     # App-specific roles
     if "app_roles" in user_info and isinstance(user_info["app_roles"], list):
         roles.extend(user_info["app_roles"])
-    
+
+    # OAuth scopes may be space-delimited strings
+    if isinstance(user_info.get("scp"), str):
+        roles.extend(scope for scope in user_info["scp"].split(" ") if scope)
+    if isinstance(user_info.get("scope"), str):
+        roles.extend(scope for scope in user_info["scope"].split(" ") if scope)
+
     return list(set(roles))  # Remove duplicates
+
+
+def get_identity_display_name(claims: dict) -> str:
+    """Return a sensible display name for logging and auditing."""
+
+    for key in (
+        "preferred_username",
+        "name",
+        "app_displayname",
+        "azp",
+        "appid",
+        "appId",
+        "client_id",
+        "sub",
+    ):
+        value = claims.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "unknown"
+
+
+def determine_identity_type(claims: dict) -> str:
+    """Identify whether the token represents a user or service principal."""
+
+    app_identifier = claims.get("appid") or claims.get("appId")
+    if claims.get("idtyp") == "app":
+        return "service_principal"
+    if app_identifier and not claims.get("preferred_username"):
+        return "service_principal"
+    return "user"
+
+
+def determine_permissions(claims: dict, user_roles: Optional[List[str]] = None) -> Set[Permission]:
+    """Map token claims to the internal permission set."""
+
+    configured_permissions = {
+        Permission.READER: _normalize_claim_values(
+            _split_config_values(settings.oidc_reader_permissions)
+        ),
+        Permission.WRITER: _normalize_claim_values(
+            _split_config_values(settings.oidc_writer_permissions)
+        ),
+        Permission.ADMIN: _normalize_claim_values(
+            _split_config_values(settings.oidc_admin_permissions)
+        ),
+    }
+
+    claim_values: Set[str] = set(user_roles or extract_user_roles(claims))
+
+    # Ensure scopes are considered even if not present in user_roles input
+    if isinstance(claims.get("scp"), str):
+        claim_values.update(claims["scp"].split())
+    if isinstance(claims.get("scope"), str):
+        claim_values.update(claims["scope"].split())
+
+    normalized_claims = _normalize_claim_values(list(claim_values))
+    granted: Set[Permission] = set()
+
+    for permission, expected_values in configured_permissions.items():
+        if expected_values and normalized_claims.intersection(expected_values):
+            granted.add(permission)
+
+    # Legacy fallback: honor the historical single-role configuration
+    legacy_role = settings.oidc_role_name
+    if legacy_role:
+        if legacy_role.strip() == "*":
+            granted.update({Permission.WRITER, Permission.READER})
+        else:
+            legacy_values = _normalize_claim_values(
+                _split_config_values(legacy_role)
+            )
+            if normalized_claims.intersection(legacy_values):
+                granted.add(Permission.WRITER)
+
+    # Permission hierarchy: admin -> writer -> reader
+    if Permission.ADMIN in granted:
+        granted.update({Permission.WRITER, Permission.READER})
+    elif Permission.WRITER in granted:
+        granted.add(Permission.READER)
+
+    logger.debug(
+        "Determined permissions %s for claims values %s",
+        sorted(permission.value for permission in granted),
+        sorted(normalized_claims),
+    )
+
+    return granted
+
+
+def enrich_identity(claims: dict) -> dict:
+    """Augment raw JWT claims with derived identity metadata."""
+
+    user_roles = extract_user_roles(claims)
+    permissions = determine_permissions(claims, user_roles)
+    identity_type = determine_identity_type(claims)
+    display_name = get_identity_display_name(claims)
+
+    enriched = dict(claims)
+    enriched["roles"] = user_roles
+    enriched["permissions"] = sorted(permission.value for permission in permissions)
+    enriched["identity_type"] = identity_type
+    enriched["preferred_username"] = (
+        enriched.get("preferred_username") or display_name
+    )
+    return enriched
 
 
 async def validate_oidc_token(token: str) -> dict:
@@ -401,7 +545,7 @@ async def validate_oidc_token(token: str) -> dict:
         iat = claims.get('iat')
         if iat:
             token_age = now - iat
-            if token_age > 3600:  # 1 hour max age
+            if settings.max_token_age and token_age > settings.max_token_age:
                 logger.warning(f"Old token detected - age: {token_age}s")
             if token_age < -300:  # 5 minute clock skew tolerance
                 raise JoseError("Token issued in the future")
@@ -414,21 +558,31 @@ async def validate_oidc_token(token: str) -> dict:
             raise JoseError(f"Invalid issuer: expected {settings.oidc_issuer_url}, got {token_issuer}")
         
         # Security: validate audience (prevent token reuse)
+        token_aud = claims.get('aud')
+        if not token_aud:
+            raise JoseError("Missing audience claim")
+
+        aud_list = token_aud if isinstance(token_aud, list) else [token_aud]
+        configured_audiences = set()
+
+        for value in _split_config_values(settings.oidc_api_audience):
+            configured_audiences.add(value)
+            if value.endswith("/.default"):
+                configured_audiences.add(value[: -len("/.default")])
+
         if settings.oidc_client_id:
-            token_aud = claims.get('aud')
-            if not token_aud:
-                raise JoseError("Missing audience claim")
-                
-            # Support multiple valid audiences for this client
-            valid_audiences = [
-                settings.oidc_client_id,
-                f"api://{settings.oidc_client_id}"
-            ]
-            
-            aud_list = token_aud if isinstance(token_aud, list) else [token_aud]
-            if not any(aud in valid_audiences for aud in aud_list):
+            configured_audiences.add(settings.oidc_client_id)
+            configured_audiences.add(f"api://{settings.oidc_client_id}")
+
+        if configured_audiences:
+            if not any(aud in configured_audiences for aud in aud_list):
                 raise JoseError(f"Invalid audience: {token_aud}")
-        
+        else:
+            logger.warning(
+                "No configured audience to validate against; defaulting to token audience %s",
+                aud_list,
+            )
+
         # Security: check for required claims
         required_claims = ['sub', 'iss', 'aud', 'exp']
         missing_claims = [claim for claim in required_claims if claim not in claims]
@@ -442,28 +596,6 @@ async def validate_oidc_token(token: str) -> dict:
     except Exception as e:
         logger.error(f"Unexpected token validation error: {type(e).__name__}: {e}")
         raise JoseError(f"Token validation failed: {type(e).__name__}")
-
-
-def get_optional_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
-) -> Optional[dict]:
-    """
-    Optional authentication for endpoints that work with or without auth.
-    Returns None if not authenticated.
-    """
-    if not credentials:
-        return None
-    
-    try:
-        # Try to validate but don't raise if it fails
-        if settings.api_token and credentials.credentials == settings.api_token:
-            return {"sub": "api-user", "roles": [settings.oidc_role_name]}
-        # For now, just return None for invalid tokens
-        return None
-    except:
-        return None
-
-
 def validate_session_data(session_data: dict, client_ip: str = "unknown") -> Optional[dict]:
     """
     Shared session validation logic for both HTTP and WebSocket.
@@ -484,25 +616,45 @@ def validate_session_data(session_data: dict, client_ip: str = "unknown") -> Opt
             from datetime import datetime, timedelta
             auth_time = datetime.fromisoformat(auth_timestamp)
             if datetime.now() - auth_time < timedelta(hours=24):
-                username = session_data.get("preferred_username", "unknown")
+                permissions = session_data.get("permissions")
+                if not permissions:
+                    logger.warning(
+                        "Session for %s missing permission metadata; requiring re-authentication",
+                        client_ip,
+                    )
+                    return None
+
+                username = get_identity_display_name(session_data)
                 logger.debug(f"Session authentication successful for {username} from {client_ip}")
                 return {
                     "sub": session_data.get("sub"),
-                    "preferred_username": session_data.get("preferred_username"),
+                    "preferred_username": session_data.get("preferred_username") or username,
                     "roles": session_data.get("roles", []),
-                    "auth_type": "session"
+                    "permissions": permissions,
+                    "auth_type": "session",
+                    "identity_type": "user",
                 }
             else:
                 logger.debug(f"Session expired for client from {client_ip}")
         else:
             # No timestamp, assume valid for backward compatibility
-            username = session_data.get("preferred_username", "unknown")
+            permissions = session_data.get("permissions")
+            if not permissions:
+                logger.warning(
+                    "Legacy session without permissions detected from %s; forcing re-authentication",
+                    client_ip,
+                )
+                return None
+
+            username = get_identity_display_name(session_data)
             logger.debug(f"Session authentication (no timestamp) for {username} from {client_ip}")
             return {
                 "sub": session_data.get("sub"),
-                "preferred_username": session_data.get("preferred_username"), 
+                "preferred_username": session_data.get("preferred_username") or username,
                 "roles": session_data.get("roles", []),
-                "auth_type": "session"
+                "permissions": permissions,
+                "auth_type": "session",
+                "identity_type": "user",
             }
     except Exception as e:
         logger.warning(f"Session validation failed from {client_ip}: {e}")
@@ -513,51 +665,115 @@ def validate_session_data(session_data: dict, client_ip: str = "unknown") -> Opt
 async def authenticate_with_token(token: str, client_ip: str = "unknown") -> Optional[dict]:
     """
     Shared token authentication logic for both HTTP and WebSocket.
-    
+
     Args:
-        token: Bearer token (API token or OIDC JWT)
+        token: Bearer token (OIDC JWT)
         client_ip: Client IP for logging
-        
+
     Returns:
         User info dict if valid token, None otherwise
     """
     if not token:
         return None
-        
-    # Try static API token authentication
-    if settings.api_token and token == settings.api_token:
-        logger.info(f"API token authentication successful from {client_ip}")
-        return {
-            "sub": "api-service",
-            "roles": [settings.oidc_role_name],
-            "auth_type": "api_token", 
-            "preferred_username": "api-service"
-        }
-    
-    # Try OIDC JWT token validation
-    if settings.oidc_issuer_url and jwks_cache:
-        try:
-            user_info = await validate_oidc_token(token)
-            user_roles = extract_user_roles(user_info)
-            
-            # Check role requirements
-            if settings.oidc_role_name and settings.oidc_role_name != "*":
-                if settings.oidc_role_name not in user_roles:
-                    username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
-                    logger.warning(f"User {username} from {client_ip} lacks required role '{settings.oidc_role_name}'")
-                    return None
-            
-            user_info["auth_type"] = "oidc"
-            user_info["roles"] = user_roles
-            
-            username = user_info.get("preferred_username", user_info.get("sub", "unknown"))
-            logger.info(f"OIDC authentication successful for {username} from {client_ip}")
-            return user_info
-            
-        except Exception as e:
-            logger.error(f"OIDC token validation failed from {client_ip}: {e}")
-    
-    return None
+
+    if not (settings.oidc_issuer_url and jwks_cache):
+        logger.error("OIDC authentication requested but OIDC is not configured correctly")
+        return None
+
+    try:
+        claims = await validate_oidc_token(token)
+    except Exception as e:
+        logger.error(f"OIDC token validation failed from {client_ip}: {e}")
+        return None
+
+    enriched_info = enrich_identity(claims)
+    permissions = enriched_info.get("permissions", [])
+
+    if not permissions:
+        display_name = get_identity_display_name(enriched_info)
+        logger.warning(
+            "Principal %s from %s lacks any configured permissions",
+            display_name,
+            client_ip,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Principal lacks required permissions",
+        )
+
+    identity_type = enriched_info.get("identity_type") or determine_identity_type(enriched_info)
+    display_name = get_identity_display_name(enriched_info)
+    enriched_info["auth_type"] = (
+        "oidc_service_principal" if identity_type == "service_principal" else "oidc_user"
+    )
+
+    logger.info(
+        "OIDC authentication successful for %s (%s) from %s with permissions %s",
+        display_name,
+        identity_type,
+        client_ip,
+        permissions,
+    )
+    return enriched_info
+
+
+def has_permission(user: Optional[dict], permission: Permission) -> bool:
+    """Check whether the authenticated user has the requested permission."""
+
+    if not user:
+        return False
+
+    raw_permissions = user.get("permissions", [])
+    normalized = {
+        perm.value.lower() if isinstance(perm, Permission) else str(perm).lower()
+        for perm in raw_permissions
+        if perm
+    }
+
+    if not normalized:
+        return False
+
+    if permission == Permission.READER:
+        return bool(
+            normalized
+            & {
+                Permission.READER.value,
+                Permission.WRITER.value,
+                Permission.ADMIN.value,
+            }
+        )
+    if permission == Permission.WRITER:
+        return bool(
+            normalized & {Permission.WRITER.value, Permission.ADMIN.value}
+        )
+    if permission == Permission.ADMIN:
+        return Permission.ADMIN.value in normalized
+
+    return False
+
+
+def require_permission(permission: Permission):
+    """FastAPI dependency factory enforcing the requested permission level."""
+
+    async def dependency(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    ) -> dict:
+        user = await get_current_user(request, credentials)
+        if not has_permission(user, permission):
+            display_name = get_identity_display_name(user)
+            logger.warning(
+                "Principal %s failed permission check for %s",
+                display_name,
+                permission.value,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions for {permission.value}",
+            )
+        return user
+
+    return dependency
 
 
 def get_dev_user() -> dict:
@@ -567,7 +783,18 @@ def get_dev_user() -> dict:
     Returns:
         Dev user info dict
     """
-    return {"sub": "dev-user", "roles": [settings.oidc_role_name], "auth_type": "dev"}
+    return {
+        "sub": "dev-user",
+        "roles": [settings.oidc_writer_permissions],
+        "permissions": [
+            Permission.READER.value,
+            Permission.WRITER.value,
+            Permission.ADMIN.value,
+        ],
+        "auth_type": "dev",
+        "identity_type": "user",
+        "preferred_username": "dev-user",
+    }
 
 
 async def is_authenticated(request) -> bool:
@@ -581,10 +808,6 @@ async def is_authenticated(request) -> bool:
             return False
         
         token = auth_header.split(" ")[1]
-        
-        # Check static API token
-        if settings.api_token and token == settings.api_token:
-            return True
         
         # For OIDC tokens, validate them properly
         if settings.auth_enabled:
