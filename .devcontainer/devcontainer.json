@@ -75,16 +75,16 @@
 	"onCreateCommand": {
 		"install-iso-tools": "sudo apt-get update && sudo apt-get install -y xorriso genisoimage mkisofs",
 		"install-dev-deps": "pip install --user flake8 black pytest pytest-asyncio httpx",
-		"create-artifacts-dirs": "mkdir -p /workspaces/HLVMM/server/artifacts/{isos,scripts}",
-		"setup-git-safe": "git config --global --add safe.directory /workspaces/HLVMM"
+		"create-artifacts-dirs": "mkdir -p /workspaces/Aether-V/server/artifacts/{isos,scripts}",
+		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V"
 	},
 	
 	// Use 'postCreateCommand' to run commands after the container is created
 	"postCreateCommand": {
-		"build-isos": "cd /workspaces/HLVMM && pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs || echo 'ISO build failed - continuing without ISOs'",
-		"build-docker-image": "cd /workspaces/HLVMM && docker build -f server/Dockerfile -t aetherv .",
-		"setup-git-safe": "git config --global --add safe.directory /workspaces/HLVMM",
-		"create-env": "cd /workspaces/HLVMM/server && [ ! -f .env ] && cp .env.example .env || echo '.env already exists'"
+		"build-isos": "cd /workspaces/Aether-V && pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs || echo 'ISO build failed - continuing without ISOs'",
+		"build-docker-image": "cd /workspaces/Aether-V && docker build -f server/Dockerfile -t aetherv .",
+		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V",
+		"create-env": "cd /workspaces/Aether-V/server && [ ! -f .env ] && cp .env.example .env || echo '.env already exists'"
 	},
 	
 	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root
@@ -92,17 +92,17 @@
 	
 	// Set environment variables
 	"remoteEnv": {
-		"PYTHONPATH": "/workspaces/HLVMM/server",
+		"PYTHONPATH": "/workspaces/Aether-V/server",
 		"PYTHONDONTWRITEBYTECODE": "1",
 		"PYTHONUNBUFFERED": "1"
 	},
 	
 	// Configure mounts for better performance and persistence
 	"mounts": [
-		"source=hlvmm-pip-cache,target=/home/vscode/.cache/pip,type=volume"
+		"source=Aether-V-pip-cache,target=/home/vscode/.cache/pip,type=volume"
 	],
 	
 	// Lifecycle scripts - set proper working directory
-	"workspaceFolder": "/workspaces/HLVMM",
-	"postStartCommand": "cd /workspaces/HLVMM/server"
+	"workspaceFolder": "/workspaces/Aether-V",
+	"postStartCommand": "cd /workspaces/Aether-V/server"
 }
