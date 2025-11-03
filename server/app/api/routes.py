@@ -660,6 +660,8 @@ async def auth_callback(request: Request):
         request.session["user_info"] = {
             "preferred_username": user_info.get("preferred_username"),
             "sub": user_info.get("sub"),
+            "name": user_info.get("name"),
+            "email": user_info.get("email"),
             "roles": user_info.get("roles", []),
             "permissions": user_info.get("permissions", []),
             "identity_type": user_info.get("identity_type"),
@@ -718,6 +720,8 @@ async def get_auth_token(request: Request):
                             "user": {
                                 "sub": user_info.get("sub"),
                                 "preferred_username": user_info.get("preferred_username"),
+                                "name": user_info.get("name"),
+                                "email": user_info.get("email"),
                                 "roles": user_info.get("roles", []),
                                 "permissions": user_info.get("permissions", []),
                                 "identity_type": user_info.get("identity_type"),
@@ -729,6 +733,8 @@ async def get_auth_token(request: Request):
                         "user": {
                             "sub": user_info.get("sub"),
                             "preferred_username": user_info.get("preferred_username"),
+                            "name": user_info.get("name"),
+                            "email": user_info.get("email"),
                             "roles": user_info.get("roles", []),
                             "permissions": user_info.get("permissions", []),
                             "identity_type": user_info.get("identity_type"),

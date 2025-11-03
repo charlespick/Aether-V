@@ -10,6 +10,7 @@
     --card-bg: #f5f5f5;
     --card-shadow: 0 6px 20px rgba(15, 23, 42, 0.1);
     --surface-radius: 14px;
+    --panel-bg: #ffffff;
     /* Connection status colors */
     --border-color: rgba(0, 0, 0, 0.12);
     --warning-color: #f59e0b;
@@ -34,6 +35,7 @@
     --primary: #6366f1;
     --card-bg: #242424;
     --card-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    --panel-bg: #1f2933;
     /* Dark theme connection status colors */
     --border-color: rgba(255, 255, 255, 0.16);
     --warning-color: #fbbf24;
@@ -95,6 +97,166 @@ body {
 .topbar-right {
     display: flex;
     gap: 4px;
+    position: relative;
+}
+
+.profile-menu {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.profile-btn {
+    position: relative;
+}
+
+.profile-overlay {
+    position: absolute;
+    top: calc(100% + 12px);
+    right: 0;
+    width: 260px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.25);
+    border-radius: 12px;
+    padding: 16px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-6px);
+    transition: opacity 120ms ease, transform 120ms ease;
+    z-index: 5;
+}
+
+.profile-overlay::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    right: 20px;
+    width: 16px;
+    height: 16px;
+    background: var(--panel-bg);
+    border-top: 1px solid var(--border-color);
+    border-left: 1px solid var(--border-color);
+    transform: rotate(45deg);
+    box-shadow: -4px -4px 8px rgba(15, 23, 42, 0.07);
+}
+
+.profile-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+.profile-card {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.profile-header {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.profile-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(129, 140, 248, 0.3), rgba(236, 72, 153, 0.35));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+}
+
+.profile-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.profile-name {
+    font-weight: 600;
+    color: var(--ink);
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.profile-email {
+    font-size: 12px;
+    color: var(--muted-ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.profile-email.muted {
+    opacity: 0.7;
+}
+
+.profile-role-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 12px;
+    background: var(--surface-subtle);
+    border-radius: 10px;
+}
+
+.profile-role-label {
+    color: var(--muted-ink);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11px;
+}
+
+.profile-role-value {
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.profile-role-value[data-role='admin'] {
+    color: #ef4444;
+}
+
+.profile-role-value[data-role='writer'] {
+    color: #f59e0b;
+}
+
+.profile-role-value[data-role='reader'] {
+    color: #10b981;
+}
+
+.profile-logout-btn {
+    align-self: flex-start;
+    padding: 10px 16px;
+    border-radius: 999px;
+    border: none;
+    background: linear-gradient(135deg, #ef4444, #f97316);
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+
+.profile-logout-btn:hover:not([disabled]) {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 16px rgba(239, 68, 68, 0.35);
+}
+
+.profile-logout-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    background: var(--surface-subtle);
+    color: var(--muted-ink);
+    box-shadow: none;
 }
 
 /* Decorative square gradient */

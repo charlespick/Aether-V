@@ -128,6 +128,154 @@ updateAgentDeploymentState(configData.agent_deployment || defaultAgentDeployment
 // Authentication state
 let userInfo = null;
 let authCheckInProgress = false;
+let profileOverlayVisible = false;
+
+function getPrimaryApiRole(permissions) {
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+        return null;
+    }
+
+    const normalized = permissions
+        .map((permission) => String(permission || '').toLowerCase())
+        .filter((permission) => permission);
+
+    const hierarchy = ['admin', 'writer', 'reader'];
+    for (const role of hierarchy) {
+        if (normalized.includes(role)) {
+            return role;
+        }
+    }
+
+    return normalized[0] || null;
+}
+
+function formatRoleLabel(role) {
+    if (!role) {
+        return null;
+    }
+
+    return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+function setProfileOverlayVisibility(visible) {
+    const overlay = document.getElementById('profile-overlay');
+    const button = document.getElementById('profile-btn');
+
+    profileOverlayVisible = Boolean(visible);
+
+    if (!overlay || !button) {
+        return;
+    }
+
+    overlay.classList.toggle('open', profileOverlayVisible);
+    overlay.setAttribute('aria-hidden', profileOverlayVisible ? 'false' : 'true');
+    button.setAttribute('aria-expanded', profileOverlayVisible ? 'true' : 'false');
+}
+
+function deriveDisplayEmail(user) {
+    if (!user) {
+        return null;
+    }
+
+    if (user.email) {
+        return user.email;
+    }
+
+    if (user.preferred_username && user.preferred_username.includes('@')) {
+        return user.preferred_username;
+    }
+
+    return null;
+}
+
+function updateProfileOverlayContent(user) {
+    const nameEl = document.getElementById('profile-name');
+    const emailEl = document.getElementById('profile-email');
+    const roleEl = document.getElementById('profile-role');
+    const logoutBtn = document.getElementById('profile-logout-btn');
+
+    if (!nameEl || !emailEl || !roleEl || !logoutBtn) {
+        return;
+    }
+
+    const displayName = user?.preferred_username || user?.name || user?.sub || 'Guest user';
+    nameEl.textContent = displayName;
+
+    const email = deriveDisplayEmail(user);
+    if (email) {
+        emailEl.textContent = email;
+        emailEl.classList.remove('muted');
+    } else {
+        emailEl.textContent = authEnabled ? 'Not signed in' : 'Authentication disabled';
+        emailEl.classList.add('muted');
+    }
+
+    const role = getPrimaryApiRole(user?.permissions);
+    if (role) {
+        roleEl.textContent = formatRoleLabel(role);
+        roleEl.dataset.role = role;
+    } else {
+        roleEl.textContent = authEnabled ? 'Unavailable' : 'Disabled';
+        delete roleEl.dataset.role;
+    }
+
+    const canLogout = Boolean(authEnabled && user);
+    logoutBtn.disabled = !canLogout;
+    logoutBtn.setAttribute('aria-disabled', String(!canLogout));
+}
+
+function setupProfileMenu() {
+    const profileBtn = document.getElementById('profile-btn');
+    const overlay = document.getElementById('profile-overlay');
+    const logoutBtn = document.getElementById('profile-logout-btn');
+
+    if (!profileBtn || !overlay || !logoutBtn) {
+        return;
+    }
+
+    profileBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (profileOverlayVisible) {
+            setProfileOverlayVisibility(false);
+        } else {
+            updateProfileOverlayContent(userInfo);
+            setProfileOverlayVisibility(true);
+        }
+    });
+
+    logoutBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        if (logoutBtn.disabled) {
+            return;
+        }
+        logout();
+    });
+
+    overlay.addEventListener('click', (event) => {
+        event.stopPropagation();
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!profileOverlayVisible) {
+            return;
+        }
+
+        const target = event.target;
+        if (overlay.contains(target) || profileBtn.contains(target)) {
+            return;
+        }
+
+        setProfileOverlayVisibility(false);
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && profileOverlayVisible) {
+            setProfileOverlayVisibility(false);
+        }
+    });
+
+    updateProfileOverlayContent(userInfo);
+}
 
 // Job streaming listeners
 const jobUpdateListeners = new Map();
@@ -487,38 +635,42 @@ async function checkAuthenticationStatus() {
         
         if (response.ok) {
             const data = await response.json();
-            
+
             if (data.authenticated) {
                 userInfo = data.user;
-                
-                // Always show logout button, but with tooltip if auth disabled
-                const logoutBtn = document.getElementById('logout-btn');
-                if (logoutBtn) {
-                    logoutBtn.style.display = 'block';
+
+                // Ensure profile button is visible when auth is enabled
+                const profileBtn = document.getElementById('profile-btn');
+                if (profileBtn) {
+                    profileBtn.style.display = 'inline-flex';
                 }
-                
+
                 console.log('Authentication validated from server session');
+                updateProfileOverlayContent(userInfo);
                 return true;
             } else {
                 console.log('Not authenticated:', data.reason);
                 // Clear any local state
                 userInfo = null;
                 localStorage.removeItem('authToken'); // Clean up any old localStorage
-                
-                // Always show logout button, but with tooltip if auth disabled
-                const logoutBtn = document.getElementById('logout-btn');
-                if (logoutBtn) {
-                    logoutBtn.style.display = 'block';
+
+                // Always show profile button, even if auth disabled
+                const profileBtn = document.getElementById('profile-btn');
+                if (profileBtn) {
+                    profileBtn.style.display = 'inline-flex';
                 }
-                
+
+                updateProfileOverlayContent(null);
                 return false;
             }
         } else {
             console.log('Auth check failed:', response.status);
+            updateProfileOverlayContent(userInfo);
             return false;
         }
     } catch (error) {
         console.error('Error checking authentication:', error);
+        updateProfileOverlayContent(userInfo);
         return false;
     } finally {
         authCheckInProgress = false;
@@ -566,43 +718,32 @@ async function initializeAuth() {
         }
     }
     
-    // Setup logout button tooltip
-    setupLogoutButtonTooltip();
-}
-
-// Setup logout button tooltip for when auth is disabled
-function setupLogoutButtonTooltip() {
-    const logoutBtn = document.getElementById('logout-btn');
-    if (logoutBtn) {
-        if (!authEnabled) {
-            logoutBtn.setAttribute('data-tooltip', 'Authentication is disabled');
-        }
-    }
+    updateProfileOverlayContent(userInfo);
 }
 
 // Secure logout function
 async function logout() {
+    setProfileOverlayVisibility(false);
     if (!authEnabled) {
         console.log('OIDC not enabled, no logout needed');
         return;
     }
-    
+
     try {
         // Call the logout endpoint (no auth header needed - uses session)
-        await fetch('/auth/logout', { 
+        await fetch('/auth/logout', {
             method: 'POST',
             credentials: 'same-origin'
         });
     } catch (error) {
         console.error('Logout error:', error);
     }
-    
+
     // Clear local state
     userInfo = null;
-    
-    // Keep logout button visible but update tooltip
-    setupLogoutButtonTooltip();
-    
+
+    updateProfileOverlayContent(userInfo);
+
     // Redirect to login
     window.location.href = '/auth/login';
 }
@@ -1282,12 +1423,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize systems
     overlayManager.init();
     viewManager.init('view-container');
-    
+
     // Setup WebSocket handlers
     setupWebSocketHandlers();
-    
+
+    setupProfileMenu();
+
     await initializeAuth();
-    
+
     // Load initial inventory
     const inventory = await loadInventory();
     
