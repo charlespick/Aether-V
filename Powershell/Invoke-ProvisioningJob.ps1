@@ -557,6 +557,8 @@ end {
         $publishParams = New-ProvisioningPublishParameters -Values $values -OsFamily $osFamily
         Invoke-ProvisioningPublishProvisioningData @publishParams
 
+        Invoke-ProvisioningWaitForProvisioningCompletion -VMName $vmName | Out-Null
+
         if ($vmClustered) {
             Invoke-ProvisioningClusterEnrollment -VmName $vmName
         }

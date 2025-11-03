@@ -128,13 +128,130 @@ function Read-HyperVKvpWithDecryption {
 
 function Write-HyperVKvp {
     param(
-        [Parameter(Mandatory = $true)][string]$Key, 
+        [Parameter(Mandatory = $true)][string]$Key,
         [Parameter(Mandatory = $true)][string]$Value
     )
 
     $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest"
     Set-ItemProperty -Path $regPath -Name $Key -Value $Value -Type String
 }
+
+$script:MaxErrorSummaryLength = 200
+$script:ProvisioningSucceeded = $false
+$script:ProvisioningFailurePublished = $false
+$script:CurrentErrorSummary = 'error:unknown'
+
+function Set-CurrentErrorSummary {
+    param(
+        [Parameter(Mandatory = $true)][string]$Summary
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Summary)) {
+        $script:CurrentErrorSummary = 'error:unknown'
+    }
+    else {
+        $script:CurrentErrorSummary = $Summary
+    }
+}
+
+function Get-TruncatedErrorSummary {
+    param(
+        [string]$Message
+    )
+
+    if ($null -eq $Message) {
+        return ''
+    }
+
+    if ($Message.Length -le $script:MaxErrorSummaryLength) {
+        return $Message
+    }
+
+    return $Message.Substring(0, $script:MaxErrorSummaryLength)
+}
+
+function Set-GuestProvisioningError {
+    param(
+        [string]$Message
+    )
+
+    $trimmed = Get-TruncatedErrorSummary -Message $Message
+    Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_error" -Value $trimmed | Out-Null
+}
+
+function Set-GuestProvisioningState {
+    param(
+        [Parameter(Mandatory = $true)][string]$Status
+    )
+
+    Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_system_state" -Value $Status | Out-Null
+
+    if ($Status -eq 'provisioningapplied') {
+        $script:ProvisioningSucceeded = $true
+    }
+}
+
+function Publish-GuestState {
+    param(
+        [Parameter(Mandatory = $true)][string]$Status,
+        [string]$ErrorSummary
+    )
+
+    if ($PSBoundParameters.ContainsKey('ErrorSummary')) {
+        Set-GuestProvisioningError -Message $ErrorSummary | Out-Null
+    }
+
+    Set-GuestProvisioningState -Status $Status
+}
+
+function Publish-ProvisioningFailure {
+    param(
+        [string]$Summary
+    )
+
+    if ($script:ProvisioningFailurePublished) {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Summary)) {
+        $Summary = 'error:unknown'
+    }
+
+    $trimmed = Get-TruncatedErrorSummary -Message $Summary
+
+    try {
+        Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_error" -Value $trimmed
+    }
+    catch {
+        # Swallow exceptions while reporting failure
+    }
+
+    try {
+        Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_system_state" -Value 'provisioningfailed'
+    }
+    catch {
+        # Swallow exceptions while reporting failure
+    }
+
+    $script:ProvisioningFailurePublished = $true
+}
+
+function Publish-ProvisioningSuccess {
+    Publish-GuestState -Status 'provisioningapplied' -ErrorSummary ''
+}
+
+function Throw-ProvisioningError {
+    param(
+        [Parameter(Mandatory = $true)][string]$Summary,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    Set-CurrentErrorSummary $Summary
+    throw $Message
+}
+
+# Initialize default summary
+Set-CurrentErrorSummary 'error initializing:service'
 
 $PhaseFile = "C:\ProgramData\HyperV\service_phase_status.txt"
 
@@ -269,15 +386,16 @@ function Invoke-Modules {
     Write-Host "Module execution completed."
 }
 
-if (-not (Test-Path $PhaseFile)) {
-    "nophasestartedyet" | Set-Content -Path $PhaseFile -Encoding UTF8
-}
+try {
+    if (-not (Test-Path $PhaseFile)) {
+        "nophasestartedyet" | Set-Content -Path $PhaseFile -Encoding UTF8
+    }
 
-Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds 200
 
-$decryptedKeysDir = "C:\ProgramData\HyperV"
+    $decryptedKeysDir = "C:\ProgramData\HyperV"
 
-switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
+    switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
     "nophasestartedyet" {
         "phase_one" | Set-Content -Path $PhaseFile -Encoding UTF8
         $cdromDrives = Get-WmiObject -Class Win32_CDROMDrive
@@ -296,6 +414,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
         while ($true) {
+            Set-CurrentErrorSummary 'error waiting:host_signal'
             $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
             if ($state -eq "waitingforpublickey") {
                 break
@@ -307,48 +426,53 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $versionFilePath = "C:\ProgramData\HyperV\version"
         if (-not (Test-Path $versionFilePath)) {
             Write-Host "Version file not found at $versionFilePath. Cannot verify provisioning system version."
-            exit
+            Throw-ProvisioningError 'error validating:manifest' "Version file not found at $versionFilePath. Cannot verify provisioning system version."
         }
         $expectedVersionRaw = Get-Content -Path $versionFilePath -Raw -ErrorAction SilentlyContinue
         if (-not $expectedVersionRaw) {
             Write-Host "Failed to read version from $versionFilePath. Cannot verify provisioning system version."
-            exit
+            Throw-ProvisioningError 'error validating:manifest' "Failed to read version from $versionFilePath. Cannot verify provisioning system version."
         }
-        
+
         # Normalize expected version: trim whitespace, remove null chars, convert to string
         $expectedVersion = [string]($expectedVersionRaw -replace "`0", "").Trim()
         if (-not $expectedVersion) {
             Write-Host "Version file contains empty or invalid content. Cannot verify provisioning system version."
-            exit
+            Throw-ProvisioningError 'error validating:manifest' "Version file contains empty or invalid content. Cannot verify provisioning system version."
         }
 
+        Set-CurrentErrorSummary 'error validating:manifest'
         $manifestRaw = Read-HyperVKvp -Key "hlvmm.meta.version" -ErrorAction SilentlyContinue
         if (-not $manifestRaw) {
             Write-Host "Failed to read hlvmm.meta.version from KVP. Cannot verify provisioning system version."
-            exit
+            Throw-ProvisioningError 'error validating:manifest' "Failed to read hlvmm.meta.version from KVP. Cannot verify provisioning system version."
         }
-        
+
         # Normalize manifest version: trim whitespace, remove null chars, convert to string
         $manifest = [string]($manifestRaw -replace "`0", "").Trim()
-        
+
         if ($manifest -ne $expectedVersion) {
-            Write-Host "Provisioning system manifest mismatch. Expected: '$expectedVersion', Got: '$manifest'. Terminating program."
-            exit
+            Write-Host "Provisioning system manifest mismatch. Expected: '$expectedVersion', Got: '$manifest'."
+            Throw-ProvisioningError 'error validating:manifest' "Provisioning system manifest mismatch. Expected: '$expectedVersion', Got: '$manifest'."
         }
         Write-Host "Provisioning system version verified: $expectedVersion"
 
         # Generate RSA key pair and keep them in memory
         $rsa = $null
         try {
+            Set-CurrentErrorSummary 'error generating:rsa_keys'
             $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
             $publicKey = $rsa.ExportCspBlob($false)
 
             # Convert public key to Base64 and write it to the KVP
+            Set-CurrentErrorSummary 'error publishing:public_key'
             $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
             Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_public_key" -Value $publicKeyBase64
 
-            Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_system_state" -Value "waitingforaeskey"
+            Set-CurrentErrorSummary 'error publishing:guest_state'
+            Publish-GuestState -Status 'waitingforaeskey' -ErrorSummary ''
 
+            Set-CurrentErrorSummary 'error waiting:provisioning_data'
             while ($true) {
                 $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
                 if ($state -eq "provisioningdatapublished") {
@@ -358,18 +482,19 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             }
 
             # Read the shared AES key from "hlvmm.meta.shared_aes_key"
+            Set-CurrentErrorSummary 'error decrypting:shared_aes_key'
             $sharedAesKeyBase64 = Read-HyperVKvp -Key "hlvmm.meta.shared_aes_key" -ErrorAction SilentlyContinue
             if (-not $sharedAesKeyBase64) {
-                Write-Host "Failed to retrieve shared AES key. Terminating program."
-                exit
+                Write-Host "Failed to retrieve shared AES key."
+                Throw-ProvisioningError 'error decrypting:shared_aes_key' "Failed to retrieve shared AES key from KVP."
             }
 
             $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
             $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
         }
         catch {
-            Write-Host "Failed to generate or use RSA key pair: $_"
-            exit
+            Write-Host "Failed during key exchange: $_"
+            Throw-ProvisioningError $script:CurrentErrorSummary "Failed during key exchange: $_"
         }
         finally {
             if ($rsa) {
@@ -383,6 +508,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $hlvmmDataKeys = @()
         
         try {
+            Set-CurrentErrorSummary 'error reading:provisioning_data'
             $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
             if ($regItem) {
                 $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]+$' }
@@ -390,17 +516,18 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
         catch {
             Write-Host "Error reading hlvmm.data keys from registry: $_"
-            exit
+            Throw-ProvisioningError $script:CurrentErrorSummary "Error reading hlvmm.data keys from registry: $_"
         }
 
         if ($hlvmmDataKeys.Count -eq 0) {
             Write-Host "No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
-            exit
+            Throw-ProvisioningError 'error reading:provisioning_data' "No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
         }
 
         Write-Host "Found $($hlvmmDataKeys.Count) hlvmm.data keys to decrypt"
 
         # Decrypt and save each key using its actual KVP key name
+        Set-CurrentErrorSummary 'error decrypting:provisioning_data'
         foreach ($key in $hlvmmDataKeys) {
             try {
                 $decryptedValue = Read-HyperVKvpWithDecryption -Key $key -AesKey $unwrappedAesKey
@@ -420,6 +547,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
         # Get all hlvmm.data keys and their decrypted values for checksum verification
+        Set-CurrentErrorSummary 'error decrypting:provisioning_data'
         $dataKeys = Get-HlvmmDataKeys -AesKey $unwrappedAesKey
         
         # Sort keys by name for consistent ordering and concatenate values
@@ -428,13 +556,14 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
         $sha256 = $null
         try {
+            Set-CurrentErrorSummary 'error validating:checksum'
             $sha256 = [System.Security.Cryptography.SHA256]::Create()
             $computedHash = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($concatenatedData))
             $computedHashBase64 = [Convert]::ToBase64String($computedHash)
         }
         catch {
             Write-Host "Failed to compute checksum: $_"
-            exit
+            Throw-ProvisioningError $script:CurrentErrorSummary "Failed to compute checksum: $_"
         }
         finally {
             if ($sha256) {
@@ -445,11 +574,15 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         $provisioningSystemChecksum = Read-HyperVKvp -Key "hlvmm.meta.provisioning_system_checksum" -ErrorAction SilentlyContinue
 
         if ($computedHashBase64 -ne $provisioningSystemChecksum) {
-            Write-Host "Checksum mismatch. Terminating program."
-            exit
+            Write-Host "Checksum mismatch."
+            Throw-ProvisioningError 'error validating:checksum' "Checksum mismatch between guest and host provisioning data."
         }
 
         # Execute all modules in order
+        Set-CurrentErrorSummary 'error publishing:guest_state'
+        Publish-GuestState -Status 'applying' -ErrorSummary ''
+
+        Set-CurrentErrorSummary 'error applying:modules'
         Invoke-Modules -DecryptedKeysDir $decryptedKeysDir
 
         # Clear sensitive variables from memory
@@ -457,9 +590,13 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
             Remove-Variable -Name "unwrappedAesKey" -Force
         }
 
+        Set-CurrentErrorSummary 'error publishing:success_state'
+        Publish-ProvisioningSuccess
+
         Restart-Computer -Force
     }
     "phase_one" {
+        $script:ProvisioningSucceeded = $true
         "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 
         # Execute domain join module if needed (in case domain join was deferred to phase_one)
@@ -475,6 +612,7 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
         }
 
     "phase_one" {
+        $script:ProvisioningSucceeded = $true
         "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 
         # Check if the "hlvmm.data.guest_domain_join_target" key exists
@@ -555,5 +693,23 @@ switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
 
             Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
         }
+    }
+}
+catch {
+    if (-not $script:ProvisioningSucceeded) {
+        Publish-ProvisioningFailure -Summary $script:CurrentErrorSummary
+    }
+    throw
+}
+finally {
+    if (-not $script:ProvisioningSucceeded -and -not $script:ProvisioningFailurePublished) {
+        Publish-ProvisioningFailure -Summary $script:CurrentErrorSummary
+    }
+
+    try {
+        Stop-Transcript | Out-Null
+    }
+    catch {
+        # Ignore transcript errors during shutdown
     }
 }
