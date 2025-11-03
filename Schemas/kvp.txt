@@ -1,7 +1,8 @@
 namespace        pool        key                                    purpose
 hlvmm.meta       host        version                                used to verify guest agent version matches host scripts
 hlvmm.meta       host        host_provisioning_system_state         state of host provisioning system (waitingforpublickey, provisioningdatapublished)
-hlvmm.meta       guest       guest_provisioning_system_state        state of guest provisioning system (waitingforaeskey)
+hlvmm.meta       guest       guest_provisioning_system_state        state of guest provisioning system (waitingforaeskey, applying, provisioningapplied, provisioningfailed)
+hlvmm.meta       guest       guest_provisioning_error              short error summary from guest provisioning (empty on success)
 hlvmm.meta       host        shared_aes_key                         wrapped AES key for encrypting provisioning data
 hlvmm.meta       guest       guest_provisioning_public_key          RSA public key from guest for key wrapping
 hlvmm.meta       host        provisioning_system_checksum           SHA256 checksum of all hlvmm.data keys

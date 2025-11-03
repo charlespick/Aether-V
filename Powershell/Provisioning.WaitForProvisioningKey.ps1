@@ -226,3 +226,134 @@ function Invoke-ProvisioningWaitForProvisioningKey {
         throw "Guest on VM '$VMName' did not reach 'waitingforaeskey' within $TimeoutSeconds seconds. KVP communication may not be available yet."
     }
 }
+
+function Invoke-ProvisioningWaitForProvisioningCompletion {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$VMName,
+
+        [int]$TimeoutSeconds = 1800,
+
+        [int]$PollIntervalSeconds = 5
+    )
+
+    if ($PollIntervalSeconds -le 0) {
+        $PollIntervalSeconds = 5
+    }
+
+    Write-Host "Waiting for guest provisioning completion on VM '$VMName' (timeout: $TimeoutSeconds seconds)..."
+
+    function Get-GuestKvpValue {
+        param(
+            [string]$Name
+        )
+
+        try {
+            $vm = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
+
+            if (-not $vm) {
+                return $null
+            }
+
+            $kvpComponent = $vm.GetRelated("Msvm_KvpExchangeComponent")
+
+            if (-not $kvpComponent) {
+                return $null
+            }
+
+            $guestItems = $null
+            try {
+                $rawGuestItems = $kvpComponent.GuestExchangeItems
+
+                if ($null -eq $rawGuestItems) {
+                    return $null
+                }
+                elseif ($rawGuestItems -is [Array]) {
+                    $guestItems = $rawGuestItems
+                }
+                else {
+                    $guestItems = @($rawGuestItems)
+                }
+            }
+            catch {
+                return $null
+            }
+
+            foreach ($item in $guestItems) {
+                try {
+                    $xml = [xml]$item
+                    $match = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Name']/VALUE[child::text() = '$Name']")
+                    if ($null -ne $match) {
+                        $dataNode = $xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Data']/VALUE/child::text()")
+                        if ($dataNode) {
+                            return $dataNode.Value
+                        }
+                    }
+                }
+                catch {
+                    continue
+                }
+            }
+
+            return $null
+        }
+        catch {
+            return $null
+        }
+    }
+
+    $elapsed = 0
+    $lastState = $null
+    $lastError = $null
+
+    while ($elapsed -le $TimeoutSeconds) {
+        $guestState = $null
+        $guestError = $null
+
+        try {
+            $guestState = Get-GuestKvpValue -Name "hlvmm.meta.guest_provisioning_system_state"
+            $guestError = Get-GuestKvpValue -Name "hlvmm.meta.guest_provisioning_error"
+        }
+        catch {
+            # Ignore transient read errors; the guest may still be booting
+        }
+
+        if ($guestState -ne $lastState -or $guestError -ne $lastError) {
+            $stateDisplay = if ($guestState) { $guestState } else { '<unknown>' }
+            $statusMessage = "Guest state: '$stateDisplay'"
+            if ($guestError) {
+                $statusMessage += ", Error: '$guestError'"
+            }
+            Write-Host $statusMessage
+            $lastState = $guestState
+            $lastError = $guestError
+        }
+
+        if ($guestState -eq 'provisioningapplied') {
+            Write-Host "Guest signalled provisioning completion."
+            return
+        }
+
+        if ($guestState -eq 'provisioningfailed') {
+            $errorSummary = if ($guestError) { $guestError } else { '<unspecified>' }
+            throw "Guest provisioning failed on VM '$VMName'. Guest summary: $errorSummary"
+        }
+
+        Start-Sleep -Seconds $PollIntervalSeconds
+        $elapsed += $PollIntervalSeconds
+    }
+
+    $finalState = $null
+    $finalError = $null
+    try {
+        $finalState = Get-GuestKvpValue -Name "hlvmm.meta.guest_provisioning_system_state"
+        $finalError = Get-GuestKvpValue -Name "hlvmm.meta.guest_provisioning_error"
+    }
+    catch {
+        # Ignore errors when capturing final state for timeout message
+    }
+
+    $errorSummary = if ($finalError) { $finalError } else { '<unspecified>' }
+    throw "Guest on VM '$VMName' did not report provisioning completion within $TimeoutSeconds seconds. Last state: '$finalState'. Guest summary: $errorSummary"
+}
