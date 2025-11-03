@@ -2062,6 +2062,25 @@ tbody tr:last-child td {
     flex-wrap: wrap;
 }
 
+.vm-action-feedback {
+    min-height: 20px;
+    margin-top: 8px;
+    font-size: 0.95rem;
+    color: var(--muted-ink);
+}
+
+.vm-action-feedback.success {
+    color: #047857;
+}
+
+.vm-action-feedback.error {
+    color: #b91c1c;
+}
+
+.vm-action-feedback.info {
+    color: var(--muted-ink);
+}
+
 .vm-action-btn {
     width: 34px;
     height: 34px;

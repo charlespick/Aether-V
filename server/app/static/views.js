@@ -402,8 +402,9 @@ class HostView extends BaseView {
 class VMView extends BaseView {
     async render() {
         const vmName = this.data.name || 'Unknown VM';
+        const requestedHost = this.data.host || null;
         const inventory = await this.fetchInventory();
-        const vm = inventory.vms.find(v => v.name === vmName);
+        const vm = this.findVm(inventory, vmName, requestedHost);
 
         if (!vm) {
             return `
@@ -411,6 +412,10 @@ class VMView extends BaseView {
                 <p class="empty">Virtual machine "${vmName}" not found</p>
             `;
         }
+
+        this.vmData = vm;
+        this.vmHost = vm.host;
+        this.lastInventory = inventory;
 
         const meta = getVmStateMeta(vm.state);
         const osName = this.formatOsFamily(vm);
@@ -471,6 +476,8 @@ class VMView extends BaseView {
             { id: 'notes', label: 'Notes' }
         ];
 
+        const actionButtons = this.buildVmActionButtons(vm);
+
         return `
             <div class="vm-header">
                 <div class="vm-title-group">
@@ -478,19 +485,9 @@ class VMView extends BaseView {
                     <span class="status ${meta.badgeClass}">${meta.label}</span>
                 </div>
                 <div class="vm-action-bar" role="toolbar" aria-label="Virtual machine controls">
-                    <button class="vm-action-btn ${vm.state === 'Running' ? '' : 'disabled'}" ${vm.state !== 'Running' ? 'disabled' : ''}
-                        data-tooltip="Stop" aria-label="Stop virtual machine">
-                        <span aria-hidden="true">⏸️</span>
-                    </button>
-                    <button class="vm-action-btn ${vm.state !== 'Running' ? '' : 'disabled'}" ${vm.state === 'Running' ? 'disabled' : ''}
-                        data-tooltip="Start" aria-label="Start virtual machine">
-                        <span aria-hidden="true">▶️</span>
-                    </button>
-                    <button class="vm-action-btn ${vm.state === 'Running' ? '' : 'disabled'}" ${vm.state === 'Running' ? '' : 'disabled'}
-                        data-tooltip="Restart" aria-label="Restart virtual machine">
-                        <span aria-hidden="true">🔄</span>
-                    </button>
+                    ${actionButtons}
                 </div>
+                <div class="vm-action-feedback" role="status" aria-live="polite"></div>
             </div>
 
             <section class="vm-overview-panel surface-card" aria-label="Virtual machine overview">
@@ -574,6 +571,7 @@ class VMView extends BaseView {
 
     init() {
         this.setupTabs();
+        this.setupActions();
     }
 
     setupTabs() {
@@ -602,6 +600,246 @@ class VMView extends BaseView {
                 });
             });
         });
+    }
+
+    setupActions() {
+        const actionBar = document.querySelector('.vm-action-bar');
+        this.actionButtons = actionBar ? Array.from(actionBar.querySelectorAll('.vm-action-btn')) : [];
+        this.feedbackElement = document.querySelector('.vm-action-feedback');
+        this.actionInProgress = false;
+
+        this.setActionFeedback('');
+
+        this.updateActionButtonStates();
+
+        if (!this.actionButtons || this.actionButtons.length === 0) {
+            return;
+        }
+
+        this.actionButtons.forEach(button => {
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                if (this.actionInProgress || !button || !button.dataset.action) {
+                    return;
+                }
+
+                if (button.classList.contains('disabled') || button.hasAttribute('disabled')) {
+                    return;
+                }
+
+                this.executeVmAction(button.dataset.action);
+            });
+        });
+    }
+
+    buildVmActionButtons(vm) {
+        const availability = this.getActionAvailability(vm && vm.state);
+        const actions = [
+            { action: 'start', icon: '▶️', tooltip: 'Start', aria: 'Start virtual machine' },
+            { action: 'shutdown', icon: '⏻', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
+            { action: 'stop', icon: '⏹️', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
+            { action: 'reset', icon: '🔄', tooltip: 'Reset', aria: 'Reset virtual machine' },
+        ];
+
+        return actions.map(({ action, icon, tooltip, aria }) => {
+            const allowed = availability[action];
+            const disabledAttr = allowed ? '' : 'disabled';
+            const disabledClass = allowed ? '' : 'disabled';
+
+            return `
+                    <button type="button" class="vm-action-btn ${disabledClass}" data-action="${action}"
+                        data-tooltip="${tooltip}" aria-label="${aria}" ${disabledAttr}>
+                        <span aria-hidden="true">${icon}</span>
+                    </button>
+            `;
+        }).join('');
+    }
+
+    getActionAvailability(state) {
+        const normalized = typeof state === 'string' ? state.toLowerCase() : String(state || '').toLowerCase();
+        const availability = {
+            start: false,
+            shutdown: false,
+            stop: false,
+            reset: false,
+        };
+
+        if (this.actionInProgress) {
+            return availability;
+        }
+
+        if (normalized === 'running') {
+            availability.shutdown = true;
+            availability.stop = true;
+            availability.reset = true;
+        } else if (normalized === 'off') {
+            availability.start = true;
+        } else if (normalized === 'paused' || normalized === 'saved') {
+            availability.start = true;
+            availability.stop = true;
+        }
+
+        return availability;
+    }
+
+    updateActionButtonStates() {
+        if (!this.actionButtons || this.actionButtons.length === 0) {
+            return;
+        }
+
+        const availability = this.getActionAvailability(this.vmData && this.vmData.state);
+
+        this.actionButtons.forEach(button => {
+            const action = button.dataset.action;
+            const allowed = Boolean(action && availability[action]);
+
+            if (allowed) {
+                button.classList.remove('disabled');
+                button.removeAttribute('disabled');
+            } else {
+                button.classList.add('disabled');
+                button.setAttribute('disabled', 'disabled');
+            }
+        });
+    }
+
+    setButtonsBusy(isBusy) {
+        this.actionInProgress = Boolean(isBusy);
+        this.updateActionButtonStates();
+    }
+
+    setActionFeedback(message, type = 'info') {
+        if (!this.feedbackElement) {
+            return;
+        }
+
+        this.feedbackElement.textContent = message || '';
+        this.feedbackElement.classList.remove('success', 'error', 'info');
+        if (message) {
+            this.feedbackElement.classList.add(type);
+        }
+    }
+
+    getActionLabel(action) {
+        const labels = {
+            start: 'start',
+            shutdown: 'shut down',
+            stop: 'stop',
+            reset: 'reset',
+        };
+        return labels[action] || action || 'perform';
+    }
+
+    extractActionMessage(payload) {
+        if (!payload) {
+            return null;
+        }
+
+        if (typeof payload === 'string') {
+            return payload;
+        }
+
+        if (payload.message && typeof payload.message === 'string') {
+            return payload.message;
+        }
+
+        if (payload.detail) {
+            if (typeof payload.detail === 'string') {
+                return payload.detail;
+            }
+            if (payload.detail && typeof payload.detail.message === 'string') {
+                return payload.detail.message;
+            }
+        }
+
+        return null;
+    }
+
+    getDefaultSuccessMessage(action, vmName) {
+        const name = vmName || (this.vmData && this.vmData.name) || 'virtual machine';
+        switch (action) {
+            case 'start':
+                return `Start command accepted for VM ${name}.`;
+            case 'shutdown':
+                return `Shutdown command accepted for VM ${name}.`;
+            case 'stop':
+                return `Stop command accepted for VM ${name}.`;
+            case 'reset':
+                return `Reset command accepted for VM ${name}.`;
+            default:
+                return `Command accepted for VM ${name}.`;
+        }
+    }
+
+    estimateNextState(action) {
+        switch (action) {
+            case 'start':
+            case 'reset':
+                return 'Starting';
+            case 'shutdown':
+            case 'stop':
+                return 'Stopping';
+            default:
+                return this.vmData && this.vmData.state ? this.vmData.state : 'Unknown';
+        }
+    }
+
+    async executeVmAction(action) {
+        if (!this.vmData || !this.vmData.name) {
+            return;
+        }
+
+        const host = this.vmHost || this.vmData.host || this.data.host;
+        if (!host) {
+            return;
+        }
+
+        const encodedHost = encodeURIComponent(host);
+        const encodedVm = encodeURIComponent(this.vmData.name);
+        const endpoint = `/api/v1/vms/${encodedHost}/${encodedVm}/${action}`;
+
+        this.setButtonsBusy(true);
+        this.setActionFeedback(`Sending ${this.getActionLabel(action)} request...`, 'info');
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                credentials: 'same-origin',
+            });
+
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (err) {
+                payload = null;
+            }
+
+            if (response.ok) {
+                const message = this.extractActionMessage(payload)
+                    || this.getDefaultSuccessMessage(action, this.vmData.name);
+                this.setActionFeedback(message, 'success');
+
+                const nextState = this.estimateNextState(action);
+                if (this.vmData) {
+                    this.vmData.state = nextState;
+                }
+                this.updateActionButtonStates();
+
+                setTimeout(() => {
+                    viewManager.switchView('vm', { name: this.vmData.name, host });
+                }, 400);
+            } else {
+                const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
+                this.setActionFeedback(`Unable to ${this.getActionLabel(action)} VM: ${detail}`, 'error');
+            }
+        } catch (error) {
+            console.error('VM action error:', error);
+            this.setActionFeedback(`Failed to ${this.getActionLabel(action)} VM: ${error.message}`, 'error');
+        } finally {
+            this.setButtonsBusy(false);
+        }
     }
 
     formatOsFamily(vm) {
@@ -658,6 +896,41 @@ class VMView extends BaseView {
         }
         const dotIndex = hostText.indexOf('.');
         return dotIndex === -1 ? hostText : hostText.slice(0, dotIndex);
+    }
+
+    findVm(inventory, vmName, requestedHost) {
+        if (!inventory) {
+            return null;
+        }
+
+        const vms = Array.isArray(inventory.vms) ? inventory.vms : [];
+        if (vms.length === 0) {
+            return null;
+        }
+
+        const normalizedName = String(vmName || '').toLowerCase();
+        const normalizedHost = requestedHost ? String(requestedHost).toLowerCase() : null;
+
+        if (normalizedHost) {
+            const hostMatch = vms.find(vm => {
+                if (!vm) {
+                    return false;
+                }
+                const hostValue = String(vm.host || '').toLowerCase();
+                const nameValue = String(vm.name || '').toLowerCase();
+                return nameValue === normalizedName && hostValue === normalizedHost;
+            });
+            if (hostMatch) {
+                return hostMatch;
+            }
+        }
+
+        return vms.find(vm => {
+            if (!vm) {
+                return false;
+            }
+            return String(vm.name || '').toLowerCase() === normalizedName;
+        }) || null;
     }
 
     findHost(inventory, hostname) {

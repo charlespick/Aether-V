@@ -1,17 +1,27 @@
 """API route handlers."""
+import asyncio
 import json
 import logging
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
-from typing import List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 from datetime import datetime
 import secrets
+from dataclasses import dataclass
 
 from ..core.models import (
-    Host, VM, Job, VMDeleteRequest, InventoryResponse,
-    HealthResponse, NotificationsResponse, JobSubmission,
-    AboutResponse, BuildInfo,
+    Host,
+    VM,
+    Job,
+    VMDeleteRequest,
+    InventoryResponse,
+    HealthResponse,
+    NotificationsResponse,
+    JobSubmission,
+    AboutResponse,
+    BuildInfo,
+    VMState,
 )
 from ..core.auth import (
     Permission,
@@ -36,10 +46,117 @@ from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
 from ..services.host_deployment_service import host_deployment_service
 from ..services.notification_service import notification_service
+from ..services.vm_control_service import (
+    vm_control_service,
+    VMActionResult,
+    VMControlError,
+)
 from ..services.websocket_service import websocket_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@dataclass(frozen=True)
+class VMActionRule:
+    """Definition for a VM lifecycle action."""
+
+    executor: Callable[[str, str], Awaitable[VMActionResult]]
+    allowed_states: tuple[VMState, ...]
+    label: str
+    success_message: str
+
+
+VM_ACTION_RULES: Dict[str, VMActionRule] = {
+    "start": VMActionRule(
+        executor=vm_control_service.start_vm,
+        allowed_states=(VMState.OFF, VMState.PAUSED, VMState.SAVED),
+        label="start",
+        success_message="Start command accepted for VM {vm_name}.",
+    ),
+    "shutdown": VMActionRule(
+        executor=vm_control_service.shutdown_vm,
+        allowed_states=(VMState.RUNNING,),
+        label="shut down",
+        success_message="Shutdown command accepted for VM {vm_name}.",
+    ),
+    "stop": VMActionRule(
+        executor=vm_control_service.stop_vm,
+        allowed_states=(VMState.RUNNING, VMState.PAUSED, VMState.SAVED),
+        label="stop",
+        success_message="Stop command accepted for VM {vm_name}.",
+    ),
+    "reset": VMActionRule(
+        executor=vm_control_service.reset_vm,
+        allowed_states=(VMState.RUNNING,),
+        label="reset",
+        success_message="Reset command accepted for VM {vm_name}.",
+    ),
+}
+
+
+def _normalize_vm_state(state: Optional[object]) -> VMState:
+    """Return a VMState enum for the provided value."""
+
+    if isinstance(state, VMState):
+        return state
+    if isinstance(state, str):
+        normalized = state.strip().lower()
+        for candidate in VMState:
+            if candidate.value.lower() == normalized:
+                return candidate
+    return VMState.UNKNOWN
+
+
+async def _handle_vm_action(
+    action: str, hostname: str, vm_name: str
+) -> Dict[str, str]:
+    """Execute a lifecycle action for the specified VM."""
+
+    rule = VM_ACTION_RULES[action]
+    vm = inventory_service.get_vm(hostname, vm_name)
+
+    if not vm:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "message": f"VM {vm_name} not found on host {hostname}",
+            },
+        )
+
+    current_state = _normalize_vm_state(vm.state)
+    if current_state not in rule.allowed_states:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    f"Cannot {rule.label} VM {vm.name} while it is in state "
+                    f"{current_state.value}."
+                ),
+                "vm_state": current_state.value,
+            },
+        )
+
+    try:
+        await rule.executor(hostname, vm_name)
+    except VMControlError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "message": (
+                    f"Failed to {rule.label} VM {vm.name}: {exc.message}"
+                ),
+            },
+        ) from exc
+
+    asyncio.create_task(inventory_service.refresh_inventory())
+
+    return {
+        "status": "accepted",
+        "action": action,
+        "message": rule.success_message.format(vm_name=vm.name),
+        "previous_state": current_state.value,
+    }
 
 
 def _current_build_info() -> BuildInfo:
@@ -168,6 +285,66 @@ async def get_vm(hostname: str, vm_name: str, user: dict = Depends(require_permi
         )
 
     return vm
+
+
+@router.post(
+    "/api/v1/vms/{hostname}/{vm_name}/start",
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["VMs"],
+)
+async def start_vm_action(
+    hostname: str,
+    vm_name: str,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Start a powered-off virtual machine."""
+
+    return await _handle_vm_action("start", hostname, vm_name)
+
+
+@router.post(
+    "/api/v1/vms/{hostname}/{vm_name}/shutdown",
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["VMs"],
+)
+async def shutdown_vm_action(
+    hostname: str,
+    vm_name: str,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Shut down a running virtual machine via guest OS request."""
+
+    return await _handle_vm_action("shutdown", hostname, vm_name)
+
+
+@router.post(
+    "/api/v1/vms/{hostname}/{vm_name}/stop",
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["VMs"],
+)
+async def stop_vm_action(
+    hostname: str,
+    vm_name: str,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Immediately turn off a virtual machine."""
+
+    return await _handle_vm_action("stop", hostname, vm_name)
+
+
+@router.post(
+    "/api/v1/vms/{hostname}/{vm_name}/reset",
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["VMs"],
+)
+async def reset_vm_action(
+    hostname: str,
+    vm_name: str,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Reset (power cycle) a running virtual machine."""
+
+    return await _handle_vm_action("reset", hostname, vm_name)
 
 
 @router.get("/api/v1/schema/job-inputs", tags=["Schema"])
