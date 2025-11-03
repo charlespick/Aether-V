@@ -1,11 +1,12 @@
 """Utility helpers for loading and validating job input schemas."""
 from __future__ import annotations
 
+import copy
 import ipaddress
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 import yaml
 
@@ -357,3 +358,54 @@ def _validate_string_lengths(field: Dict[str, Any], value: str) -> None:
         raise ValueError(f"Field '{field_id}' must be at least {min_length} characters")
     if max_length is not None and len(value) > max_length:
         raise ValueError(f"Field '{field_id}' must be at most {max_length} characters")
+
+
+def get_sensitive_field_ids(schema: Optional[Dict[str, Any]] = None) -> Set[str]:
+    """Return the set of schema field ids that should be treated as sensitive."""
+
+    schema_data = schema or get_job_schema()
+    fields = schema_data.get("fields", []) if isinstance(schema_data, dict) else []
+    sensitive_types = {"secret"}
+    sensitive: Set[str] = set()
+
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        field_type = str(field.get("type", "")).lower()
+        if field_type in sensitive_types or field.get("secret") is True:
+            fid = field.get("id")
+            if isinstance(fid, str) and fid:
+                sensitive.add(fid)
+
+    return sensitive
+
+
+def redact_job_parameters(
+    parameters: Optional[Dict[str, Any]],
+    schema: Optional[Dict[str, Any]] = None,
+    replacement: str = "••••••",
+) -> Dict[str, Any]:
+    """Return a copy of job parameters with sensitive values removed."""
+
+    if parameters is None:
+        return {}
+
+    sanitized = copy.deepcopy(parameters)
+    sensitive_keys = get_sensitive_field_ids(schema)
+
+    if not sensitive_keys:
+        return sanitized
+
+    def _redact(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in sensitive_keys and item is not None:
+                    value[key] = replacement
+                else:
+                    _redact(item)
+        elif isinstance(value, list):
+            for element in value:
+                _redact(element)
+
+    _redact(sanitized)
+    return sanitized

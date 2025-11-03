@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from typing import List, Tuple
 from unittest import IsolatedAsyncioTestCase, skipIf
+from unittest.mock import patch
 
 
 yaml_stub = types.ModuleType("yaml")
@@ -218,6 +219,40 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         self.assertEqual(stored_output, ["Split payload"])
         self.assertEqual(captured, [(job.job_id, ["Split payload"])])
 
+    async def test_get_job_redacts_sensitive_parameters(self):
+        job = Job(
+            job_id="job-secret-1",
+            job_type="provision_vm",
+            status=JobStatus.PENDING,
+            created_at=datetime.utcnow(),
+            parameters={
+                "definition": {
+                    "fields": {
+                        "vm_name": "demo-vm",
+                        "guest_la_pw": "super-secret",
+                    }
+                }
+            },
+            output=[],
+        )
+
+        async with self.job_service._lock:
+            self.job_service.jobs[job.job_id] = job
+
+        redacted = await self.job_service.get_job(job.job_id)
+        self.assertIsNotNone(redacted)
+        self.assertEqual(
+            redacted.parameters["definition"]["fields"]["guest_la_pw"],
+            "••••••",
+        )
+
+        async with self.job_service._lock:
+            stored = self.job_service.jobs[job.job_id]
+            self.assertEqual(
+                stored.parameters["definition"]["fields"]["guest_la_pw"],
+                "super-secret",
+            )
+
     async def test_broadcast_job_event_targets_specific_and_aggregate_topics(self):
         payload = {"example": True}
         await self.job_service._broadcast_job_event("job-topic-1", "status", payload)
@@ -232,4 +267,26 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             self.assertEqual(message["action"], "status")
             self.assertEqual(message["job_id"], "job-topic-1")
             self.assertEqual(message["data"], payload)
+
+    async def test_prepare_job_response_clears_parameters_on_redaction_failure(self):
+        job = Job(
+            job_id="job-secret-fail",
+            job_type="provision_vm",
+            status=JobStatus.PENDING,
+            created_at=datetime.utcnow(),
+            parameters={"definition": {"fields": {"guest_la_pw": "super-secret"}}},
+            output=[],
+        )
+
+        with patch(
+            "server.app.services.job_service.redact_job_parameters",
+            side_effect=RuntimeError("boom"),
+        ):
+            safe_job = self.job_service._prepare_job_response(job)
+
+        self.assertEqual(safe_job.parameters, {})
+        self.assertEqual(
+            job.parameters["definition"]["fields"]["guest_la_pw"],
+            "super-secret",
+        )
 
