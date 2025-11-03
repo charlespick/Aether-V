@@ -653,14 +653,26 @@ class ProvisionJobOverlay extends BaseOverlay {
             return '';
         }
 
-        const rows = parameterSets.map((set) => `
-            <div class="parameter-set">
-                <div class="parameter-set-title">${this.escapeHtml(set.label || set.id)}</div>
-                <div class="parameter-set-mode">Mode: ${this.escapeHtml(set.mode || 'unspecified')}</div>
-                <div class="parameter-set-description">${this.escapeHtml(set.description || '')}</div>
-                <div class="parameter-set-members">Fields: ${this.escapeHtml((set.members || []).join(', '))}</div>
-            </div>
-        `).join('');
+        const rows = parameterSets
+            .map((set) => {
+                const title = this.escapeHtml(set.label || set.id || 'parameter set');
+                const mode = this.escapeHtml(set.mode || 'unspecified');
+                const descriptionText = this.escapeHtml(set.description || '');
+                const description = descriptionText
+                    ? `<div class="parameter-set-description">${descriptionText}</div>`
+                    : '';
+                const members = this.renderParameterSetMembers(set);
+
+                return `
+                    <div class="parameter-set">
+                        <div class="parameter-set-title">${title}</div>
+                        <div class="parameter-set-mode">Mode: ${mode}</div>
+                        ${description}
+                        ${members}
+                    </div>
+                `;
+            })
+            .join('');
 
         return `
             <div class="parameter-set-summary">
@@ -668,6 +680,48 @@ class ProvisionJobOverlay extends BaseOverlay {
                 ${rows}
             </div>
         `;
+    }
+
+    renderParameterSetMembers(set) {
+        const members = Array.isArray(set.members) ? set.members : null;
+        if (members && members.length) {
+            return `<div class="parameter-set-members">Fields: ${this.escapeHtml(members.join(', '))}</div>`;
+        }
+
+        const variants = Array.isArray(set.variants) ? set.variants : null;
+        if (variants && variants.length) {
+            const variantRows = variants
+                .map((variant) => {
+                    const variantLabel = this.escapeHtml(variant.label || variant.id || 'Variant');
+                    const requiredFields = Array.isArray(variant.required) ? variant.required : [];
+                    const optionalFields = Array.isArray(variant.optional) ? variant.optional : [];
+
+                    const requiredHtml = requiredFields.length
+                        ? `<div class="parameter-set-variant-detail"><span class="parameter-set-variant-label">Required:</span> ${this.escapeHtml(requiredFields.join(', '))}</div>`
+                        : '';
+                    const optionalHtml = optionalFields.length
+                        ? `<div class="parameter-set-variant-detail"><span class="parameter-set-variant-label">Optional:</span> ${this.escapeHtml(optionalFields.join(', '))}</div>`
+                        : '';
+
+                    return `
+                        <div class="parameter-set-variant">
+                            <div class="parameter-set-variant-title">${variantLabel}</div>
+                            ${requiredHtml}
+                            ${optionalHtml}
+                        </div>
+                    `;
+                })
+                .join('');
+
+            return `
+                <div class="parameter-set-variants">
+                    <div class="parameter-set-variants-heading">Variants:</div>
+                    ${variantRows}
+                </div>
+            `;
+        }
+
+        return '<div class="parameter-set-members">Fields: none specified</div>';
     }
 
     async handleSubmit(event) {
