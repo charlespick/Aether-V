@@ -2724,6 +2724,47 @@ tbody tr:last-child td {
     font-style: italic;
 }
 
+.parameter-set-members {
+    font-size: 12px;
+}
+
+.parameter-set-variants {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.parameter-set-variants-heading {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--ink);
+}
+
+.parameter-set-variant {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-left: 10px;
+    border-left: 2px solid rgba(148, 163, 184, 0.3);
+}
+
+.parameter-set-variant-title {
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.parameter-set-variant-detail {
+    font-size: 12px;
+    color: var(--muted-ink);
+}
+
+.parameter-set-variant-label {
+    font-weight: 500;
+    color: var(--ink);
+    margin-right: 4px;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
     :root {
