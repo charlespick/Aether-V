@@ -234,12 +234,14 @@ async def submit_provisioning_job(
             )
 
     schema_id = schema.get("id", "vm-provisioning") if schema else "vm-provisioning"
-    job_payload = {
-        "schema_id": schema_id,
-        "schema_version": submission.schema_version,
+    job_definition = {
+        "schema": {
+            "id": schema_id,
+            "version": submission.schema_version,
+        },
         "fields": validated_values,
     }
-    job = await job_service.submit_provisioning_job(submission, job_payload, target_host)
+    job = await job_service.submit_provisioning_job(submission, job_definition, target_host)
     return job
 
 

@@ -83,7 +83,12 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_type="provision_vm",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
-            parameters={"definition": {"fields": {"vm_name": "demo-vm"}}},
+            parameters={
+                "definition": {
+                    "schema": {"id": "vm-provisioning", "version": 1},
+                    "fields": {"vm_name": "demo-vm"},
+                }
+            },
             output=[],
         )
 
@@ -107,7 +112,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_type="provision_vm",
             status=JobStatus.RUNNING,
             created_at=datetime.utcnow(),
-            parameters={"definition": {}},
+            parameters={"definition": {"schema": {"id": "vm-provisioning", "version": 1}}},
             output=[],
         )
 
@@ -189,7 +194,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_type="provision_vm",
             status=JobStatus.RUNNING,
             created_at=datetime.utcnow(),
-            parameters={"definition": {}},
+            parameters={"definition": {"schema": {"id": "vm-provisioning", "version": 1}}},
             output=[],
         )
 
@@ -227,6 +232,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             created_at=datetime.utcnow(),
             parameters={
                 "definition": {
+                    "schema": {"id": "vm-provisioning", "version": 1},
                     "fields": {
                         "vm_name": "demo-vm",
                         "guest_la_pw": "super-secret",
@@ -274,7 +280,12 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_type="provision_vm",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
-            parameters={"definition": {"fields": {"guest_la_pw": "super-secret"}}},
+            parameters={
+                "definition": {
+                    "schema": {"id": "vm-provisioning", "version": 1},
+                    "fields": {"guest_la_pw": "super-secret"},
+                }
+            },
             output=[],
         )
 

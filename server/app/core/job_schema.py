@@ -74,6 +74,10 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
                 validations["pattern"] = _IPV4_INPUT_PATTERN
             entry["validations"] = validations
 
+        hint = entry.get("hint")
+        if hint is not None and not isinstance(hint, str):
+            raise SchemaValidationError([f"Field '{fid}' hint must be a string when provided"])
+
     for param_set in raw.get("parameter_sets", []) or []:
         if not isinstance(param_set, dict):
             raise SchemaValidationError(["Parameter set definitions must be mappings"])

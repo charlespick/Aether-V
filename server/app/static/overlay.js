@@ -473,6 +473,7 @@ class ProvisionJobOverlay extends BaseOverlay {
         const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
         const tags = this.renderFieldTags(field, parameterSets);
         const inputControl = this.renderInputControl(field, fieldId);
+        const hint = this.renderFieldHint(field);
 
         return `
             <div class="schema-field" data-field-id="${field.id}">
@@ -485,8 +486,16 @@ class ProvisionJobOverlay extends BaseOverlay {
                 </div>
                 <div class="field-control">${inputControl}</div>
                 ${description}
+                ${hint}
             </div>
         `;
+    }
+
+    renderFieldHint(field) {
+        if (!field || !field.hint) {
+            return '';
+        }
+        return `<p class="field-description field-hint">${this.escapeHtml(field.hint)}</p>`;
     }
 
     renderFieldTags(field, parameterSets) {
@@ -582,6 +591,7 @@ class ProvisionJobOverlay extends BaseOverlay {
         const description = vmField.description ? `<p class="field-description">${this.escapeHtml(vmField.description)}</p>` : '';
         const note = '<p class="field-description field-note">This value becomes both the VM name and the guest hostname.</p>';
         const inputControl = this.renderInputControl(vmField, fieldId);
+        const hint = this.renderFieldHint(vmField);
 
         return `
             <div class="primary-field" data-primary="vm-name">
@@ -593,6 +603,7 @@ class ProvisionJobOverlay extends BaseOverlay {
                 </div>
                 <div class="field-control">${inputControl}</div>
                 ${description}
+                ${hint}
                 ${note}
             </div>
         `;
@@ -615,6 +626,7 @@ class ProvisionJobOverlay extends BaseOverlay {
         const defaultValue = field.default ?? '';
         const validations = field.validations || {};
         const requiredAttr = field.required ? 'required' : '';
+        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
 
         if (type === 'boolean') {
             const checked = defaultValue === true ? 'checked' : '';
@@ -630,18 +642,17 @@ class ProvisionJobOverlay extends BaseOverlay {
             const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
             const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
             const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${valueAttr} ${requiredAttr} />`;
+            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
         }
 
         if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
         }
 
         const inputType = type === 'secret' ? 'password' : 'text';
         const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
         const pattern = patternValue ? `pattern="${patternValue}"` : '';
         const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-        const placeholder = type === 'ipv4' ? 'placeholder="192.0.2.10"' : '';
         return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
     }
 
