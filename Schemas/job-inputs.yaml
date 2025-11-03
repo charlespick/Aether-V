@@ -6,6 +6,7 @@ fields:
   - id: vm_name
     label: "VM name"
     description: "Unique name for the new virtual machine."
+    hint: "Example: web-01"
     type: string
     required: true
     validations:
@@ -14,6 +15,7 @@ fields:
   - id: image_name
     label: "Image"
     description: "Identifier of the golden image to clone."
+    hint: "Windows Server 2022"
     type: string
     required: true
   - id: gb_ram
@@ -37,6 +39,7 @@ fields:
   - id: vlan_id
     label: "VLAN ID"
     description: "Optional VLAN identifier for the primary network adapter."
+    hint: "120"
     type: integer
     required: false
     validations:
@@ -45,6 +48,7 @@ fields:
   - id: guest_la_uid
     label: "Local administrator"
     description: "Username for the guest operating system's local administrator."
+    hint: "Administrator"
     type: string
     required: true
   - id: guest_la_pw
@@ -55,11 +59,13 @@ fields:
   - id: guest_v4_ipaddr
     label: "IPv4 address"
     description: "Static IPv4 address to assign to the guest."
+    hint: "192.0.2.50"
     type: ipv4
     required: false
   - id: guest_v4_cidrprefix
     label: "IPv4 prefix length"
     description: "CIDR prefix length that accompanies the static IPv4 address."
+    hint: "24"
     type: integer
     required: false
     validations:
@@ -68,26 +74,31 @@ fields:
   - id: guest_v4_defaultgw
     label: "Default gateway"
     description: "Default IPv4 gateway for the guest."
+    hint: "192.0.2.1"
     type: ipv4
     required: false
   - id: guest_v4_dns1
     label: "Primary DNS server"
     description: "Primary IPv4 DNS server for the guest."
+    hint: "192.0.2.53"
     type: ipv4
     required: false
   - id: guest_v4_dns2
     label: "Secondary DNS server"
     description: "Secondary IPv4 DNS server for the guest."
+    hint: "192.0.2.54"
     type: ipv4
     required: false
   - id: guest_net_dnssuffix
     label: "DNS suffix"
     description: "DNS search suffix for the guest network configuration."
+    hint: "corp.example.com"
     type: string
     required: false
   - id: guest_domain_jointarget
     label: "Domain FQDN"
     description: "Fully qualified domain name to join."
+    hint: "corp.example.com"
     type: string
     required: false
     applicability:
@@ -96,6 +107,7 @@ fields:
   - id: guest_domain_joinuid
     label: "Domain join account"
     description: "User account used to join the domain."
+    hint: "EXAMPLE\\svc_join"
     type: string
     required: false
     applicability:
@@ -112,6 +124,7 @@ fields:
   - id: guest_domain_joinou
     label: "Domain join OU"
     description: "Organizational unit path for the computer account."
+    hint: "OU=Servers,DC=corp,DC=example,DC=com"
     type: string
     required: false
     applicability:
@@ -120,6 +133,7 @@ fields:
   - id: cnf_ansible_ssh_user
     label: "Ansible SSH user"
     description: "Username used by Ansible for SSH automation."
+    hint: "ansible"
     type: string
     required: false
     applicability:
@@ -128,6 +142,7 @@ fields:
   - id: cnf_ansible_ssh_key
     label: "Ansible SSH public key"
     description: "Public key provided to the guest for Ansible SSH access."
+    hint: "ssh-ed25519 AAAA..."
     type: multiline
     required: false
     applicability:

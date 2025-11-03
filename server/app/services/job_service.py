@@ -207,7 +207,7 @@ class JobService:
         logger.info("Job service stopped")
 
     async def submit_provisioning_job(
-        self, submission: JobSubmission, payload: Dict[str, Any], target_host: Optional[str]
+        self, _submission: JobSubmission, payload: Dict[str, Any], target_host: Optional[str]
     ) -> Job:
         """Persist and enqueue a provisioning job."""
 
@@ -222,7 +222,6 @@ class JobService:
             created_at=datetime.utcnow(),
             target_host=target_host,
             parameters={
-                "schema_version": submission.schema_version,
                 "definition": payload,
             },
         )

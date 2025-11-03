@@ -435,16 +435,21 @@ end {
 
         $jobDefinition = Read-ProvisioningJobDefinition -PipelinedInput $PipelineValues
 
-        $schemaId = $jobDefinition.schema_id
-        $schemaVersion = $jobDefinition.schema_version
+        $schemaMetadata = $jobDefinition.schema
+        if (-not $schemaMetadata) {
+            throw "Job definition missing 'schema' metadata."
+        }
+
+        $schemaId = $schemaMetadata.id
+        $schemaVersion = $schemaMetadata.version
         $rawFields = $jobDefinition.fields
 
         if (-not (Test-ProvisioningValuePresent -Value $schemaId)) {
-            throw "Job definition missing 'schema_id'."
+            throw "Job definition missing schema identifier."
         }
 
         if (-not (Test-ProvisioningValuePresent -Value $schemaVersion)) {
-            throw "Job definition missing 'schema_version'."
+            throw "Job definition missing schema version."
         }
 
         if (-not $rawFields) {

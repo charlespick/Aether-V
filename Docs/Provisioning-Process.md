@@ -16,8 +16,10 @@ Provisioning requests are serialized into JSON and streamed to the host-side orc
 
 ```json
 {
-  "schema_id": "vm-provisioning",
-  "schema_version": 1,
+  "schema": {
+    "id": "vm-provisioning",
+    "version": 1
+  },
   "fields": {
     "vm_name": "creationtest",
     "image_name": "Ubuntu Server 24.04",

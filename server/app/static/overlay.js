@@ -579,7 +579,9 @@ class ProvisionJobOverlay extends BaseOverlay {
         const fieldId = 'schema-vm_name';
         const requiredPill = this.renderRequiredPill(vmField.required);
         const labelText = this.escapeHtml(vmField.label || vmField.id);
-        const description = vmField.description ? `<p class="field-description">${this.escapeHtml(vmField.description)}</p>` : '';
+        const description = vmField.description
+            ? `<p class="field-description">${this.escapeHtml(vmField.description)}</p>`
+            : '';
         const note = '<p class="field-description field-note">This value becomes both the VM name and the guest hostname.</p>';
         const inputControl = this.renderInputControl(vmField, fieldId);
 
@@ -615,6 +617,7 @@ class ProvisionJobOverlay extends BaseOverlay {
         const defaultValue = field.default ?? '';
         const validations = field.validations || {};
         const requiredAttr = field.required ? 'required' : '';
+        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
 
         if (type === 'boolean') {
             const checked = defaultValue === true ? 'checked' : '';
@@ -630,18 +633,17 @@ class ProvisionJobOverlay extends BaseOverlay {
             const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
             const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
             const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${valueAttr} ${requiredAttr} />`;
+            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
         }
 
         if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
         }
 
         const inputType = type === 'secret' ? 'password' : 'text';
         const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
         const pattern = patternValue ? `pattern="${patternValue}"` : '';
         const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-        const placeholder = type === 'ipv4' ? 'placeholder="192.0.2.10"' : '';
         return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
     }
 
