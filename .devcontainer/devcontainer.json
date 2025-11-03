@@ -1,0 +1,108 @@
+{
+	"name": "Aether-V Server",
+	"image": "mcr.microsoft.com/devcontainers/python:1-3.11-bullseye",
+	
+	// Use 'forwardPorts' to make a list of ports inside the container available locally
+	"forwardPorts": [8000],
+	"portsAttributes": {
+		"8000": {
+			"label": "FastAPI Server",
+			"onAutoForward": "notify"
+		}
+	},
+	
+	// Configure tool-specific properties
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"python.defaultInterpreterPath": "/usr/local/bin/python",
+				"python.linting.enabled": true,
+				"python.linting.pylintEnabled": false,
+				"python.linting.flake8Enabled": true,
+				"python.formatting.provider": "black",
+				"python.formatting.blackPath": "/usr/local/py-utils/bin/black",
+				"python.linting.flake8Path": "/usr/local/py-utils/bin/flake8",
+				"python.testing.pytestEnabled": true,
+				"editor.formatOnSave": true,
+				"files.exclude": {
+					"**/__pycache__": true,
+					"**/*.pyc": true,
+					"**/venv": true,
+					"**/.pytest_cache": true
+				}
+			},
+			"extensions": [
+				"ms-python.python",
+				"ms-python.flake8",
+				"ms-python.black-formatter",
+				"ms-python.pylint",
+				"ms-toolsai.jupyter",
+				"ms-vscode.makefile-tools",
+				"redhat.vscode-yaml",
+				"ms-kubernetes-tools.vscode-kubernetes-tools",
+				"ms-vscode.powershell",
+				"bradlc.vscode-tailwindcss",
+				"esbenp.prettier-vscode",
+				"ms-vscode.vscode-json",
+				"GitHub.copilot",
+				"GitHub.copilot-chat"
+			]
+		}
+	},
+	
+	// Features to add to the dev container. More info: https://containers.dev/features
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"moby": true,
+			"azureDnsAutoDetection": true,
+			"installDockerBuildx": true
+		},
+		"ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+			"version": "latest",
+			"helm": "latest",
+			"minikube": "none"
+		},
+		"ghcr.io/devcontainers/features/powershell:1": {
+			"version": "latest"
+		},
+		"ghcr.io/devcontainers/features/github-cli:1": {
+			"installDirectlyFromGitHubRelease": true,
+			"version": "latest"
+		}
+	},
+	
+	// Use 'onCreateCommand' to run commands when creating the container
+	"onCreateCommand": {
+		"install-iso-tools": "sudo apt-get update && sudo apt-get install -y xorriso genisoimage mkisofs",
+		"install-dev-deps": "pip install --user flake8 black pytest pytest-asyncio httpx",
+		"create-artifacts-dirs": "mkdir -p /workspaces/Aether-V/server/artifacts/{isos,scripts}",
+		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V"
+	},
+	
+	// Use 'postCreateCommand' to run commands after the container is created
+	"postCreateCommand": {
+		"build-isos": "cd /workspaces/Aether-V && pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs || echo 'ISO build failed - continuing without ISOs'",
+		"build-docker-image": "cd /workspaces/Aether-V && docker build -f server/Dockerfile -t aetherv .",
+		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V",
+		"create-env": "cd /workspaces/Aether-V/server && [ ! -f .env ] && cp .env.example .env || echo '.env already exists'"
+	},
+	
+	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root
+	"remoteUser": "vscode",
+	
+	// Set environment variables
+	"remoteEnv": {
+		"PYTHONPATH": "/workspaces/Aether-V/server",
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"PYTHONUNBUFFERED": "1"
+	},
+	
+	// Configure mounts for better performance and persistence
+	"mounts": [
+		"source=Aether-V-pip-cache,target=/home/vscode/.cache/pip,type=volume"
+	],
+	
+	// Lifecycle scripts - set proper working directory
+	"workspaceFolder": "/workspaces/Aether-V",
+	"postStartCommand": "cd /workspaces/Aether-V/server"
+}

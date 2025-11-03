@@ -1,2 +1,11 @@
 ﻿ISOs
 build/
+
+# Docker development files
+.env.local
+docker-compose.override.yml
+
+# Codespaces generated files
+ModuleAnalysisCache-*
+StartupProfileData-NonInteractive
+.vscode/
