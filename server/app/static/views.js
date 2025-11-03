@@ -487,7 +487,6 @@ class VMView extends BaseView {
                 <div class="vm-action-bar" role="toolbar" aria-label="Virtual machine controls">
                     ${actionButtons}
                 </div>
-                <div class="vm-action-feedback" role="status" aria-live="polite"></div>
             </div>
 
             <section class="vm-overview-panel surface-card" aria-label="Virtual machine overview">
@@ -605,10 +604,9 @@ class VMView extends BaseView {
     setupActions() {
         const actionBar = document.querySelector('.vm-action-bar');
         this.actionButtons = actionBar ? Array.from(actionBar.querySelectorAll('.vm-action-btn')) : [];
-        this.feedbackElement = document.querySelector('.vm-action-feedback');
         this.actionInProgress = false;
-
-        this.setActionFeedback('');
+        this.toastHideTimer = null;
+        this.actionToastElement = null;
 
         this.updateActionButtonStates();
 
@@ -710,15 +708,115 @@ class VMView extends BaseView {
         this.updateActionButtonStates();
     }
 
-    setActionFeedback(message, type = 'info') {
-        if (!this.feedbackElement) {
+    setActionFeedback(message, type = 'info', options = {}) {
+        this.showActionToast(message, type, options);
+    }
+
+    ensureActionToast() {
+        if (this.actionToastElement && document.body.contains(this.actionToastElement)) {
+            return this.actionToastElement;
+        }
+
+        let toast = document.getElementById('vm-action-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'vm-action-toast';
+            toast.className = 'connection-status-indicator vm-action-toast';
+            toast.setAttribute('role', 'status');
+            toast.setAttribute('aria-live', 'polite');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.style.display = 'none';
+            toast.innerHTML = `
+                <div class="connection-status-content">
+                    <div class="connection-status-icon" aria-hidden="true"></div>
+                    <div class="connection-status-text">
+                        <div class="connection-status-title"></div>
+                        <div class="connection-status-message"></div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(toast);
+        }
+
+        this.actionToastElement = toast;
+        return toast;
+    }
+
+    hideActionToast(immediate = false) {
+        const toast = this.actionToastElement || document.getElementById('vm-action-toast');
+        if (!toast) {
             return;
         }
 
-        this.feedbackElement.textContent = message || '';
-        this.feedbackElement.classList.remove('success', 'error', 'info');
-        if (message) {
-            this.feedbackElement.classList.add(type);
+        if (this.toastHideTimer) {
+            clearTimeout(this.toastHideTimer);
+            this.toastHideTimer = null;
+        }
+
+        toast.classList.remove('visible');
+
+        if (immediate) {
+            toast.style.display = 'none';
+            return;
+        }
+
+        setTimeout(() => {
+            toast.style.display = 'none';
+        }, 300);
+    }
+
+    getActionToastDefaults(type) {
+        const defaults = {
+            success: { icon: '✅', title: 'Action accepted' },
+            error: { icon: '⚠️', title: 'Action failed' },
+            info: { icon: 'ℹ️', title: 'Working on it' },
+        };
+
+        return defaults[type] || defaults.info;
+    }
+
+    showActionToast(message, type = 'info', options = {}) {
+        if (!message) {
+            this.hideActionToast(true);
+            return;
+        }
+
+        const toast = this.ensureActionToast();
+        const iconEl = toast.querySelector('.connection-status-icon');
+        const titleEl = toast.querySelector('.connection-status-title');
+        const messageEl = toast.querySelector('.connection-status-message');
+
+        const defaults = this.getActionToastDefaults(type);
+        const title = options.title || defaults.title;
+        const icon = options.icon || defaults.icon;
+
+        toast.classList.remove('vm-action-toast--success', 'vm-action-toast--error', 'vm-action-toast--info');
+        toast.classList.add(`vm-action-toast--${type}`);
+
+        if (iconEl) {
+            iconEl.textContent = icon;
+        }
+        if (titleEl) {
+            titleEl.textContent = title;
+        }
+        if (messageEl) {
+            messageEl.textContent = message;
+        }
+
+        toast.style.display = 'block';
+        void toast.offsetWidth;
+        toast.classList.add('visible');
+
+        if (this.toastHideTimer) {
+            clearTimeout(this.toastHideTimer);
+            this.toastHideTimer = null;
+        }
+
+        const defaultDuration = type === 'error' ? 7000 : 4500;
+        const duration = options.persist ? 0 : (options.duration || defaultDuration);
+
+        if (duration > 0) {
+            this.toastHideTimer = setTimeout(() => this.hideActionToast(), duration);
         }
     }
 
@@ -791,6 +889,7 @@ class VMView extends BaseView {
             return;
         }
 
+        const actionLabel = this.getActionLabel(action);
         const host = this.vmHost || this.vmData.host || this.data.host;
         if (!host) {
             return;
@@ -801,7 +900,11 @@ class VMView extends BaseView {
         const endpoint = `/api/v1/vms/${encodedHost}/${encodedVm}/${action}`;
 
         this.setButtonsBusy(true);
-        this.setActionFeedback(`Sending ${this.getActionLabel(action)} request...`, 'info');
+        this.setActionFeedback(`Sending ${actionLabel} request...`, 'info', {
+            title: `${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} in progress`,
+            persist: true,
+            icon: '⏳',
+        });
 
         try {
             const response = await fetch(endpoint, {
@@ -819,7 +922,9 @@ class VMView extends BaseView {
             if (response.ok) {
                 const message = this.extractActionMessage(payload)
                     || this.getDefaultSuccessMessage(action, this.vmData.name);
-                this.setActionFeedback(message, 'success');
+                this.setActionFeedback(message, 'success', {
+                    title: 'VM action accepted',
+                });
 
                 const nextState = this.estimateNextState(action);
                 if (this.vmData) {
@@ -832,11 +937,15 @@ class VMView extends BaseView {
                 }, 400);
             } else {
                 const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
-                this.setActionFeedback(`Unable to ${this.getActionLabel(action)} VM: ${detail}`, 'error');
+                this.setActionFeedback(`Unable to ${actionLabel} VM: ${detail}`, 'error', {
+                    title: 'VM action failed',
+                });
             }
         } catch (error) {
             console.error('VM action error:', error);
-            this.setActionFeedback(`Failed to ${this.getActionLabel(action)} VM: ${error.message}`, 'error');
+            this.setActionFeedback(`Failed to ${actionLabel} VM: ${error.message}`, 'error', {
+                title: 'VM action failed',
+            });
         } finally {
             this.setButtonsBusy(false);
         }

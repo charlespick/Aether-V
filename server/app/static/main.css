@@ -2060,25 +2060,8 @@ tbody tr:last-child td {
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-}
-
-.vm-action-feedback {
-    min-height: 20px;
-    margin-top: 8px;
-    font-size: 0.95rem;
-    color: var(--muted-ink);
-}
-
-.vm-action-feedback.success {
-    color: #047857;
-}
-
-.vm-action-feedback.error {
-    color: #b91c1c;
-}
-
-.vm-action-feedback.info {
-    color: var(--muted-ink);
+    margin-left: auto;
+    justify-content: flex-end;
 }
 
 .vm-action-btn {
@@ -2353,6 +2336,7 @@ tbody tr:last-child td {
     .vm-action-bar {
         align-self: stretch;
         justify-content: flex-start;
+        margin-left: 0;
     }
 
     .vm-tab-panel {
@@ -2781,4 +2765,44 @@ tbody tr:last-child td {
 /* Single consistent background accent */
 .connection-status-indicator .connection-status-content {
     background: linear-gradient(90deg, transparent, rgba(245, 158, 11, 0.05), transparent);
+}
+
+.vm-action-toast {
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
+.vm-action-toast .connection-status-content {
+    background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.08), transparent);
+}
+
+.vm-action-toast .connection-status-icon {
+    color: #2563eb;
+}
+
+.vm-action-toast--info {
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
+.vm-action-toast--success {
+    border-color: rgba(16, 185, 129, 0.45);
+}
+
+.vm-action-toast--success .connection-status-content {
+    background: linear-gradient(90deg, transparent, rgba(16, 185, 129, 0.08), transparent);
+}
+
+.vm-action-toast--success .connection-status-icon {
+    color: #047857;
+}
+
+.vm-action-toast--error {
+    border-color: rgba(239, 68, 68, 0.5);
+}
+
+.vm-action-toast--error .connection-status-content {
+    background: linear-gradient(90deg, transparent, rgba(239, 68, 68, 0.08), transparent);
+}
+
+.vm-action-toast--error .connection-status-icon {
+    color: #b91c1c;
 }
