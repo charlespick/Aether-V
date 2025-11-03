@@ -169,6 +169,7 @@ class JobService:
             job_copy.parameters = redact_job_parameters(job_copy.parameters)
         except Exception:  # pragma: no cover - defensive logging
             logger.exception("Failed to redact job parameters for %s", job.job_id)
+            job_copy.parameters = {}
         return job_copy
 
     async def start(self) -> None:

@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from typing import List, Tuple
 from unittest import IsolatedAsyncioTestCase, skipIf
+from unittest.mock import patch
 
 
 yaml_stub = types.ModuleType("yaml")
@@ -266,4 +267,26 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             self.assertEqual(message["action"], "status")
             self.assertEqual(message["job_id"], "job-topic-1")
             self.assertEqual(message["data"], payload)
+
+    async def test_prepare_job_response_clears_parameters_on_redaction_failure(self):
+        job = Job(
+            job_id="job-secret-fail",
+            job_type="provision_vm",
+            status=JobStatus.PENDING,
+            created_at=datetime.utcnow(),
+            parameters={"definition": {"fields": {"guest_la_pw": "super-secret"}}},
+            output=[],
+        )
+
+        with patch(
+            "server.app.services.job_service.redact_job_parameters",
+            side_effect=RuntimeError("boom"),
+        ):
+            safe_job = self.job_service._prepare_job_response(job)
+
+        self.assertEqual(safe_job.parameters, {})
+        self.assertEqual(
+            job.parameters["definition"]["fields"]["guest_la_pw"],
+            "super-secret",
+        )
 
