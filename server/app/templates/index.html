@@ -26,7 +26,39 @@
 
         <div class="topbar-right">
             <button id="notifications-btn" class="icon-btn" title="Notifications" aria-label="Notifications">🔔</button>
-            <button id="logout-btn" class="icon-btn" title="Sign out" aria-label="Sign out" onclick="logout()">⤴</button>
+            <div class="profile-menu">
+                <button
+                    id="profile-btn"
+                    class="icon-btn profile-btn"
+                    title="Account"
+                    aria-label="Account"
+                    aria-haspopup="true"
+                    aria-expanded="false"
+                    type="button"
+                >👤</button>
+                <div
+                    id="profile-overlay"
+                    class="profile-overlay"
+                    role="dialog"
+                    aria-hidden="true"
+                    aria-labelledby="profile-name"
+                >
+                    <div class="profile-card">
+                        <div class="profile-header">
+                            <div class="profile-avatar" aria-hidden="true">👤</div>
+                            <div class="profile-text">
+                                <div class="profile-name" id="profile-name">Guest user</div>
+                                <div class="profile-email" id="profile-email">Not signed in</div>
+                            </div>
+                        </div>
+                        <div class="profile-role-row">
+                            <span class="profile-role-label">API role</span>
+                            <span class="profile-role-value" id="profile-role">Unavailable</span>
+                        </div>
+                        <button id="profile-logout-btn" class="profile-logout-btn" type="button">Log out</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </header>
 
