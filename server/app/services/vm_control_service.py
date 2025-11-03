@@ -132,10 +132,33 @@ class VMControlService:
 
         host_arg = VMControlService._ps_single_quote(hostname)
         vm_arg = VMControlService._ps_single_quote(vm_name)
-        parameters = f" -Name {vm_arg}"
+
+        parameter_segment = "-ComputerName $hostName -Name $vmName"
         if extra_parameters:
-            parameters = f"{parameters} {extra_parameters.strip()}"
-        return f"{verb} -ComputerName {host_arg}{parameters}"
+            parameter_segment = f"{parameter_segment} {extra_parameters.strip()}"
+
+        command_lines = [
+            "$ErrorActionPreference = 'Stop'",
+            "$ProgressPreference = 'SilentlyContinue'",
+            "Import-Module Hyper-V -ErrorAction Stop | Out-Null",
+            "",
+            f"$hostName = {host_arg}",
+            f"$vmName = {vm_arg}",
+            "",
+            "try {",
+            f"    {verb} {parameter_segment} -ErrorAction Stop | Out-Null",
+            "} catch {",
+            "    $message = $_.Exception.Message",
+            "    if ($_.ErrorDetails -and $_.ErrorDetails.Message) {",
+            "        $message = $_.ErrorDetails.Message",
+            "    } elseif ($_.FullyQualifiedErrorId) {",
+            f"        $message = \"{verb} failed: \" + $_.FullyQualifiedErrorId",
+            "    }",
+            "    throw $message",
+            "}",
+        ]
+
+        return "\n".join(command_lines)
 
     @staticmethod
     def _ps_single_quote(value: str) -> str:

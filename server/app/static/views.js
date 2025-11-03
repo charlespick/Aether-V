@@ -573,6 +573,11 @@ class VMView extends BaseView {
         this.setupActions();
     }
 
+    cleanup() {
+        this.destroyActionConfirmation(true);
+        this.hideActionToast(true);
+    }
+
     setupTabs() {
         const tabButtons = document.querySelectorAll('.vm-tab');
         const panels = document.querySelectorAll('.vm-tab-panel');
@@ -607,6 +612,14 @@ class VMView extends BaseView {
         this.actionInProgress = false;
         this.toastHideTimer = null;
         this.actionToastElement = null;
+        this.confirmationElement = null;
+        this.activeConfirmButton = null;
+        this.activeConfirmAction = null;
+        this.boundConfirmOutsideHandler = null;
+        this.boundConfirmKeyHandler = null;
+        this.boundConfirmRepositionHandler = null;
+
+        this.boundActionHandler = (event) => this.handleActionButtonClick(event);
 
         this.updateActionButtonStates();
 
@@ -615,21 +628,291 @@ class VMView extends BaseView {
         }
 
         this.actionButtons.forEach(button => {
-            button.addEventListener('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                if (this.actionInProgress || !button || !button.dataset.action) {
-                    return;
-                }
-
-                if (button.classList.contains('disabled') || button.hasAttribute('disabled')) {
-                    return;
-                }
-
-                this.executeVmAction(button.dataset.action);
-            });
+            button.addEventListener('click', this.boundActionHandler);
         });
+    }
+
+    handleActionButtonClick(event) {
+        if (!event) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const button = event.currentTarget;
+
+        if (this.actionInProgress || !button || !button.dataset.action) {
+            return;
+        }
+
+        if (button.classList.contains('disabled') || button.hasAttribute('disabled')) {
+            return;
+        }
+
+        const action = button.dataset.action;
+
+        if (this.requiresConfirmation(action)) {
+            if (this.activeConfirmButton === button && this.activeConfirmAction === action) {
+                this.destroyActionConfirmation();
+            } else {
+                this.showActionConfirmation(button, action);
+            }
+            return;
+        }
+
+        this.executeVmAction(action);
+    }
+
+    requiresConfirmation(action) {
+        if (!action) {
+            return false;
+        }
+        const normalized = String(action).toLowerCase();
+        return normalized === 'stop' || normalized === 'shutdown' || normalized === 'reset';
+    }
+
+    getActionConfirmationCopy(action) {
+        const vmName = (this.vmData && this.vmData.name) ? this.vmData.name : 'this virtual machine';
+        const normalized = String(action || '').toLowerCase();
+
+        if (normalized === 'shutdown') {
+            return {
+                title: 'Confirm shut down',
+                message: `Shut down ${vmName}? This requests a graceful shutdown from the guest operating system.`,
+                confirmLabel: 'Shut down',
+            };
+        }
+
+        if (normalized === 'stop') {
+            return {
+                title: 'Confirm turn off',
+                message: `Turn off ${vmName}? This immediately powers off the VM and may cause data loss.`,
+                confirmLabel: 'Turn off',
+            };
+        }
+
+        if (normalized === 'reset') {
+            return {
+                title: 'Confirm reset',
+                message: `Reset ${vmName}? This power cycles the VM and will interrupt any running processes.`,
+                confirmLabel: 'Reset',
+            };
+        }
+
+        return {
+            title: 'Confirm action',
+            message: `Proceed with ${normalized || 'this'} action on ${vmName}?`,
+            confirmLabel: 'Confirm',
+        };
+    }
+
+    showActionConfirmation(button, action) {
+        if (!button) {
+            return;
+        }
+
+        if (this.confirmationElement && this.confirmationElement.isConnected) {
+            this.destroyActionConfirmation(true);
+        }
+
+        const copy = this.getActionConfirmationCopy(action);
+        const overlay = document.createElement('div');
+        overlay.className = 'vm-action-confirm';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'false');
+        overlay.dataset.action = action || '';
+        overlay.style.position = 'absolute';
+        overlay.style.visibility = 'hidden';
+        overlay.style.pointerEvents = 'none';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'vm-action-confirm__title';
+        titleEl.textContent = copy.title;
+
+        const messageEl = document.createElement('div');
+        messageEl.className = 'vm-action-confirm__message';
+        messageEl.textContent = copy.message;
+
+        const actionsEl = document.createElement('div');
+        actionsEl.className = 'vm-action-confirm__actions';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'vm-action-confirm__cancel';
+        cancelBtn.textContent = 'Cancel';
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = 'vm-action-confirm__confirm';
+        confirmBtn.textContent = copy.confirmLabel;
+
+        actionsEl.appendChild(cancelBtn);
+        actionsEl.appendChild(confirmBtn);
+
+        overlay.appendChild(titleEl);
+        overlay.appendChild(messageEl);
+        overlay.appendChild(actionsEl);
+
+        document.body.appendChild(overlay);
+
+        this.confirmationElement = overlay;
+        this.activeConfirmButton = button;
+        this.activeConfirmAction = action;
+
+        button.classList.add('is-confirming');
+
+        cancelBtn.addEventListener('click', () => {
+            this.destroyActionConfirmation();
+        });
+
+        confirmBtn.addEventListener('click', () => {
+            this.destroyActionConfirmation(true);
+            this.executeVmAction(action);
+        });
+
+        this.boundConfirmOutsideHandler = (event) => {
+            if (!this.confirmationElement) {
+                return;
+            }
+            const target = event.target;
+            if (!target) {
+                return;
+            }
+            if (this.confirmationElement.contains(target)) {
+                return;
+            }
+            if (this.activeConfirmButton && this.activeConfirmButton.contains(target)) {
+                return;
+            }
+            this.destroyActionConfirmation();
+        };
+
+        this.boundConfirmKeyHandler = (event) => {
+            if (!event) {
+                return;
+            }
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                this.destroyActionConfirmation();
+            }
+        };
+
+        this.boundConfirmRepositionHandler = () => {
+            this.positionActionConfirmation();
+        };
+
+        document.addEventListener('mousedown', this.boundConfirmOutsideHandler, true);
+        document.addEventListener('touchstart', this.boundConfirmOutsideHandler, true);
+        document.addEventListener('keydown', this.boundConfirmKeyHandler, true);
+        window.addEventListener('resize', this.boundConfirmRepositionHandler, true);
+        window.addEventListener('scroll', this.boundConfirmRepositionHandler, true);
+
+        this.positionActionConfirmation();
+
+        requestAnimationFrame(() => {
+            if (this.confirmationElement) {
+                this.confirmationElement.classList.add('visible');
+                confirmBtn.focus();
+            }
+        });
+    }
+
+    positionActionConfirmation() {
+        if (!this.confirmationElement || !this.activeConfirmButton) {
+            return;
+        }
+
+        const overlay = this.confirmationElement;
+
+        overlay.classList.remove('vm-action-confirm--above');
+        overlay.style.visibility = 'hidden';
+        overlay.style.pointerEvents = 'none';
+
+        requestAnimationFrame(() => {
+            if (!this.confirmationElement || !this.activeConfirmButton) {
+                return;
+            }
+
+            const currentOverlay = this.confirmationElement;
+            const buttonRect = this.activeConfirmButton.getBoundingClientRect();
+            const currentRect = currentOverlay.getBoundingClientRect();
+            const viewportWidth = document.documentElement.clientWidth;
+            const viewportHeight = window.innerHeight;
+            const scrollY = window.scrollY || document.documentElement.scrollTop;
+            const scrollX = window.scrollX || document.documentElement.scrollLeft;
+
+            let top = scrollY + buttonRect.bottom + 8;
+            let alignAbove = false;
+
+            if (top + currentRect.height > scrollY + viewportHeight - 8) {
+                top = scrollY + buttonRect.top - currentRect.height - 8;
+                alignAbove = true;
+            }
+
+            if (top < scrollY + 8) {
+                top = scrollY + 8;
+            }
+
+            let left = scrollX + buttonRect.left + (buttonRect.width / 2) - (currentRect.width / 2);
+            const minLeft = scrollX + 8;
+            const maxLeft = scrollX + viewportWidth - currentRect.width - 8;
+            if (left < minLeft) {
+                left = minLeft;
+            } else if (left > maxLeft) {
+                left = Math.max(minLeft, maxLeft);
+            }
+
+            currentOverlay.style.top = `${Math.round(top)}px`;
+            currentOverlay.style.left = `${Math.round(left)}px`;
+            currentOverlay.style.visibility = 'visible';
+            currentOverlay.style.pointerEvents = 'auto';
+            currentOverlay.classList.toggle('vm-action-confirm--above', alignAbove);
+        });
+    }
+
+    destroyActionConfirmation(immediate = false) {
+        if (this.boundConfirmOutsideHandler) {
+            document.removeEventListener('mousedown', this.boundConfirmOutsideHandler, true);
+            document.removeEventListener('touchstart', this.boundConfirmOutsideHandler, true);
+            this.boundConfirmOutsideHandler = null;
+        }
+
+        if (this.boundConfirmKeyHandler) {
+            document.removeEventListener('keydown', this.boundConfirmKeyHandler, true);
+            this.boundConfirmKeyHandler = null;
+        }
+
+        if (this.boundConfirmRepositionHandler) {
+            window.removeEventListener('resize', this.boundConfirmRepositionHandler, true);
+            window.removeEventListener('scroll', this.boundConfirmRepositionHandler, true);
+            this.boundConfirmRepositionHandler = null;
+        }
+
+        if (this.activeConfirmButton) {
+            this.activeConfirmButton.classList.remove('is-confirming');
+        }
+
+        if (this.confirmationElement) {
+            const overlay = this.confirmationElement;
+            const removeOverlay = () => {
+                if (overlay && overlay.parentNode) {
+                    overlay.parentNode.removeChild(overlay);
+                }
+            };
+
+            if (!immediate) {
+                overlay.classList.remove('visible');
+                overlay.addEventListener('transitionend', removeOverlay, { once: true });
+                setTimeout(removeOverlay, 200);
+            } else {
+                removeOverlay();
+            }
+        }
+
+        this.confirmationElement = null;
+        this.activeConfirmButton = null;
+        this.activeConfirmAction = null;
     }
 
     buildVmActionButtons(vm) {
@@ -888,6 +1171,8 @@ class VMView extends BaseView {
         if (!this.vmData || !this.vmData.name) {
             return;
         }
+
+        this.destroyActionConfirmation(true);
 
         const actionLabel = this.getActionLabel(action);
         const host = this.vmHost || this.vmData.host || this.data.host;
