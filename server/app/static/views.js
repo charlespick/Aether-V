@@ -402,8 +402,9 @@ class HostView extends BaseView {
 class VMView extends BaseView {
     async render() {
         const vmName = this.data.name || 'Unknown VM';
+        const requestedHost = this.data.host || null;
         const inventory = await this.fetchInventory();
-        const vm = inventory.vms.find(v => v.name === vmName);
+        const vm = this.findVm(inventory, vmName, requestedHost);
 
         if (!vm) {
             return `
@@ -411,6 +412,10 @@ class VMView extends BaseView {
                 <p class="empty">Virtual machine "${vmName}" not found</p>
             `;
         }
+
+        this.vmData = vm;
+        this.vmHost = vm.host;
+        this.lastInventory = inventory;
 
         const meta = getVmStateMeta(vm.state);
         const osName = this.formatOsFamily(vm);
@@ -471,6 +476,8 @@ class VMView extends BaseView {
             { id: 'notes', label: 'Notes' }
         ];
 
+        const actionButtons = this.buildVmActionButtons(vm);
+
         return `
             <div class="vm-header">
                 <div class="vm-title-group">
@@ -478,18 +485,7 @@ class VMView extends BaseView {
                     <span class="status ${meta.badgeClass}">${meta.label}</span>
                 </div>
                 <div class="vm-action-bar" role="toolbar" aria-label="Virtual machine controls">
-                    <button class="vm-action-btn ${vm.state === 'Running' ? '' : 'disabled'}" ${vm.state !== 'Running' ? 'disabled' : ''}
-                        data-tooltip="Stop" aria-label="Stop virtual machine">
-                        <span aria-hidden="true">⏸️</span>
-                    </button>
-                    <button class="vm-action-btn ${vm.state !== 'Running' ? '' : 'disabled'}" ${vm.state === 'Running' ? 'disabled' : ''}
-                        data-tooltip="Start" aria-label="Start virtual machine">
-                        <span aria-hidden="true">▶️</span>
-                    </button>
-                    <button class="vm-action-btn ${vm.state === 'Running' ? '' : 'disabled'}" ${vm.state === 'Running' ? '' : 'disabled'}
-                        data-tooltip="Restart" aria-label="Restart virtual machine">
-                        <span aria-hidden="true">🔄</span>
-                    </button>
+                    ${actionButtons}
                 </div>
             </div>
 
@@ -574,6 +570,12 @@ class VMView extends BaseView {
 
     init() {
         this.setupTabs();
+        this.setupActions();
+    }
+
+    cleanup() {
+        this.destroyActionConfirmation(true);
+        this.hideActionToast(true);
     }
 
     setupTabs() {
@@ -602,6 +604,636 @@ class VMView extends BaseView {
                 });
             });
         });
+    }
+
+    setupActions() {
+        const actionBar = document.querySelector('.vm-action-bar');
+        this.actionButtons = actionBar ? Array.from(actionBar.querySelectorAll('.vm-action-btn')) : [];
+        this.actionInProgress = false;
+        this.toastHideTimer = null;
+        this.actionToastElement = null;
+        this.confirmationElement = null;
+        this.activeConfirmButton = null;
+        this.activeConfirmAction = null;
+        this.boundConfirmOutsideHandler = null;
+        this.boundConfirmKeyHandler = null;
+        this.boundConfirmRepositionHandler = null;
+
+        this.boundActionHandler = (event) => this.handleActionButtonClick(event);
+
+        this.updateActionButtonStates();
+
+        if (!this.actionButtons || this.actionButtons.length === 0) {
+            return;
+        }
+
+        this.actionButtons.forEach(button => {
+            button.addEventListener('click', this.boundActionHandler);
+        });
+    }
+
+    handleActionButtonClick(event) {
+        if (!event) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const button = event.currentTarget;
+
+        if (this.actionInProgress || !button || !button.dataset.action) {
+            return;
+        }
+
+        if (button.classList.contains('disabled') || button.hasAttribute('disabled')) {
+            return;
+        }
+
+        const action = button.dataset.action;
+
+        if (this.requiresConfirmation(action)) {
+            if (this.activeConfirmButton === button && this.activeConfirmAction === action) {
+                this.destroyActionConfirmation();
+            } else {
+                this.showActionConfirmation(button, action);
+            }
+            return;
+        }
+
+        this.executeVmAction(action);
+    }
+
+    requiresConfirmation(action) {
+        if (!action) {
+            return false;
+        }
+        const normalized = String(action).toLowerCase();
+        return normalized === 'stop' || normalized === 'shutdown' || normalized === 'reset';
+    }
+
+    getActionConfirmationCopy(action) {
+        const vmName = (this.vmData && this.vmData.name) ? this.vmData.name : 'this virtual machine';
+        const normalized = String(action || '').toLowerCase();
+
+        if (normalized === 'shutdown') {
+            return {
+                title: 'Confirm shut down',
+                message: `Shut down ${vmName}? This requests a graceful shutdown from the guest operating system.`,
+                confirmLabel: 'Shut down',
+            };
+        }
+
+        if (normalized === 'stop') {
+            return {
+                title: 'Confirm turn off',
+                message: `Turn off ${vmName}? This immediately powers off the VM and may cause data loss.`,
+                confirmLabel: 'Turn off',
+            };
+        }
+
+        if (normalized === 'reset') {
+            return {
+                title: 'Confirm reset',
+                message: `Reset ${vmName}? This power cycles the VM and will interrupt any running processes.`,
+                confirmLabel: 'Reset',
+            };
+        }
+
+        return {
+            title: 'Confirm action',
+            message: `Proceed with ${normalized || 'this'} action on ${vmName}?`,
+            confirmLabel: 'Confirm',
+        };
+    }
+
+    showActionConfirmation(button, action) {
+        if (!button) {
+            return;
+        }
+
+        if (this.confirmationElement && this.confirmationElement.isConnected) {
+            this.destroyActionConfirmation(true);
+        }
+
+        const copy = this.getActionConfirmationCopy(action);
+        const overlay = document.createElement('div');
+        overlay.className = 'vm-action-confirm';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'false');
+        overlay.dataset.action = action || '';
+        overlay.style.position = 'absolute';
+        overlay.style.visibility = 'hidden';
+        overlay.style.pointerEvents = 'none';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'vm-action-confirm__title';
+        titleEl.textContent = copy.title;
+
+        const messageEl = document.createElement('div');
+        messageEl.className = 'vm-action-confirm__message';
+        messageEl.textContent = copy.message;
+
+        const actionsEl = document.createElement('div');
+        actionsEl.className = 'vm-action-confirm__actions';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'vm-action-confirm__cancel';
+        cancelBtn.textContent = 'Cancel';
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = 'vm-action-confirm__confirm';
+        confirmBtn.textContent = copy.confirmLabel;
+
+        actionsEl.appendChild(cancelBtn);
+        actionsEl.appendChild(confirmBtn);
+
+        overlay.appendChild(titleEl);
+        overlay.appendChild(messageEl);
+        overlay.appendChild(actionsEl);
+
+        document.body.appendChild(overlay);
+
+        this.confirmationElement = overlay;
+        this.activeConfirmButton = button;
+        this.activeConfirmAction = action;
+
+        button.classList.add('is-confirming');
+
+        cancelBtn.addEventListener('click', () => {
+            this.destroyActionConfirmation();
+        });
+
+        confirmBtn.addEventListener('click', () => {
+            this.destroyActionConfirmation(true);
+            this.executeVmAction(action);
+        });
+
+        this.boundConfirmOutsideHandler = (event) => {
+            if (!this.confirmationElement) {
+                return;
+            }
+            const target = event.target;
+            if (!target) {
+                return;
+            }
+            if (this.confirmationElement.contains(target)) {
+                return;
+            }
+            if (this.activeConfirmButton && this.activeConfirmButton.contains(target)) {
+                return;
+            }
+            this.destroyActionConfirmation();
+        };
+
+        this.boundConfirmKeyHandler = (event) => {
+            if (!event) {
+                return;
+            }
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                this.destroyActionConfirmation();
+            }
+        };
+
+        this.boundConfirmRepositionHandler = () => {
+            this.positionActionConfirmation();
+        };
+
+        document.addEventListener('mousedown', this.boundConfirmOutsideHandler, true);
+        document.addEventListener('touchstart', this.boundConfirmOutsideHandler, true);
+        document.addEventListener('keydown', this.boundConfirmKeyHandler, true);
+        window.addEventListener('resize', this.boundConfirmRepositionHandler, true);
+        window.addEventListener('scroll', this.boundConfirmRepositionHandler, true);
+
+        this.positionActionConfirmation();
+
+        requestAnimationFrame(() => {
+            if (this.confirmationElement) {
+                this.confirmationElement.classList.add('visible');
+                confirmBtn.focus();
+            }
+        });
+    }
+
+    positionActionConfirmation() {
+        if (!this.confirmationElement || !this.activeConfirmButton) {
+            return;
+        }
+
+        const overlay = this.confirmationElement;
+
+        overlay.classList.remove('vm-action-confirm--above');
+        overlay.style.visibility = 'hidden';
+        overlay.style.pointerEvents = 'none';
+
+        requestAnimationFrame(() => {
+            if (!this.confirmationElement || !this.activeConfirmButton) {
+                return;
+            }
+
+            const currentOverlay = this.confirmationElement;
+            const buttonRect = this.activeConfirmButton.getBoundingClientRect();
+            const currentRect = currentOverlay.getBoundingClientRect();
+            const viewportWidth = document.documentElement.clientWidth;
+            const viewportHeight = window.innerHeight;
+            const scrollY = window.scrollY || document.documentElement.scrollTop;
+            const scrollX = window.scrollX || document.documentElement.scrollLeft;
+
+            let top = scrollY + buttonRect.bottom + 8;
+            let alignAbove = false;
+
+            if (top + currentRect.height > scrollY + viewportHeight - 8) {
+                top = scrollY + buttonRect.top - currentRect.height - 8;
+                alignAbove = true;
+            }
+
+            if (top < scrollY + 8) {
+                top = scrollY + 8;
+            }
+
+            let left = scrollX + buttonRect.left + (buttonRect.width / 2) - (currentRect.width / 2);
+            const minLeft = scrollX + 8;
+            const maxLeft = scrollX + viewportWidth - currentRect.width - 8;
+            if (left < minLeft) {
+                left = minLeft;
+            } else if (left > maxLeft) {
+                left = Math.max(minLeft, maxLeft);
+            }
+
+            currentOverlay.style.top = `${Math.round(top)}px`;
+            currentOverlay.style.left = `${Math.round(left)}px`;
+            currentOverlay.style.visibility = 'visible';
+            currentOverlay.style.pointerEvents = 'auto';
+            currentOverlay.classList.toggle('vm-action-confirm--above', alignAbove);
+        });
+    }
+
+    destroyActionConfirmation(immediate = false) {
+        if (this.boundConfirmOutsideHandler) {
+            document.removeEventListener('mousedown', this.boundConfirmOutsideHandler, true);
+            document.removeEventListener('touchstart', this.boundConfirmOutsideHandler, true);
+            this.boundConfirmOutsideHandler = null;
+        }
+
+        if (this.boundConfirmKeyHandler) {
+            document.removeEventListener('keydown', this.boundConfirmKeyHandler, true);
+            this.boundConfirmKeyHandler = null;
+        }
+
+        if (this.boundConfirmRepositionHandler) {
+            window.removeEventListener('resize', this.boundConfirmRepositionHandler, true);
+            window.removeEventListener('scroll', this.boundConfirmRepositionHandler, true);
+            this.boundConfirmRepositionHandler = null;
+        }
+
+        if (this.activeConfirmButton) {
+            this.activeConfirmButton.classList.remove('is-confirming');
+        }
+
+        if (this.confirmationElement) {
+            const overlay = this.confirmationElement;
+            const removeOverlay = () => {
+                if (overlay && overlay.parentNode) {
+                    overlay.parentNode.removeChild(overlay);
+                }
+            };
+
+            if (!immediate) {
+                overlay.classList.remove('visible');
+                overlay.addEventListener('transitionend', removeOverlay, { once: true });
+                setTimeout(removeOverlay, 200);
+            } else {
+                removeOverlay();
+            }
+        }
+
+        this.confirmationElement = null;
+        this.activeConfirmButton = null;
+        this.activeConfirmAction = null;
+    }
+
+    buildVmActionButtons(vm) {
+        const availability = this.getActionAvailability(vm && vm.state);
+        const actions = [
+            { action: 'start', icon: '▶️', tooltip: 'Start', aria: 'Start virtual machine' },
+            { action: 'shutdown', icon: '⏻', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
+            { action: 'stop', icon: '⏹️', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
+            { action: 'reset', icon: '🔄', tooltip: 'Reset', aria: 'Reset virtual machine' },
+        ];
+
+        return actions.map(({ action, icon, tooltip, aria }) => {
+            const allowed = availability[action];
+            const disabledAttr = allowed ? '' : 'disabled';
+            const disabledClass = allowed ? '' : 'disabled';
+
+            return `
+                    <button type="button" class="vm-action-btn ${disabledClass}" data-action="${action}"
+                        data-tooltip="${tooltip}" aria-label="${aria}" ${disabledAttr}>
+                        <span aria-hidden="true">${icon}</span>
+                    </button>
+            `;
+        }).join('');
+    }
+
+    getActionAvailability(state) {
+        const normalized = typeof state === 'string' ? state.toLowerCase() : String(state || '').toLowerCase();
+        const availability = {
+            start: false,
+            shutdown: false,
+            stop: false,
+            reset: false,
+        };
+
+        if (this.actionInProgress) {
+            return availability;
+        }
+
+        if (normalized === 'running') {
+            availability.shutdown = true;
+            availability.stop = true;
+            availability.reset = true;
+        } else if (normalized === 'off') {
+            availability.start = true;
+        } else if (normalized === 'paused' || normalized === 'saved') {
+            availability.start = true;
+            availability.stop = true;
+        }
+
+        return availability;
+    }
+
+    updateActionButtonStates() {
+        if (!this.actionButtons || this.actionButtons.length === 0) {
+            return;
+        }
+
+        const availability = this.getActionAvailability(this.vmData && this.vmData.state);
+
+        this.actionButtons.forEach(button => {
+            const action = button.dataset.action;
+            const allowed = Boolean(action && availability[action]);
+
+            if (allowed) {
+                button.classList.remove('disabled');
+                button.removeAttribute('disabled');
+            } else {
+                button.classList.add('disabled');
+                button.setAttribute('disabled', 'disabled');
+            }
+        });
+    }
+
+    setButtonsBusy(isBusy) {
+        this.actionInProgress = Boolean(isBusy);
+        this.updateActionButtonStates();
+    }
+
+    setActionFeedback(message, type = 'info', options = {}) {
+        this.showActionToast(message, type, options);
+    }
+
+    ensureActionToast() {
+        if (this.actionToastElement && document.body.contains(this.actionToastElement)) {
+            return this.actionToastElement;
+        }
+
+        let toast = document.getElementById('vm-action-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'vm-action-toast';
+            toast.className = 'connection-status-indicator vm-action-toast';
+            toast.setAttribute('role', 'status');
+            toast.setAttribute('aria-live', 'polite');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.style.display = 'none';
+            toast.innerHTML = `
+                <div class="connection-status-content">
+                    <div class="connection-status-icon" aria-hidden="true"></div>
+                    <div class="connection-status-text">
+                        <div class="connection-status-title"></div>
+                        <div class="connection-status-message"></div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(toast);
+        }
+
+        this.actionToastElement = toast;
+        return toast;
+    }
+
+    hideActionToast(immediate = false) {
+        const toast = this.actionToastElement || document.getElementById('vm-action-toast');
+        if (!toast) {
+            return;
+        }
+
+        if (this.toastHideTimer) {
+            clearTimeout(this.toastHideTimer);
+            this.toastHideTimer = null;
+        }
+
+        toast.classList.remove('visible');
+
+        if (immediate) {
+            toast.style.display = 'none';
+            return;
+        }
+
+        setTimeout(() => {
+            toast.style.display = 'none';
+        }, 300);
+    }
+
+    getActionToastDefaults(type) {
+        const defaults = {
+            success: { icon: '✅', title: 'Action accepted' },
+            error: { icon: '⚠️', title: 'Action failed' },
+            info: { icon: 'ℹ️', title: 'Working on it' },
+        };
+
+        return defaults[type] || defaults.info;
+    }
+
+    showActionToast(message, type = 'info', options = {}) {
+        if (!message) {
+            this.hideActionToast(true);
+            return;
+        }
+
+        const toast = this.ensureActionToast();
+        const iconEl = toast.querySelector('.connection-status-icon');
+        const titleEl = toast.querySelector('.connection-status-title');
+        const messageEl = toast.querySelector('.connection-status-message');
+
+        const defaults = this.getActionToastDefaults(type);
+        const title = options.title || defaults.title;
+        const icon = options.icon || defaults.icon;
+
+        toast.classList.remove('vm-action-toast--success', 'vm-action-toast--error', 'vm-action-toast--info');
+        toast.classList.add(`vm-action-toast--${type}`);
+
+        if (iconEl) {
+            iconEl.textContent = icon;
+        }
+        if (titleEl) {
+            titleEl.textContent = title;
+        }
+        if (messageEl) {
+            messageEl.textContent = message;
+        }
+
+        toast.style.display = 'block';
+        void toast.offsetWidth;
+        toast.classList.add('visible');
+
+        if (this.toastHideTimer) {
+            clearTimeout(this.toastHideTimer);
+            this.toastHideTimer = null;
+        }
+
+        const defaultDuration = type === 'error' ? 7000 : 4500;
+        const duration = options.persist ? 0 : (options.duration || defaultDuration);
+
+        if (duration > 0) {
+            this.toastHideTimer = setTimeout(() => this.hideActionToast(), duration);
+        }
+    }
+
+    getActionLabel(action) {
+        const labels = {
+            start: 'start',
+            shutdown: 'shut down',
+            stop: 'stop',
+            reset: 'reset',
+        };
+        return labels[action] || action || 'perform';
+    }
+
+    extractActionMessage(payload) {
+        if (!payload) {
+            return null;
+        }
+
+        if (typeof payload === 'string') {
+            return payload;
+        }
+
+        if (payload.message && typeof payload.message === 'string') {
+            return payload.message;
+        }
+
+        if (payload.detail) {
+            if (typeof payload.detail === 'string') {
+                return payload.detail;
+            }
+            if (payload.detail && typeof payload.detail.message === 'string') {
+                return payload.detail.message;
+            }
+        }
+
+        return null;
+    }
+
+    getDefaultSuccessMessage(action, vmName) {
+        const name = vmName || (this.vmData && this.vmData.name) || 'virtual machine';
+        switch (action) {
+            case 'start':
+                return `Start command accepted for VM ${name}.`;
+            case 'shutdown':
+                return `Shutdown command accepted for VM ${name}.`;
+            case 'stop':
+                return `Stop command accepted for VM ${name}.`;
+            case 'reset':
+                return `Reset command accepted for VM ${name}.`;
+            default:
+                return `Command accepted for VM ${name}.`;
+        }
+    }
+
+    estimateNextState(action) {
+        switch (action) {
+            case 'start':
+            case 'reset':
+                return 'Starting';
+            case 'shutdown':
+            case 'stop':
+                return 'Stopping';
+            default:
+                return this.vmData && this.vmData.state ? this.vmData.state : 'Unknown';
+        }
+    }
+
+    async executeVmAction(action) {
+        if (!this.vmData || !this.vmData.name) {
+            return;
+        }
+
+        this.destroyActionConfirmation(true);
+
+        const actionLabel = this.getActionLabel(action);
+        const host = this.vmHost || this.vmData.host || this.data.host;
+        if (!host) {
+            return;
+        }
+
+        const encodedHost = encodeURIComponent(host);
+        const encodedVm = encodeURIComponent(this.vmData.name);
+        const endpoint = `/api/v1/vms/${encodedHost}/${encodedVm}/${action}`;
+
+        this.setButtonsBusy(true);
+        this.setActionFeedback(`Sending ${actionLabel} request...`, 'info', {
+            title: `${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} in progress`,
+            persist: true,
+            icon: '⏳',
+        });
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                credentials: 'same-origin',
+            });
+
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (err) {
+                payload = null;
+            }
+
+            if (response.ok) {
+                const message = this.extractActionMessage(payload)
+                    || this.getDefaultSuccessMessage(action, this.vmData.name);
+                this.setActionFeedback(message, 'success', {
+                    title: 'VM action accepted',
+                });
+
+                const nextState = this.estimateNextState(action);
+                if (this.vmData) {
+                    this.vmData.state = nextState;
+                }
+                this.updateActionButtonStates();
+
+                setTimeout(() => {
+                    viewManager.switchView('vm', { name: this.vmData.name, host });
+                }, 400);
+            } else {
+                const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
+                this.setActionFeedback(`Unable to ${actionLabel} VM: ${detail}`, 'error', {
+                    title: 'VM action failed',
+                });
+            }
+        } catch (error) {
+            console.error('VM action error:', error);
+            this.setActionFeedback(`Failed to ${actionLabel} VM: ${error.message}`, 'error', {
+                title: 'VM action failed',
+            });
+        } finally {
+            this.setButtonsBusy(false);
+        }
     }
 
     formatOsFamily(vm) {
@@ -658,6 +1290,41 @@ class VMView extends BaseView {
         }
         const dotIndex = hostText.indexOf('.');
         return dotIndex === -1 ? hostText : hostText.slice(0, dotIndex);
+    }
+
+    findVm(inventory, vmName, requestedHost) {
+        if (!inventory) {
+            return null;
+        }
+
+        const vms = Array.isArray(inventory.vms) ? inventory.vms : [];
+        if (vms.length === 0) {
+            return null;
+        }
+
+        const normalizedName = String(vmName || '').toLowerCase();
+        const normalizedHost = requestedHost ? String(requestedHost).toLowerCase() : null;
+
+        if (normalizedHost) {
+            const hostMatch = vms.find(vm => {
+                if (!vm) {
+                    return false;
+                }
+                const hostValue = String(vm.host || '').toLowerCase();
+                const nameValue = String(vm.name || '').toLowerCase();
+                return nameValue === normalizedName && hostValue === normalizedHost;
+            });
+            if (hostMatch) {
+                return hostMatch;
+            }
+        }
+
+        return vms.find(vm => {
+            if (!vm) {
+                return false;
+            }
+            return String(vm.name || '').toLowerCase() === normalizedName;
+        }) || null;
     }
 
     findHost(inventory, hostname) {

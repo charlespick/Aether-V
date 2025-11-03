@@ -2060,6 +2060,8 @@ tbody tr:last-child td {
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    margin-left: auto;
+    justify-content: flex-end;
 }
 
 .vm-action-btn {
@@ -2083,6 +2085,12 @@ tbody tr:last-child td {
     background: rgba(15, 23, 42, 0.06);
 }
 
+.vm-action-btn.is-confirming {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.45);
+    color: var(--ink);
+}
+
 [data-theme="dark"] .vm-action-btn {
     background: rgba(255, 255, 255, 0.05);
     border-color: rgba(255, 255, 255, 0.14);
@@ -2091,6 +2099,11 @@ tbody tr:last-child td {
 
 [data-theme="dark"] .vm-action-btn:hover {
     background: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .vm-action-btn.is-confirming {
+    background: rgba(239, 68, 68, 0.22);
+    border-color: rgba(248, 113, 113, 0.6);
 }
 
 .vm-action-btn.disabled,
@@ -2122,6 +2135,126 @@ tbody tr:last-child td {
 
 [data-theme="dark"] .vm-action-btn[data-tooltip]:hover::after {
     background: rgba(30, 41, 59, 0.92);
+}
+
+.vm-action-confirm {
+    position: absolute;
+    z-index: 120;
+    min-width: 240px;
+    max-width: 320px;
+    padding: 16px 18px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.2);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.vm-action-confirm.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.vm-action-confirm::before {
+    content: '';
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background: inherit;
+    border-left: 1px solid var(--border-color);
+    border-top: 1px solid var(--border-color);
+    transform: rotate(45deg);
+    top: -6px;
+    left: 32px;
+    box-shadow: -3px -3px 10px rgba(15, 23, 42, 0.06);
+}
+
+.vm-action-confirm--above::before {
+    top: auto;
+    bottom: -6px;
+    transform: rotate(225deg);
+    box-shadow: 3px 3px 10px rgba(15, 23, 42, 0.06);
+}
+
+[data-theme="dark"] .vm-action-confirm {
+    background: rgba(17, 24, 39, 0.95);
+    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.45);
+}
+
+[data-theme="dark"] .vm-action-confirm::before {
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: -3px -3px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .vm-action-confirm--above::before {
+    box-shadow: 3px 3px 12px rgba(0, 0, 0, 0.4);
+}
+
+.vm-action-confirm__title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.vm-action-confirm__message {
+    font-size: 0.88rem;
+    line-height: 1.45;
+    color: var(--muted-ink);
+    margin-bottom: 14px;
+}
+
+[data-theme="dark"] .vm-action-confirm__message {
+    color: rgba(226, 232, 240, 0.78);
+}
+
+.vm-action-confirm__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.vm-action-confirm__actions button {
+    border-radius: 8px;
+    border: none;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+}
+
+.vm-action-confirm__cancel {
+    background: transparent;
+    color: var(--muted-ink);
+}
+
+.vm-action-confirm__cancel:hover {
+    color: var(--ink);
+}
+
+[data-theme="dark"] .vm-action-confirm__cancel {
+    color: rgba(226, 232, 240, 0.7);
+}
+
+[data-theme="dark"] .vm-action-confirm__cancel:hover {
+    color: rgba(226, 232, 240, 0.95);
+}
+
+.vm-action-confirm__confirm {
+    background: var(--error-color);
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.vm-action-confirm__confirm:hover {
+    background: #dc2626;
+}
+
+.vm-action-confirm__confirm:focus {
+    outline: 2px solid rgba(239, 68, 68, 0.3);
+    outline-offset: 2px;
 }
 
 .vm-overview-panel {
@@ -2334,6 +2467,7 @@ tbody tr:last-child td {
     .vm-action-bar {
         align-self: stretch;
         justify-content: flex-start;
+        margin-left: 0;
     }
 
     .vm-tab-panel {
@@ -2762,4 +2896,44 @@ tbody tr:last-child td {
 /* Single consistent background accent */
 .connection-status-indicator .connection-status-content {
     background: linear-gradient(90deg, transparent, rgba(245, 158, 11, 0.05), transparent);
+}
+
+.vm-action-toast {
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
+.vm-action-toast .connection-status-content {
+    background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.08), transparent);
+}
+
+.vm-action-toast .connection-status-icon {
+    color: #2563eb;
+}
+
+.vm-action-toast--info {
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
+.vm-action-toast--success {
+    border-color: rgba(16, 185, 129, 0.45);
+}
+
+.vm-action-toast--success .connection-status-content {
+    background: linear-gradient(90deg, transparent, rgba(16, 185, 129, 0.08), transparent);
+}
+
+.vm-action-toast--success .connection-status-icon {
+    color: #047857;
+}
+
+.vm-action-toast--error {
+    border-color: rgba(239, 68, 68, 0.5);
+}
+
+.vm-action-toast--error .connection-status-content {
+    background: linear-gradient(90deg, transparent, rgba(239, 68, 68, 0.08), transparent);
+}
+
+.vm-action-toast--error .connection-status-icon {
+    color: #b91c1c;
 }
