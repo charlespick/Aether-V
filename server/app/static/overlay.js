@@ -473,7 +473,6 @@ class ProvisionJobOverlay extends BaseOverlay {
         const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
         const tags = this.renderFieldTags(field, parameterSets);
         const inputControl = this.renderInputControl(field, fieldId);
-        const hint = this.renderFieldHint(field);
 
         return `
             <div class="schema-field" data-field-id="${field.id}">
@@ -486,16 +485,8 @@ class ProvisionJobOverlay extends BaseOverlay {
                 </div>
                 <div class="field-control">${inputControl}</div>
                 ${description}
-                ${hint}
             </div>
         `;
-    }
-
-    renderFieldHint(field) {
-        if (!field || !field.hint) {
-            return '';
-        }
-        return `<p class="field-description field-hint">${this.escapeHtml(field.hint)}</p>`;
     }
 
     renderFieldTags(field, parameterSets) {
@@ -588,10 +579,11 @@ class ProvisionJobOverlay extends BaseOverlay {
         const fieldId = 'schema-vm_name';
         const requiredPill = this.renderRequiredPill(vmField.required);
         const labelText = this.escapeHtml(vmField.label || vmField.id);
-        const description = vmField.description ? `<p class="field-description">${this.escapeHtml(vmField.description)}</p>` : '';
+        const description = vmField.description
+            ? `<p class="field-description">${this.escapeHtml(vmField.description)}</p>`
+            : '';
         const note = '<p class="field-description field-note">This value becomes both the VM name and the guest hostname.</p>';
         const inputControl = this.renderInputControl(vmField, fieldId);
-        const hint = this.renderFieldHint(vmField);
 
         return `
             <div class="primary-field" data-primary="vm-name">
@@ -603,7 +595,6 @@ class ProvisionJobOverlay extends BaseOverlay {
                 </div>
                 <div class="field-control">${inputControl}</div>
                 ${description}
-                ${hint}
                 ${note}
             </div>
         `;
