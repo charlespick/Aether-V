@@ -50,7 +50,7 @@ class VMControlService:
             "Stop-VM",
             hostname,
             vm_name,
-            extra_parameters="-Shutdown -Confirm:$false",
+            extra_parameters="-Confirm:$false",
         )
         return await self._run_command(hostname, vm_name, "shutdown", command)
 
