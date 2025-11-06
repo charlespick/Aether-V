@@ -70,12 +70,13 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=raw,value=latest,enable={{is_default_branch}}
-          type=raw,value=devel,enable=${{ github.ref == 'refs/heads/devel' }}
-          type=ref,event=pr,prefix=pr-
-          type=sha,prefix={{branch}}-
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=devel,enable=${{ github.ref == 'refs/heads/devel' }}
+            type=ref,event=branch
+            type=ref,event=pr,prefix=pr-
+            type=sha,format=short,prefix=sha-
     
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
@@ -129,7 +130,8 @@ jobs:
           - \`latest\` → Latest \`main\` branch build
           - \`devel\` → Latest \`devel\` branch build  
           - \`pr-##\` → Pull request builds
-          - \`{branch}-{sha}\` → Branch-specific builds`;
+          - \`{branch}\` → Branch tracking builds
+          - \`sha-<short>\` → Commit-specific builds`;
           
           github.rest.issues.createComment({
             issue_number: prNumber,
