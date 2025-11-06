@@ -7,7 +7,22 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional
 
-from pypsrp.exceptions import AuthenticationError, PyPSRPError
+# NOTE: Recent pypsrp releases renamed ``PyPSRPError`` to ``PSRPError`` and
+# some expose a camel-case variant (``PypsrpError``).  Importing the legacy
+# symbol now raises an ImportError, which breaks application startup.  To keep
+# compatibility across versions we detect the available class dynamically and
+# fall back to the broadest base exception so our error handling still works.
+from pypsrp import exceptions as _pypsrp_exceptions
+from pypsrp.exceptions import AuthenticationError
+
+if hasattr(_pypsrp_exceptions, "PyPSRPError"):
+    PyPSRPError = _pypsrp_exceptions.PyPSRPError
+elif hasattr(_pypsrp_exceptions, "PSRPError"):
+    PyPSRPError = _pypsrp_exceptions.PSRPError
+elif hasattr(_pypsrp_exceptions, "PypsrpError"):
+    PyPSRPError = _pypsrp_exceptions.PypsrpError
+else:  # pragma: no cover - defensive fallback for unforeseen versions
+    PyPSRPError = Exception
 from pypsrp.powershell import InvocationState, PowerShell, RunspacePool
 from pypsrp.wsman import WSMan
 
