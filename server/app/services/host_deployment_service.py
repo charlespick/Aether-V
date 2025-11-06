@@ -7,12 +7,14 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
-from winrm.exceptions import InvalidCredentialsError, WinRMTransportError
-
 from ..core.config import settings
 from ..core.models import NotificationLevel
 from .notification_service import notification_service
-from .winrm_service import winrm_service
+from .winrm_service import (
+    WinRMAuthenticationError,
+    WinRMTransportError,
+    winrm_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +149,7 @@ class HostDeploymentService:
             else:
                 # Version file doesn't exist, return 0.0.0
                 return "0.0.0"
-        except InvalidCredentialsError as exc:
+        except WinRMAuthenticationError as exc:
             winrm_service.close_session(hostname)
             logger.error(
                 "Authentication failed while retrieving agent version for %s: %s",

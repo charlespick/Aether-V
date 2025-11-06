@@ -32,6 +32,10 @@ Aether-V enables automated, secure, and scalable management of Hyper-V virtual m
 - Hyper-V hosts with WinRM enabled
 - OIDC provider (Azure AD recommended) or disable auth for development
 
+The orchestration service relies on the [`pypsrp`](https://github.com/jborean93/pypsrp) library for PowerShell Remoting Protocol
+(PSRP) communication. Ensure the configured WinRM endpoint and authentication method permit PSRP sessions (NTLM, Basic, or
+CredSSP as configured via `WINRM_TRANSPORT`).
+
 ### Development Setup
 
 1. Create a `.env` file with your settings (see below).
