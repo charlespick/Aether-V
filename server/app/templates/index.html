@@ -94,6 +94,16 @@
         </nav>
 
         <main class="content" id="main" role="main">
+            <div
+                class="startup-banner"
+                id="inventory-status-banner"
+                role="status"
+                aria-live="polite"
+                hidden
+            >
+                <span class="startup-banner-icon" aria-hidden="true">⏳</span>
+                <span id="inventory-status-message">Inventory status loading…</span>
+            </div>
             <div class="page-inner" id="view-container">
                 <!-- Dynamic view content will be rendered here -->
                 <div class="loading">Loading...</div>
@@ -153,6 +163,7 @@
             "websocket_ping_interval": {{ websocket_ping_interval | tojson }},
             "job_schema": {{ job_schema | tojson }},
             "agent_deployment": {{ agent_deployment | tojson }},
+            "inventory_status": {{ inventory_status | tojson }},
             "build": {{ build_metadata_payload | tojson }}
         }
     </script>

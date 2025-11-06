@@ -123,6 +123,7 @@ class InventoryResponse(BaseModel):
     total_clusters: int = 0
     disconnected_count: int = 0
     last_refresh: Optional[datetime] = None
+    refresh_status: Dict[str, Any] = Field(default_factory=dict)
 
 
 class BuildInfo(BaseModel):

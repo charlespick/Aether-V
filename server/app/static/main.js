@@ -3,6 +3,7 @@ const configData = JSON.parse(document.getElementById('config-data').textContent
 window.appConfig = configData;
 window.jobSchema = configData.job_schema || null;
 const authEnabled = configData.auth_enabled;
+let currentInventoryStatus = configData.inventory_status || null;
 
 const defaultAgentDeploymentState = {
     status: 'idle',
@@ -120,10 +121,49 @@ function updateAgentDeploymentState(nextState) {
     return normalized;
 }
 
+function updateInventoryStatusBanner(status) {
+    const banner = document.getElementById('inventory-status-banner');
+    const messageEl = document.getElementById('inventory-status-message');
+
+    if (!banner || !messageEl) {
+        return;
+    }
+
+    currentInventoryStatus = status || null;
+
+    if (
+        !status ||
+        !status.state ||
+        (status.state === 'ready' && status.initial_refresh_complete)
+    ) {
+        banner.setAttribute('hidden', 'hidden');
+        banner.classList.remove('is-warning', 'is-success', 'is-error');
+        return;
+    }
+
+    const level = String(status.level || 'info').toLowerCase();
+    const message = status.message || 'Inventory status unknown.';
+
+    messageEl.textContent = message;
+
+    banner.classList.remove('is-warning', 'is-success', 'is-error');
+    if (level === 'warning') {
+        banner.classList.add('is-warning');
+    } else if (level === 'success') {
+        banner.classList.add('is-success');
+    } else if (level === 'error') {
+        banner.classList.add('is-error');
+    }
+
+    banner.removeAttribute('hidden');
+}
+
 window.applyProvisioningAvailability = applyProvisioningAvailability;
 window.updateAgentDeploymentState = updateAgentDeploymentState;
+window.updateInventoryStatusBanner = updateInventoryStatusBanner;
 
 updateAgentDeploymentState(configData.agent_deployment || defaultAgentDeploymentState);
+updateInventoryStatusBanner(currentInventoryStatus);
 
 // Authentication state
 let userInfo = null;
@@ -779,15 +819,21 @@ async function loadInventory() {
         }
         
         const data = await response.json();
-        
+
         // Update sidebar navigation with hosts and VMs
         updateSidebarNavigation(data);
-        
+        if (data && typeof data === 'object') {
+            updateInventoryStatusBanner(data.refresh_status);
+        } else {
+            updateInventoryStatusBanner(null);
+        }
+
         return data;
         
     } catch (error) {
         console.error('Error loading inventory:', error);
         showError('Failed to load inventory: ' + error.message);
+        updateInventoryStatusBanner(null);
         return null;
     }
 }

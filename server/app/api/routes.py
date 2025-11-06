@@ -200,23 +200,17 @@ async def readiness_check():
             build=_current_build_info(),
         )
 
-    # Otherwise ensure the inventory service has successfully completed
-    # an initial refresh before reporting ready.
-    if not inventory_service.last_refresh:
-        if host_deployment_service.is_startup_in_progress():
-            readiness_status = "deploying_agents"
-        else:
-            readiness_status = "initializing"
-
-        return HealthResponse(
-            status=readiness_status,
-            version=build_metadata.version,
-            timestamp=datetime.utcnow(),
-            build=_current_build_info(),
-        )
+    if not inventory_service.is_available():
+        readiness_status = "initializing"
+    else:
+        status_summary = inventory_service.get_status_summary()
+        readiness_status = "ready"
+        state = status_summary.get("state") if status_summary else None
+        if state and state not in {"ready", "idle"}:
+            readiness_status = f"ready:{state}"
 
     return HealthResponse(
-        status="ready",
+        status=readiness_status,
         version=build_metadata.version,
         timestamp=datetime.utcnow(),
         build=_current_build_info(),
@@ -251,7 +245,8 @@ async def get_inventory(user: dict = Depends(require_permission(Permission.READE
         total_vms=len(vms),
         total_clusters=len(clusters),
         disconnected_count=len(disconnected_hosts),
-        last_refresh=inventory_service.last_refresh
+        last_refresh=inventory_service.last_refresh,
+        refresh_status=inventory_service.get_status_summary(),
     )
 
 

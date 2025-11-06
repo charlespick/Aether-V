@@ -28,6 +28,7 @@ class NotificationService:
         self._websocket_manager = None
         self._startup_config_notified = False
         self._agent_notification_key = "agent-deployment"
+        self._inventory_notification_key = "inventory-refresh"
 
     def set_websocket_manager(self, manager):
         """Set the WebSocket manager for broadcasting notifications."""
@@ -270,6 +271,60 @@ class NotificationService:
             category=NotificationCategory.SYSTEM,
             related_entity=self._agent_notification_key,
             metadata=agent_metadata,
+        )
+
+    def upsert_inventory_notification(
+        self,
+        *,
+        status: str,
+        message: str,
+        level: NotificationLevel,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Notification]:
+        """Create or update the persistent inventory refresh notification."""
+
+        if not self._initialized:
+            logger.warning(
+                "Notification service not initialized, skipping inventory notification update",
+            )
+            return None
+
+        inventory_metadata = dict(metadata or {})
+        inventory_metadata.setdefault("status", status)
+
+        existing = next(
+            (
+                notification
+                for notification in self.notifications.values()
+                if notification.category == NotificationCategory.SYSTEM
+                and notification.related_entity == self._inventory_notification_key
+            ),
+            None,
+        )
+
+        title = {
+            "starting": "Inventory refresh pending",
+            "refreshing": "Inventory refresh in progress",
+            "ready": "Inventory refresh complete",
+            "delayed": "Inventory refresh delayed",
+        }.get(status, "Inventory status update")
+
+        if existing:
+            return self.update_notification(
+                existing.id,
+                title=title,
+                message=message,
+                level=level,
+                metadata={**existing.metadata, **inventory_metadata},
+            )
+
+        return self.create_notification(
+            title=title,
+            message=message,
+            level=level,
+            category=NotificationCategory.SYSTEM,
+            related_entity=self._inventory_notification_key,
+            metadata=inventory_metadata,
         )
 
     def _schedule_broadcast(self, notification: Notification, action: str = 'updated') -> None:

@@ -244,6 +244,7 @@ async def root(request: Request):
                     "build_metadata": build_metadata,
                     "build_metadata_payload": _build_metadata_payload(),
                     "checked_at": checked_at,
+                    "inventory_status": inventory_service.get_status_summary(),
                 },
                 status_code=status.HTTP_200_OK,
             )
@@ -275,6 +276,7 @@ async def root(request: Request):
                     "build_metadata": build_metadata,
                     "build_metadata_payload": _build_metadata_payload(),
                     "app_name": settings.app_name,
+                    "inventory_status": inventory_service.get_status_summary(),
                 },
             )
 
