@@ -76,7 +76,7 @@ jobs:
             type=raw,value=devel,enable=${{ github.ref == 'refs/heads/devel' }}
             type=ref,event=branch
             type=ref,event=pr,prefix=pr-
-            type=sha,format=short
+            type=sha,format=short,prefix=sha-
     
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
