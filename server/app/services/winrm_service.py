@@ -152,9 +152,8 @@ class WinRMService:
         """Yield an opened runspace pool for the target host."""
 
         wsman = self._create_session(hostname)
-        pool = RunspacePool(wsman)
+        pool = self._open_runspace_pool(hostname, wsman)
         try:
-            pool.open()
             yield pool
         finally:
             try:
@@ -167,9 +166,7 @@ class WinRMService:
 
         logger.debug("Creating new runspace pool for %s", hostname)
         wsman = self._create_session(hostname)
-        pool = RunspacePool(wsman)
-        pool.open()
-        return pool
+        return self._open_runspace_pool(hostname, wsman)
 
     def _create_session(self, hostname: str) -> WSMan:
         """Create a new WSMan session using configured credentials."""
@@ -490,6 +487,31 @@ class WinRMService:
                 closer()
             except Exception:  # pragma: no cover - best effort cleanup
                 logger.debug("Failed to close WSMan session cleanly", exc_info=True)
+
+    def _open_runspace_pool(self, hostname: str, wsman: WSMan) -> RunspacePool:
+        """Open a runspace pool and translate connection errors."""
+
+        pool = RunspacePool(wsman)
+        try:
+            pool.open()
+        except AuthenticationError as exc:  # pragma: no cover - network heavy
+            logger.error(
+                "Authentication failure while opening runspace pool on %s: %s",
+                hostname,
+                exc,
+            )
+            self._dispose_session(wsman)
+            raise WinRMAuthenticationError(str(exc)) from exc
+        except PyPSRPError as exc:  # pragma: no cover - network heavy
+            logger.error(
+                "Transport error while opening runspace pool on %s: %s",
+                hostname,
+                exc,
+            )
+            self._dispose_session(wsman)
+            raise WinRMTransportError(str(exc)) from exc
+
+        return pool
 
 
 # Global WinRM service instance

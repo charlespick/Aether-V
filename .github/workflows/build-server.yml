@@ -74,8 +74,9 @@ jobs:
         tags: |
           type=raw,value=latest,enable={{is_default_branch}}
           type=raw,value=devel,enable=${{ github.ref == 'refs/heads/devel' }}
+          type=ref,event=branch
           type=ref,event=pr,prefix=pr-
-          type=sha,prefix={{branch}}-
+          type=raw,value={{- if .Branch -}}{{ regexReplaceAll "[^0-9A-Za-z_.-]" .Branch "-" }}-{{- end -}}{{ sha }}
     
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
