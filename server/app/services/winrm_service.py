@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional
 
-from pypsrp.exceptions import AuthenticationError, PyPSRPError
-from pypsrp.powershell import InvocationState, PowerShell, RunspacePool
+from pypsrp.exceptions import AuthenticationError, PSInvocationState, WinRMError
+from pypsrp.powershell import PowerShell, RunspacePool
 from pypsrp.wsman import WSMan
 
 from ..core.config import settings
@@ -195,7 +195,7 @@ class WinRMService:
         except AuthenticationError as exc:  # pragma: no cover - network heavy
             logger.error("Authentication failed while connecting to %s: %s", hostname, exc)
             raise WinRMAuthenticationError(str(exc)) from exc
-        except PyPSRPError as exc:  # pragma: no cover - network heavy
+        except WinRMError as exc:  # pragma: no cover - network heavy
             logger.error("Failed to create WSMan session to %s: %s", hostname, exc)
             raise WinRMTransportError(str(exc)) from exc
 
@@ -357,7 +357,7 @@ class WinRMService:
         except AuthenticationError as exc:  # pragma: no cover - network heavy
             logger.error("Authentication failure while executing command on %s: %s", hostname, exc)
             raise WinRMAuthenticationError(str(exc)) from exc
-        except PyPSRPError as exc:  # pragma: no cover - network heavy
+        except WinRMError as exc:  # pragma: no cover - network heavy
             logger.error("WinRM execution failed on %s: %s", hostname, exc)
             raise WinRMTransportError(str(exc)) from exc
         finally:
@@ -382,19 +382,21 @@ class WinRMService:
         return exit_code, duration
 
     @staticmethod
-    def _state_complete(state: InvocationState) -> bool:
+    def _state_complete(state: object) -> bool:
         """Return True when the invocation state indicates completion."""
 
-        if isinstance(state, InvocationState):
-            terminal_states = {
-                InvocationState.COMPLETED,
-                InvocationState.FAILED,
-                InvocationState.STOPPED,
-            }
-            disconnected = getattr(InvocationState, "DISCONNECTED", None)
-            if disconnected is not None:
-                terminal_states.add(disconnected)
-            return state in terminal_states
+        terminal_states = {
+            getattr(PSInvocationState, "COMPLETED", None),
+            getattr(PSInvocationState, "FAILED", None),
+            getattr(PSInvocationState, "STOPPED", None),
+        }
+        disconnected = getattr(PSInvocationState, "DISCONNECTED", None)
+        if disconnected is not None:
+            terminal_states.add(disconnected)
+
+        normalized_terminals = {value for value in terminal_states if value is not None}
+        if normalized_terminals and state in normalized_terminals:
+            return True
 
         normalized = str(state).lower()
         return normalized in {"completed", "failed", "stopped", "disconnected"}
