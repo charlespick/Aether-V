@@ -76,7 +76,7 @@ jobs:
             type=raw,value=devel,enable=${{ github.ref == 'refs/heads/devel' }}
             type=ref,event=branch
             type=ref,event=pr,prefix=pr-
-            type=raw,value={{branch}}-{{sha}}
+            type=sha,format=short
     
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
@@ -130,7 +130,8 @@ jobs:
           - \`latest\` → Latest \`main\` branch build
           - \`devel\` → Latest \`devel\` branch build  
           - \`pr-##\` → Pull request builds
-          - \`{branch}-{sha}\` → Branch-specific builds`;
+          - \`{branch}\` → Branch tracking builds
+          - \`sha-<short>\` → Commit-specific builds`;
           
           github.rest.issues.createComment({
             issue_number: prNumber,
