@@ -88,7 +88,10 @@ class Settings(BaseSettings):
 
     # Host deployment settings
     host_install_directory: str = "C:\\Program Files\\Aether-V"
+    host_deployment_timeout: float = 60.0  # Seconds allowed for host deployment WinRM calls
     agent_startup_concurrency: int = 3  # Parallel host deployments during startup
+    agent_startup_ingress_timeout: float = 120.0  # Seconds to wait for ingress readiness
+    agent_startup_ingress_poll_interval: float = 3.0  # Seconds between readiness probes
 
     # Agent artifact download settings
     agent_download_base_url: Optional[AnyHttpUrl] = None

@@ -56,7 +56,10 @@ data:
 
   # Deployment
   # HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Aether-V"  # Default agent path
+  # HOST_DEPLOYMENT_TIMEOUT: "60.0"  # Default: 60 seconds per host WinRM operation
   # AGENT_STARTUP_CONCURRENCY: "3"  # Default: 3 parallel host startups
+  # AGENT_STARTUP_INGRESS_TIMEOUT: "120.0"  # Default: wait up to 120s for ingress readiness
+  # AGENT_STARTUP_INGRESS_POLL_INTERVAL: "3.0"  # Default: poll ingress readiness every 3s
   # AGENT_DOWNLOAD_BASE_URL: "https://aetherv.example.com/agent"  # Required for automated host updates
   # AGENT_DOWNLOAD_MAX_ATTEMPTS: "5"  # Default: 5 download retries
   # AGENT_DOWNLOAD_RETRY_INTERVAL: "2.0"  # Default: 2 seconds between retries

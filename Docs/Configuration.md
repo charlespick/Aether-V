@@ -45,7 +45,10 @@ for the UI banner.
 | `WEBSOCKET_PING_INTERVAL`       | `30`                         | No                      | Heartbeat ping interval in seconds. Align with load balancer expectations.                                           |
 | `WEBSOCKET_REFRESH_TIME`        | `1500`                       | No                      | Client reconnect hint (seconds). Default is 25 minutes.                                                              |
 | `HOST_INSTALL_DIRECTORY`        | `C\\Program Files\\Aether-V` | No                      | Remote path used when deploying assets to Hyper-V hosts. Customize for side-by-side installs.                        |
+| `HOST_DEPLOYMENT_TIMEOUT`       | `60.0`                       | No                      | Seconds allowed for individual WinRM operations during host script deployment.                                       |
 | `AGENT_STARTUP_CONCURRENCY`     | `3`                          | No                      | Parallel host deployments performed during service startup.                                                          |
+| `AGENT_STARTUP_INGRESS_TIMEOUT` | `120.0`                      | No                      | Maximum time to wait for ingress routing before the initial agent deployment begins.                                 |
+| `AGENT_STARTUP_INGRESS_POLL_INTERVAL` | `3.0`                 | No                      | Interval between readiness probes when waiting for ingress routing.                                                 |
 | `AGENT_DOWNLOAD_BASE_URL`       | _(unset)_                    | Recommended             | Externally reachable base URL hosts use to download agent artifacts. Without it, automated deployments are disabled. |
 | `AGENT_DOWNLOAD_MAX_ATTEMPTS`   | `5`                          | No                      | Number of retries when hosts download artifacts.                                                                     |
 | `AGENT_DOWNLOAD_RETRY_INTERVAL` | `2.0`                        | No                      | Seconds between host download retry attempts.                                                                        |

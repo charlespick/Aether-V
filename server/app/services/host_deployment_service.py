@@ -6,7 +6,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
+
+import httpx
 
 from ..core.config import settings, AGENT_ARTIFACTS_DIR
 from ..core.models import NotificationLevel
@@ -79,6 +81,8 @@ class HostDeploymentService:
         self._startup_progress = StartupDeploymentProgress()
         self._startup_lock = asyncio.Lock()
         self._progress_lock = asyncio.Lock()
+        self._ingress_ready = False
+        self._ingress_lock = asyncio.Lock()
 
     def _initialize_agent_download_base_url(self) -> bool:
         """Resolve and cache the agent download base URL if configured."""
@@ -165,7 +169,7 @@ class HostDeploymentService:
     ) -> T:
         """Execute a potentially blocking WinRM call with a timeout."""
 
-        timeout = max(1.0, float(settings.winrm_operation_timeout))
+        timeout = max(1.0, float(settings.host_deployment_timeout))
         start = time.perf_counter()
         logger.debug(
             "Queueing WinRM operation (%s) on %s with timeout %.1fs",
@@ -747,6 +751,7 @@ class HostDeploymentService:
             await self._startup_event.wait()
 
     async def _run_startup_deployment(self, hostnames: List[str]) -> None:
+        await self._wait_for_agent_endpoint_ready()
         logger.info(
             "Deploying provisioning agents to %d host(s) in background", len(hostnames)
         )
@@ -794,6 +799,97 @@ class HostDeploymentService:
 
         async with self._startup_lock:
             self._startup_task = None
+
+    async def _wait_for_agent_endpoint_ready(self) -> None:
+        """Block until ingress routes to this service or a timeout elapses."""
+
+        if self._ingress_ready:
+            return
+
+        if not self._agent_download_base_url:
+            self._ingress_ready = True
+            return
+
+        async with self._ingress_lock:
+            if self._ingress_ready:
+                return
+
+            health_url = self._build_health_check_url()
+            if not health_url:
+                self._ingress_ready = True
+                return
+
+            timeout = max(1.0, float(settings.agent_startup_ingress_timeout))
+            interval = max(0.5, float(settings.agent_startup_ingress_poll_interval))
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            attempt = 0
+            last_error: Optional[str] = None
+
+            logger.info(
+                "Waiting up to %.1fs for ingress routing before deploying host scripts",
+                timeout,
+            )
+
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                while True:
+                    attempt += 1
+                    try:
+                        response = await client.get(health_url, timeout=5.0)
+                    except httpx.HTTPError as exc:
+                        last_error = str(exc)
+                        logger.debug(
+                            "Ingress probe attempt %d failed for %s: %s",
+                            attempt,
+                            health_url,
+                            exc,
+                        )
+                    else:
+                        status = response.status_code
+                        if status != 503 and status < 500:
+                            self._ingress_ready = True
+                            logger.info(
+                                "Ingress readiness confirmed after %d attempt(s) via %s (status=%d)",
+                                attempt,
+                                health_url,
+                                status,
+                            )
+                            return
+
+                        last_error = f"status {status}"
+                        logger.debug(
+                            "Ingress probe attempt %d received HTTP %d from %s",
+                            attempt,
+                            status,
+                            health_url,
+                        )
+
+                    if loop.time() >= deadline:
+                        logger.warning(
+                            "Timed out after %.1fs waiting for ingress readiness; proceeding with host deployment (last error: %s)",
+                            timeout,
+                            last_error or "unknown",
+                        )
+                        self._ingress_ready = True
+                        return
+
+                    await asyncio.sleep(interval)
+
+    def _build_health_check_url(self) -> Optional[str]:
+        """Derive the service health check URL from the agent download base."""
+
+        if not self._agent_download_base_url:
+            return None
+
+        parts = urlsplit(self._agent_download_base_url)
+        if not parts.scheme or not parts.netloc:
+            logger.warning(
+                "Cannot derive health check URL from agent download base %s", self._agent_download_base_url
+            )
+            return None
+
+        root = urlunsplit((parts.scheme, parts.netloc, "/", "", ""))
+        return f"{root.rstrip('/')}/healthz"
 
     async def _deploy_host_startup(
         self, hostname: str, semaphore: asyncio.Semaphore
