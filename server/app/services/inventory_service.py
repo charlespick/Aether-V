@@ -6,6 +6,7 @@ import asyncio
 import json
 import random
 import textwrap
+import time
 
 from ..core.models import Host, VM, VMState, OSFamily, Cluster
 from ..core.config import settings
@@ -371,15 +372,36 @@ class InventoryService:
         """Execute a potentially blocking WinRM call with a timeout."""
 
         timeout = max(1.0, float(settings.winrm_operation_timeout))
+        start = time.perf_counter()
+        logger.debug("Starting inventory WinRM operation (%s) with timeout %.1fs", description, timeout)
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 asyncio.to_thread(func, *args),
                 timeout=timeout,
             )
+            duration = time.perf_counter() - start
+            logger.debug(
+                "Inventory WinRM operation (%s) completed in %.2fs", description, duration
+            )
+            return result
         except asyncio.TimeoutError as exc:
+            logger.error(
+                "Inventory WinRM operation (%s) exceeded timeout of %.1fs",
+                description,
+                timeout,
+            )
             raise TimeoutError(
                 f"Timed out after {timeout:.1f}s during {description}"
             ) from exc
+        except Exception:
+            duration = time.perf_counter() - start
+            logger.debug(
+                "Inventory WinRM operation (%s) raised after %.2fs",
+                description,
+                duration,
+                exc_info=True,
+            )
+            raise
 
     def _test_host_connection(self, hostname: str):
         """Test WinRM connection to a host."""
@@ -388,8 +410,17 @@ class InventoryService:
             hostname, command
         )
 
+        logger.debug(
+            "Connection test on %s exit=%s stdout_len=%d stderr_len=%d",
+            hostname,
+            exit_code,
+            len(stdout.encode("utf-8")),
+            len(stderr.encode("utf-8")),
+        )
+
         if exit_code != 0:
-            raise Exception(f"Connection test failed: {stderr}")
+            preview = stderr.strip() or stdout.strip()
+            raise Exception(f"Connection test failed (exit={exit_code}): {preview}")
 
     def _query_host_vms(self, hostname: str) -> List[VM]:
         """Query VMs from a host using PowerShell."""

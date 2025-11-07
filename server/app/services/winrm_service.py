@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional
 
-from pypsrp.exceptions import AuthenticationError, PSInvocationState, WinRMError
+from pypsrp.exceptions import (
+    AuthenticationError,
+    PSInvocationState,
+    WinRMError,
+    WinRMTransportError as PyWinRMTransportError,
+)
 from pypsrp.powershell import PowerShell, RunspacePool
 from pypsrp.wsman import WSMan
 
@@ -171,12 +176,23 @@ class WinRMService:
     def _create_session(self, hostname: str) -> WSMan:
         """Create a new WSMan session using configured credentials."""
 
+        connection_timeout = int(max(1.0, float(settings.winrm_connection_timeout)))
+        operation_timeout = int(max(1.0, float(settings.winrm_operation_timeout)))
+        read_timeout = int(max(1.0, float(settings.winrm_read_timeout)))
+
         logger.info(
             "Creating WinRM (PSRP) session to %s (port=%s, transport=%s, username=%s)",
             hostname,
             settings.winrm_port,
             settings.winrm_transport,
             settings.winrm_username or "<anonymous>",
+        )
+        logger.debug(
+            "WSMan timeouts for %s -> connection=%ss, operation=%ss, read=%ss",
+            hostname,
+            connection_timeout,
+            operation_timeout,
+            read_timeout,
         )
 
         auth = settings.winrm_transport or "ntlm"
@@ -191,11 +207,14 @@ class WinRMService:
                 auth=auth,
                 ssl=use_ssl,
                 cert_validation=False,
+                connection_timeout=connection_timeout,
+                operation_timeout=operation_timeout,
+                read_timeout=read_timeout,
             )
         except AuthenticationError as exc:  # pragma: no cover - network heavy
             logger.error("Authentication failed while connecting to %s: %s", hostname, exc)
             raise WinRMAuthenticationError(str(exc)) from exc
-        except WinRMError as exc:  # pragma: no cover - network heavy
+        except (PyWinRMTransportError, WinRMError) as exc:  # pragma: no cover - network heavy
             logger.error("Failed to create WSMan session to %s: %s", hostname, exc)
             raise WinRMTransportError(str(exc)) from exc
 
@@ -342,16 +361,46 @@ class WinRMService:
         ps.add_script(script)
 
         start_time = perf_counter()
-        async_handle = None
         completed = False
+        last_state_log = start_time
+        last_state = None
+        poll_timeout = int(
+            max(1.0, min(float(settings.winrm_poll_interval_seconds), float(settings.winrm_operation_timeout)))
+        )
+        logger.debug(
+            "Using poll interval of %ss for PowerShell invocation on %s (operation timeout=%ss)",
+            poll_timeout,
+            hostname,
+            settings.winrm_operation_timeout,
+        )
         try:
-            async_handle = ps.begin_invoke()
+            ps.begin_invoke()
             while True:
-                state = ps.poll_invoke(async_handle)
+                ps.poll_invoke(timeout=poll_timeout)
                 cursor.drain(ps)
+                state = getattr(ps, "state", None)
+                normalized_state = self._normalize_state(state)
+                if state != last_state:
+                    logger.debug(
+                        "PowerShell state for %s transitioned to %s",
+                        hostname,
+                        normalized_state,
+                    )
+                    last_state = state
+
+                now = perf_counter()
+                if now - last_state_log >= 5.0:
+                    logger.debug(
+                        "PowerShell invocation on %s still running (state=%s, had_errors=%s)",
+                        hostname,
+                        normalized_state,
+                        getattr(ps, "had_errors", False),
+                    )
+                    last_state_log = now
+
                 if self._state_complete(state):
                     break
-            ps.end_invoke(async_handle)
+            ps.end_invoke()
             completed = True
             cursor.drain(ps)
         except AuthenticationError as exc:  # pragma: no cover - network heavy
@@ -361,9 +410,9 @@ class WinRMService:
             logger.error("WinRM execution failed on %s: %s", hostname, exc)
             raise WinRMTransportError(str(exc)) from exc
         finally:
-            if async_handle is not None and not completed:
+            if not completed:
                 try:
-                    ps.end_invoke(async_handle)
+                    ps.end_invoke()
                 except Exception:  # pragma: no cover - best effort cleanup
                     logger.debug("Failed to end PowerShell invocation cleanly", exc_info=True)
 
@@ -377,9 +426,27 @@ class WinRMService:
         duration = perf_counter() - start_time
         exit_code = cursor.exit_code
         if exit_code is None:
-            exit_code = 0 if not ps.had_errors else 1
+            exit_code = 0 if not getattr(ps, "had_errors", False) else 1
+
+        logger.debug(
+            "PowerShell invocation on %s finished in %.2fs (state=%s, had_errors=%s)",
+            hostname,
+            duration,
+            self._normalize_state(getattr(ps, "state", None)),
+            getattr(ps, "had_errors", False),
+        )
 
         return exit_code, duration
+
+    @staticmethod
+    def _normalize_state(state: object) -> str:
+        """Return a normalized string representation of a PS invocation state."""
+
+        if isinstance(state, PSInvocationState):
+            return state.name.lower()
+        if state is None:
+            return "unknown"
+        return str(state).lower()
 
     @staticmethod
     def _state_complete(state: object) -> bool:
@@ -398,7 +465,7 @@ class WinRMService:
         if normalized_terminals and state in normalized_terminals:
             return True
 
-        normalized = str(state).lower()
+        normalized = WinRMService._normalize_state(state)
         return normalized in {"completed", "failed", "stopped", "disconnected"}
 
     @staticmethod
@@ -493,6 +560,7 @@ class WinRMService:
     def _open_runspace_pool(self, hostname: str, wsman: WSMan) -> RunspacePool:
         """Open a runspace pool and translate connection errors."""
 
+        start_time = perf_counter()
         pool = RunspacePool(wsman)
         try:
             pool.open()
@@ -504,7 +572,7 @@ class WinRMService:
             )
             self._dispose_session(wsman)
             raise WinRMAuthenticationError(str(exc)) from exc
-        except PyPSRPError as exc:  # pragma: no cover - network heavy
+        except (PyWinRMTransportError, WinRMError) as exc:  # pragma: no cover - network heavy
             logger.error(
                 "Transport error while opening runspace pool on %s: %s",
                 hostname,
@@ -512,6 +580,14 @@ class WinRMService:
             )
             self._dispose_session(wsman)
             raise WinRMTransportError(str(exc)) from exc
+
+        duration = perf_counter() - start_time
+        logger.debug(
+            "Runspace pool on %s opened in %.2fs (max_envelope=%s)",
+            hostname,
+            duration,
+            getattr(pool, "max_envelope_size", "unknown"),
+        )
 
         return pool
 
