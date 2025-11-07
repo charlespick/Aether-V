@@ -1,4 +1,5 @@
 """Main application entry point."""
+
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -12,7 +13,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from .core.config import settings, get_config_validation_result, set_session_secret
+from .core.config import (
+    settings,
+    get_config_validation_result,
+    set_session_secret,
+    AGENT_ARTIFACTS_DIR,
+    AGENT_HTTP_MOUNT_PATH,
+)
 from .core.build_info import build_metadata
 from .core.config_validation import run_config_checks
 from .api.routes import router
@@ -20,13 +27,14 @@ from .services.inventory_service import inventory_service
 from .services.host_deployment_service import host_deployment_service
 from .services.job_service import job_service
 from .services.notification_service import notification_service
+from .services.remote_task_service import remote_task_service
 from .services.websocket_service import websocket_manager
 from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
 
 # Configure logging
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
 logger = logging.getLogger(__name__)
@@ -74,9 +82,13 @@ async def lifespan(app: FastAPI):
             if issue.hint:
                 logger.warning("Hint: %s", issue.hint)
 
+    remote_started = False
     notifications_started = False
     job_started = False
     inventory_started = False
+
+    await remote_task_service.start()
+    remote_started = True
 
     await notification_service.start()
     notifications_started = True
@@ -114,6 +126,8 @@ async def lifespan(app: FastAPI):
             await job_service.stop()
         if notifications_started:
             await notification_service.stop()
+        if remote_started:
+            await remote_task_service.stop()
         logger.info("Application stopped")
 
 
@@ -122,26 +136,27 @@ app = FastAPI(
     title=settings.app_name,
     version=build_metadata.version,
     description="Lightweight orchestration service for Hyper-V virtual machines",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 static_dir = Path("app/static")
 if static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 else:  # pragma: no cover - filesystem dependent
-    logger.warning("Static assets directory '%s' not found; static routes disabled", static_dir)
+    logger.warning(
+        "Static assets directory '%s' not found; static routes disabled", static_dir
+    )
 
-agent_artifacts_dir = Path(settings.agent_artifacts_path)
-if agent_artifacts_dir.is_dir():
+if AGENT_ARTIFACTS_DIR.is_dir():
     app.mount(
-        settings.agent_http_mount_path,
-        StaticFiles(directory=str(agent_artifacts_dir), html=False),
+        AGENT_HTTP_MOUNT_PATH,
+        StaticFiles(directory=str(AGENT_ARTIFACTS_DIR), html=False),
         name="agent",
     )
 else:  # pragma: no cover - filesystem dependent
     logger.warning(
         "Agent artifacts directory '%s' not found; host deployments will be disabled",
-        agent_artifacts_dir,
+        AGENT_ARTIFACTS_DIR,
     )
 
 # Add security headers and audit logging middleware
@@ -157,8 +172,11 @@ async def security_and_audit_middleware(request: Request, call_next):
     user_agent = request.headers.get("user-agent", "unknown")
 
     # Don't log sensitive headers
-    safe_headers = {k: v for k, v in request.headers.items()
-                    if k.lower() not in ['authorization', 'cookie', 'x-api-key']}
+    safe_headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in ["authorization", "cookie", "x-api-key"]
+    }
 
     logger.info(
         f"Request started: {request.method} {request.url.path} "
@@ -185,7 +203,9 @@ async def security_and_audit_middleware(request: Request, call_next):
 
         # Add HSTS in production
         if settings.oidc_force_https:
-            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
 
         # Audit logging (success)
         process_time = time.time() - start_time
@@ -205,6 +225,7 @@ async def security_and_audit_middleware(request: Request, call_next):
         )
         raise
 
+
 # Add session middleware with enhanced security
 # Use secure session configuration for production
 # Store the actual session secret so it can be accessed by WebSocket auth
@@ -213,7 +234,8 @@ if not session_secret:
     # Generate a secure random secret for this session (will require re-login on restart)
     session_secret = secrets.token_urlsafe(32)
     logger.warning(
-        "Generated temporary session secret - set SESSION_SECRET_KEY environment variable for production")
+        "Generated temporary session secret - set SESSION_SECRET_KEY environment variable for production"
+    )
 
 # Store the session secret in the config module so it can be accessed elsewhere
 set_session_secret(session_secret)
@@ -225,7 +247,7 @@ app.add_middleware(
     same_site="lax",  # CSRF protection
     https_only=False,  # Disable for debugging - ingress may terminate HTTPS
     domain=None,  # Don't restrict domain for debugging
-    path="/"  # Ensure cookies work for all paths
+    path="/",  # Ensure cookies work for all paths
     # Note: httponly is always True by default in SessionMiddleware for security
 )
 
@@ -306,7 +328,7 @@ async def root(request: Request):
         # Return a minimal HTML response to prevent 502 errors
         return HTMLResponse(
             content="<html><body><h1>Aether-V Server</h1><p>Loading...</p><script>setTimeout(function(){location.reload()}, 2000);</script></body></html>",
-            status_code=200
+            status_code=200,
         )
 
 
@@ -324,7 +346,7 @@ def main():
         host="0.0.0.0",
         port=8000,
         log_level="debug" if settings.debug else "info",
-        reload=settings.debug
+        reload=settings.debug,
     )
 
 

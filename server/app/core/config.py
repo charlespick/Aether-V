@@ -1,8 +1,18 @@
 """Configuration management using Pydantic settings."""
+
+from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
 from pydantic import AnyHttpUrl
 from pydantic_settings import BaseSettings
+
+
+# Agent artifact locations are baked into the container at build time and do not
+# need to be customised at runtime. They are provided here as module constants so
+# other modules can reference the paths without duplicating literals.
+AGENT_ARTIFACTS_DIR = Path("/app/agent")
+AGENT_HTTP_MOUNT_PATH = "/agent"
+AGENT_VERSION_PATH = AGENT_ARTIFACTS_DIR / "version"
 
 
 class Settings(BaseSettings):
@@ -60,6 +70,12 @@ class Settings(BaseSettings):
     # Job execution settings
     job_worker_concurrency: int = 3  # Maximum concurrent provisioning jobs
 
+    # Remote task execution settings
+    remote_task_min_concurrency: int = 3
+    remote_task_max_concurrency: int = 8
+    remote_task_scale_up_backlog: int = 2
+    remote_task_idle_seconds: float = 30.0
+
     # WebSocket settings
     # WebSocket connection timeout in seconds (30 minutes)
     websocket_timeout: int = 1800
@@ -72,11 +88,9 @@ class Settings(BaseSettings):
 
     # Host deployment settings
     host_install_directory: str = "C:\\Program Files\\Aether-V"
-    agent_startup_concurrency: int = 4  # Parallel host deployments during startup
+    agent_startup_concurrency: int = 3  # Parallel host deployments during startup
 
-    # Agent artifact settings
-    agent_artifacts_path: str = "/app/agent"
-    agent_http_mount_path: str = "/agent"
+    # Agent artifact download settings
     agent_download_base_url: Optional[AnyHttpUrl] = None
     agent_download_max_attempts: int = 5
     agent_download_retry_interval: float = 2.0  # seconds between retries
@@ -92,7 +106,7 @@ class Settings(BaseSettings):
     @property
     def version_file_path(self) -> str:
         """Get path to version file in container."""
-        return f"{self.agent_artifacts_path}/version"
+        return str(AGENT_VERSION_PATH)
 
     class Config:
         env_file = ".env"

@@ -43,6 +43,12 @@ data:
   # Jobs
   # JOB_WORKER_CONCURRENCY: "3"  # Default: 3 concurrent provisioning jobs
 
+  # Remote WinRM execution
+  # REMOTE_TASK_MIN_CONCURRENCY: "3"   # Default: 3 initial concurrent remote operations
+  # REMOTE_TASK_MAX_CONCURRENCY: "8"   # Default: 8 concurrent remote operations when under load
+  # REMOTE_TASK_SCALE_UP_BACKLOG: "2"  # Default: scale up when at least this many tasks are queued
+  # REMOTE_TASK_IDLE_SECONDS: "30.0"   # Default: idle time before scaling workers down
+
   # WebSockets
   # WEBSOCKET_TIMEOUT: "1800"  # Default: 1800 seconds
   # WEBSOCKET_PING_INTERVAL: "30"  # Default: 30 seconds
@@ -50,9 +56,7 @@ data:
 
   # Deployment
   # HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Aether-V"  # Default agent path
-  # AGENT_STARTUP_CONCURRENCY: "4"  # Default: 4 parallel host startups
-  # AGENT_ARTIFACTS_PATH: "/app/agent"  # Default: embedded artifact path
-  # AGENT_HTTP_MOUNT_PATH: "/agent"  # Default: HTTP mount point
+  # AGENT_STARTUP_CONCURRENCY: "3"  # Default: 3 parallel host startups
   # AGENT_DOWNLOAD_BASE_URL: "https://aetherv.example.com/agent"  # Required for automated host updates
   # AGENT_DOWNLOAD_MAX_ATTEMPTS: "5"  # Default: 5 download retries
   # AGENT_DOWNLOAD_RETRY_INTERVAL: "2.0"  # Default: 2 seconds between retries
