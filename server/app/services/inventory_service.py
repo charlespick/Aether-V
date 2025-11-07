@@ -37,6 +37,16 @@ T = TypeVar("T")
 INVENTORY_SCRIPT_NAME = "Inventory.Collect.ps1"
 
 
+class InventoryScriptMissingError(RuntimeError):
+    """Raised when the inventory collection script is missing on the host."""
+
+    def __init__(self, hostname: str, script_path: str, message: str):
+        super().__init__(message)
+        self.hostname = hostname
+        self.script_path = script_path
+        self.detail = message
+
+
 class InventoryService:
     """Service for managing inventory of hosts and VMs."""
 
@@ -62,6 +72,13 @@ class InventoryService:
 
         self._initial_refresh_event.clear()
         self._initial_refresh_succeeded = False
+
+        await host_deployment_service.wait_for_startup()
+        deployment_summary = host_deployment_service.get_startup_summary()
+        logger.info(
+            "Host deployment startup sequence complete (status=%s)",
+            deployment_summary.get("status"),
+        )
 
         if settings.dummy_data:
             logger.info("DUMMY_DATA enabled - using development data")
@@ -563,12 +580,7 @@ class InventoryService:
         logger.info(f"Refreshing inventory for host: {hostname}")
 
         try:
-            payload = await self._run_winrm_call(
-                hostname,
-                self._collect_host_inventory,
-                description=f"inventory collection for {hostname}",
-            )
-
+            payload = await self._collect_with_recovery(hostname)
             cluster_name, vms = self._parse_inventory_snapshot(hostname, payload)
 
             # Check if host was previously disconnected and create reconnection notification
@@ -646,6 +658,50 @@ class InventoryService:
             # Clear non-placeholder VMs for the unreachable host
             self._clear_host_vms(hostname, preserve_placeholders=True)
             self._host_last_refresh.pop(hostname, None)
+
+    async def _collect_with_recovery(self, hostname: str) -> Dict[str, Any]:
+        """Collect inventory from a host, redeploying scripts if they are missing."""
+
+        attempt = 0
+
+        while True:
+            attempt += 1
+            try:
+                return await self._run_winrm_call(
+                    hostname,
+                    self._collect_host_inventory,
+                    description=f"inventory collection for {hostname}",
+                )
+            except InventoryScriptMissingError as exc:
+                logger.warning(
+                    "Inventory script missing on %s; attempting redeployment (attempt %d)",
+                    hostname,
+                    attempt,
+                )
+
+                if not host_deployment_service.is_enabled:
+                    raise RuntimeError(
+                        "Required inventory scripts are missing and host deployment service is disabled"
+                    ) from exc
+
+                redeployed = await host_deployment_service.ensure_host_setup(hostname)
+
+                if not redeployed:
+                    raise RuntimeError(
+                        "Redeployment failed while recovering missing inventory scripts"
+                    ) from exc
+
+                if attempt >= 2:
+                    raise RuntimeError(
+                        "Inventory scripts still missing after redeployment"
+                    ) from exc
+
+                logger.info(
+                    "Redeployment of scripts to %s succeeded; retrying inventory collection",
+                    hostname,
+                )
+                await asyncio.sleep(0)
+                continue
 
     async def _run_winrm_call(
         self,
@@ -726,6 +782,23 @@ class InventoryService:
 
         if exit_code != 0:
             preview = stderr.strip() or stdout.strip()
+            lowered_preview = preview.lower()
+            normalised_path = script_path.lower()
+
+            missing_tokens = (
+                "not recognized" in lowered_preview
+                or "cannot find" in lowered_preview
+                or "cannot be found" in lowered_preview
+            )
+            mentions_script = normalised_path in lowered_preview
+
+            if missing_tokens and mentions_script:
+                raise InventoryScriptMissingError(
+                    hostname,
+                    script_path,
+                    f"Inventory script missing on {hostname}: {preview}",
+                )
+
             raise RuntimeError(
                 f"Inventory collection failed (exit={exit_code}): {preview}"
             )

@@ -102,6 +102,15 @@ async def lifespan(app: FastAPI):
         settings.get_hyperv_hosts_list()
     )
 
+    await host_deployment_service.wait_for_startup()
+    deployment_summary = host_deployment_service.get_startup_summary()
+    logger.info(
+        "Startup agent deployment finished with status=%s (success=%d failed=%d)",
+        deployment_summary.get("status"),
+        deployment_summary.get("successful_hosts", 0),
+        deployment_summary.get("failed_hosts", 0),
+    )
+
     if not config_result.has_errors:
         await job_service.start()
         job_started = True
