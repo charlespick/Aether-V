@@ -1,7 +1,7 @@
 """Inventory management service for tracking Hyper-V hosts and VMs."""
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Set, Any
+from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 import asyncio
 import json
 import random
@@ -13,6 +13,9 @@ from .winrm_service import winrm_service
 from .host_deployment_service import host_deployment_service
 
 logger = logging.getLogger(__name__)
+
+
+T = TypeVar("T")
 
 
 class InventoryService:
@@ -270,21 +273,24 @@ class InventoryService:
 
         try:
             # Test connection
-            await asyncio.to_thread(
+            await self._run_winrm_call(
                 self._test_host_connection,
-                hostname
+                hostname,
+                description=f"connection test for {hostname}",
             )
 
             # Query VMs
-            vms = await asyncio.to_thread(
+            vms = await self._run_winrm_call(
                 self._query_host_vms,
-                hostname
+                hostname,
+                description=f"VM query for {hostname}",
             )
 
             # Determine cluster assignment
-            cluster_name = await asyncio.to_thread(
+            cluster_name = await self._run_winrm_call(
                 self._query_host_cluster,
-                hostname
+                hostname,
+                description=f"cluster lookup for {hostname}",
             )
             if not cluster_name:
                 cluster_name = "Default"
@@ -355,6 +361,25 @@ class InventoryService:
 
             # Clear non-placeholder VMs for the unreachable host
             self._clear_host_vms(hostname, preserve_placeholders=True)
+
+    async def _run_winrm_call(
+        self,
+        func: Callable[..., T],
+        *args: Any,
+        description: str,
+    ) -> T:
+        """Execute a potentially blocking WinRM call with a timeout."""
+
+        timeout = max(1.0, float(settings.winrm_operation_timeout))
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(func, *args),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"Timed out after {timeout:.1f}s during {description}"
+            ) from exc
 
     def _test_host_connection(self, hostname: str):
         """Test WinRM connection to a host."""
