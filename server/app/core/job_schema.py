@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA_CACHE: Optional[Dict[str, Any]] = None
 
-DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "Schemas" / "job-inputs.yaml"
+_DEFAULT_SCHEMA_PATH_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "Schemas" / "job-inputs.yaml",
+    Path(__file__).resolve().parents[3] / "Schemas" / "job-inputs.yaml",
+]
 
 _HOSTNAME_PATTERN = re.compile(
     r"^(?=.{1,255}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
@@ -37,7 +40,15 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
     """Load and validate the job input schema from disk."""
 
     global _SCHEMA_CACHE
-    schema_path = Path(path) if path else DEFAULT_SCHEMA_PATH
+    if path:
+        schema_path = Path(path)
+    else:
+        for candidate in _DEFAULT_SCHEMA_PATH_CANDIDATES:
+            if candidate.exists():
+                schema_path = candidate
+                break
+        else:
+            schema_path = _DEFAULT_SCHEMA_PATH_CANDIDATES[0]
 
     if not schema_path.exists():
         raise SchemaValidationError([f"Schema file not found: {schema_path}"])

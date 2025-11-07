@@ -4,7 +4,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
 from urllib.parse import quote
 
 from ..core.config import settings
@@ -54,6 +54,9 @@ class StartupDeploymentProgress:
             "last_error": self.last_error,
             "per_host": dict(self.per_host),
         }
+
+
+T = TypeVar("T")
 
 
 class HostDeploymentService:
@@ -119,14 +122,22 @@ class HostDeploymentService:
 
         try:
             # Check host version in a worker thread because it performs network I/O
-            host_version = await asyncio.to_thread(self._get_host_version, hostname)
+            host_version = await self._run_winrm_call(
+                self._get_host_version,
+                hostname,
+                description=f"version check for {hostname}",
+            )
             logger.info(f"Host {hostname} version: {host_version}")
 
             if self._needs_update(host_version):
                 logger.info(
                     f"Host {hostname} needs update from {host_version} to {self._container_version}"
                 )
-                return await asyncio.to_thread(self._deploy_to_host, hostname)
+                return await self._run_winrm_call(
+                    self._deploy_to_host,
+                    hostname,
+                    description=f"deployment for {hostname}",
+                )
 
             logger.info(f"Host {hostname} is up-to-date")
             return True
@@ -135,6 +146,39 @@ class HostDeploymentService:
             logger.error(f"Failed to ensure host setup for {hostname}: {e}")
             return False
     
+    async def _run_winrm_call(
+        self,
+        func: Callable[..., T],
+        *args: Any,
+        description: str,
+    ) -> T:
+        """Execute a potentially blocking WinRM call with a timeout."""
+
+        timeout = max(1.0, float(settings.winrm_operation_timeout))
+        start = time.perf_counter()
+        logger.debug("Starting WinRM operation (%s) with timeout %.1fs", description, timeout)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(func, *args),
+                timeout=timeout,
+            )
+            duration = time.perf_counter() - start
+            logger.debug("WinRM operation (%s) completed in %.2fs", description, duration)
+            return result
+        except asyncio.TimeoutError as exc:
+            logger.error(
+                "WinRM operation (%s) exceeded timeout of %.1fs", description, timeout
+            )
+            raise TimeoutError(
+                f"Timed out after {timeout:.1f}s during {description}"
+            ) from exc
+        except Exception:
+            duration = time.perf_counter() - start
+            logger.debug(
+                "WinRM operation (%s) raised after %.2fs", description, duration, exc_info=True
+            )
+            raise
+
     def _get_host_version(self, hostname: str) -> str:
         """Get the version currently deployed on a host."""
         version_file_path = f"{settings.host_install_directory}\\version"
@@ -144,10 +188,23 @@ class HostDeploymentService:
         try:
             stdout, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
 
+            logger.debug(
+                "Host version command on %s returned exit=%s stdout_len=%d stderr_len=%d",
+                hostname,
+                exit_code,
+                len(stdout.encode('utf-8')),
+                len(stderr.encode('utf-8')),
+            )
+
             if exit_code == 0 and stdout.strip():
                 return stdout.strip()
             else:
                 # Version file doesn't exist, return 0.0.0
+                logger.debug(
+                    "Host %s did not return a version; treating as 0.0.0 (exit=%s)",
+                    hostname,
+                    exit_code,
+                )
                 return "0.0.0"
         except WinRMAuthenticationError as exc:
             winrm_service.close_session(hostname)

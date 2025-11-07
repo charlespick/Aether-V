@@ -2,13 +2,15 @@
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+import secrets
+import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-import uvicorn
-import secrets
 
 from .core.config import settings, get_config_validation_result, set_session_secret
 from .core.build_info import build_metadata
@@ -93,7 +95,9 @@ async def lifespan(app: FastAPI):
         job_started = True
         await inventory_service.start()
         inventory_started = True
-        logger.info("Application started successfully")
+        logger.info(
+            "Application services initialised; inventory refresh will continue in the background"
+        )
     else:
         logger.error(
             "Skipping job and inventory service startup because configuration errors were detected."
@@ -121,12 +125,24 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-app.mount(
-    settings.agent_http_mount_path,
-    StaticFiles(directory=settings.agent_artifacts_path, html=False),
-    name="agent",
-)
+static_dir = Path("app/static")
+if static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+else:  # pragma: no cover - filesystem dependent
+    logger.warning("Static assets directory '%s' not found; static routes disabled", static_dir)
+
+agent_artifacts_dir = Path(settings.agent_artifacts_path)
+if agent_artifacts_dir.is_dir():
+    app.mount(
+        settings.agent_http_mount_path,
+        StaticFiles(directory=str(agent_artifacts_dir), html=False),
+        name="agent",
+    )
+else:  # pragma: no cover - filesystem dependent
+    logger.warning(
+        "Agent artifacts directory '%s' not found; host deployments will be disabled",
+        agent_artifacts_dir,
+    )
 
 # Add security headers and audit logging middleware
 

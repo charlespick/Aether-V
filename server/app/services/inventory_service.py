@@ -1,18 +1,31 @@
 """Inventory management service for tracking Hyper-V hosts and VMs."""
-import logging
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Set, Any
 import asyncio
+import hashlib
 import json
+import logging
 import random
 import textwrap
+import time
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, TypeVar
 
-from ..core.models import Host, VM, VMState, OSFamily, Cluster
 from ..core.config import settings
-from .winrm_service import winrm_service
+from ..core.models import (
+    Cluster,
+    Host,
+    NotificationLevel,
+    OSFamily,
+    VM,
+    VMState,
+)
 from .host_deployment_service import host_deployment_service
+from .notification_service import notification_service
+from .winrm_service import winrm_service
 
 logger = logging.getLogger(__name__)
+
+
+T = TypeVar("T")
 
 
 class InventoryService:
@@ -24,26 +37,78 @@ class InventoryService:
         self.vms: Dict[str, VM] = {}  # Key is "hostname:vmname"
         self.last_refresh: Optional[datetime] = None
         self._refresh_task: Optional[asyncio.Task] = None
+        self._initial_refresh_task: Optional[asyncio.Task] = None
+        self._refresh_lock = asyncio.Lock()
         self._job_vm_placeholders: Dict[str, Set[str]] = {}
+        self._host_last_refresh: Dict[str, datetime] = {}
+        self._inventory_status_key = "inventory-loading"
+        self._refresh_overrun_key = "inventory-refresh-capacity"
+        self._refresh_overrun_active = False
+        self._initial_refresh_event = asyncio.Event()
+        self._initial_refresh_succeeded = False
 
     async def start(self):
         """Start the inventory service and begin periodic refresh."""
         logger.info("Starting inventory service")
 
+        self._initial_refresh_event.clear()
+        self._initial_refresh_succeeded = False
+
         if settings.dummy_data:
             logger.info("DUMMY_DATA enabled - using development data")
             await self._initialize_dummy_data()
+            self._refresh_task = asyncio.create_task(self._dummy_refresh_loop())
+            self._initial_refresh_task = None
+            self._initial_refresh_event.set()
+            self._initial_refresh_succeeded = True
+            return
+
+        if host_deployment_service.is_startup_in_progress():
+            logger.info(
+                "Host agent deployment running in background; continuing inventory startup"
+            )
+
+        self._notify_inventory_status(
+            title="Inventory refresh in progress",
+            message=(
+                "Initial inventory synchronisation is running; host and VM data may be "
+                "incomplete until it finishes."
+            ),
+            level=NotificationLevel.INFO,
+            metadata={"phase": "startup"},
+        )
+
+        loop = asyncio.get_running_loop()
+        self._initial_refresh_task = loop.create_task(self._run_initial_refresh())
+        self._refresh_task = loop.create_task(self._staggered_refresh_loop())
+
+    async def _run_initial_refresh(self) -> None:
+        try:
+            await self.refresh_inventory(reason="startup")
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception("Initial inventory refresh failed: %s", exc)
+            self._notify_inventory_status(
+                title="Inventory refresh failed",
+                message=(
+                    "Initial inventory synchronisation failed: %s. Background refresh "
+                    "will continue attempting to update data."
+                ) % exc,
+                level=NotificationLevel.ERROR,
+                metadata={"phase": "startup", "error": str(exc)},
+            )
         else:
-            if host_deployment_service.is_startup_in_progress():
-                logger.info(
-                    "Host agent deployment running in background; continuing inventory startup"
-                )
-
-            # Refresh inventory without waiting for agent deployment to finish
-            await self.refresh_inventory()
-
-        # Start background refresh task
-        self._refresh_task = asyncio.create_task(self._periodic_refresh())
+            self._initial_refresh_succeeded = True
+            self._notify_inventory_status(
+                title="Inventory synchronised",
+                message="Initial inventory synchronisation completed successfully.",
+                level=NotificationLevel.SUCCESS,
+                metadata={
+                    "phase": "startup",
+                    "last_refresh": self.last_refresh.isoformat() if self.last_refresh else None,
+                },
+            )
+        finally:
+            self._initial_refresh_event.set()
 
     async def stop(self):
         """Stop the inventory service."""
@@ -54,6 +119,17 @@ class InventoryService:
                 await self._refresh_task
             except asyncio.CancelledError:
                 pass
+            self._refresh_task = None
+        if self._initial_refresh_task:
+            self._initial_refresh_task.cancel()
+            try:
+                await self._initial_refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._initial_refresh_task = None
+
+        notification_service.clear_system_notification(self._inventory_status_key)
+        notification_service.clear_system_notification(self._refresh_overrun_key)
 
     async def _initialize_dummy_data(self):
         """Initialize with dummy data for development."""
@@ -196,56 +272,212 @@ class InventoryService:
             logger.info(f"Artifact deployment completed successfully "
                         f"to all {successful} host(s)")
 
-    async def _periodic_refresh(self):
-        """Periodically refresh inventory."""
+    async def _dummy_refresh_loop(self):
+        """Periodically refresh dummy inventory data for development mode."""
         while True:
             try:
                 await asyncio.sleep(settings.inventory_refresh_interval)
-                await self.refresh_inventory()
+                await self._refresh_dummy_data()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Error in periodic inventory refresh: {e}")
+            except Exception as exc:
+                logger.error("Error in dummy inventory refresh: %s", exc)
 
-    async def refresh_inventory(self):
-        """Refresh inventory from all configured hosts."""
+    async def _staggered_refresh_loop(self):
+        """Spread inventory refreshes across the configured interval."""
+
+        interval = max(1.0, float(settings.inventory_refresh_interval))
+
+        while True:
+            cycle_start = time.perf_counter()
+            host_list = [host for host in settings.get_hyperv_hosts_list() if host]
+
+            if not host_list:
+                logger.debug("No Hyper-V hosts configured; sleeping until next interval")
+                await asyncio.sleep(interval)
+                self._finalise_cycle_refresh([], cycle_start, interval)
+                continue
+
+            ordered_hosts = self._ordered_hosts(host_list)
+            per_host_delay = interval / max(len(ordered_hosts), 1)
+
+            for index, hostname in enumerate(ordered_hosts):
+                rebuild_clusters = index == len(ordered_hosts) - 1
+                try:
+                    await self.refresh_inventory(
+                        [hostname],
+                        rebuild_clusters=rebuild_clusters,
+                        reason="background",
+                    )
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.error("Background refresh for %s failed: %s", hostname, exc)
+
+                if index < len(ordered_hosts) - 1:
+                    await asyncio.sleep(per_host_delay)
+
+            self._finalise_cycle_refresh(ordered_hosts, cycle_start, interval)
+
+            elapsed = time.perf_counter() - cycle_start
+            remaining = interval - elapsed
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+
+    def _ordered_hosts(self, hosts: Iterable[str]) -> List[str]:
+        return sorted(
+            hosts,
+            key=lambda host: (self._stable_host_hash(host), host.lower()),
+        )
+
+    def _finalise_cycle_refresh(
+        self, hosts_in_cycle: Iterable[str], cycle_start: float, interval: float
+    ) -> None:
+        duration = time.perf_counter() - cycle_start
+        cycle_hosts = list(hosts_in_cycle)
+        host_count = len(cycle_hosts)
+        configured_hosts = [host for host in settings.get_hyperv_hosts_list() if host]
+
+        if not configured_hosts:
+            # Inventory cleared elsewhere when no hosts are configured, but ensure
+            # last_refresh stays current so readiness probes succeed.
+            self.last_refresh = datetime.utcnow()
+            self._notify_inventory_status(
+                title="Inventory synchronised",
+                message="No Hyper-V hosts are configured; inventory data is empty.",
+                level=NotificationLevel.INFO,
+                metadata={
+                    "hosts_in_cycle": host_count,
+                    "cycle_duration_seconds": round(duration, 2),
+                    "interval_seconds": interval,
+                    "hosts": cycle_hosts,
+                },
+            )
+            self._handle_refresh_overrun(duration, interval, host_count)
+            return
+
+        if self.last_refresh:
+            metadata = {
+                "hosts_in_cycle": host_count,
+                "cycle_duration_seconds": round(duration, 2),
+                "interval_seconds": interval,
+                "last_refresh": self.last_refresh.isoformat(),
+                "hosts": cycle_hosts,
+            }
+            self._notify_inventory_status(
+                title="Inventory synchronised",
+                message=(
+                    "Inventory data is current; background refresh continues in a "
+                    "staggered cycle."
+                ),
+                level=NotificationLevel.SUCCESS,
+                metadata=metadata,
+            )
+
+        self._handle_refresh_overrun(duration, interval, host_count)
+
+    def _handle_refresh_overrun(
+        self, duration: float, interval: float, host_count: int
+    ) -> None:
+        if host_count == 0:
+            if self._refresh_overrun_active:
+                notification_service.clear_system_notification(
+                    self._refresh_overrun_key
+                )
+                self._refresh_overrun_active = False
+            return
+
+        if duration > interval:
+            message = (
+                "Inventory background refresh took %.1fs which exceeds the configured "
+                "interval of %.1fs. Consider adding resources or increasing the "
+                "inventory refresh interval."
+            ) % (duration, interval)
+            metadata = {
+                "cycle_duration_seconds": round(duration, 2),
+                "interval_seconds": interval,
+                "hosts_in_cycle": host_count,
+            }
+            notification_service.upsert_system_notification(
+                self._refresh_overrun_key,
+                title="Inventory refresh saturation detected",
+                message=message,
+                level=NotificationLevel.WARNING,
+                metadata=metadata,
+            )
+            self._refresh_overrun_active = True
+        elif self._refresh_overrun_active:
+            notification_service.clear_system_notification(self._refresh_overrun_key)
+            self._refresh_overrun_active = False
+
+    def _notify_inventory_status(
+        self,
+        *,
+        title: str,
+        message: str,
+        level: NotificationLevel,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        notification_service.upsert_system_notification(
+            self._inventory_status_key,
+            title=title,
+            message=message,
+            level=level,
+            metadata=metadata,
+        )
+
+    def _stable_host_hash(self, hostname: str) -> int:
+        return int(hashlib.sha1(hostname.encode("utf-8")).hexdigest(), 16)
+
+    async def refresh_inventory(
+        self,
+        hostnames: Optional[Sequence[str]] = None,
+        *,
+        rebuild_clusters: bool = True,
+        reason: str = "manual",
+    ) -> None:
+        """Refresh inventory from configured hosts."""
+
         if settings.dummy_data:
-            # In dummy mode, just refresh timestamp and maybe randomize states
             await self._refresh_dummy_data()
             return
 
-        logger.info("Refreshing inventory")
+        configured_hosts = [host for host in settings.get_hyperv_hosts_list() if host]
+        target_hosts = (
+            [host for host in hostnames if host] if hostnames is not None else configured_hosts
+        )
 
-        host_list = settings.get_hyperv_hosts_list()
-
-        if not host_list:
-            logger.warning("No Hyper-V hosts configured")
-            # Clear any existing clusters and hosts since none are configured
-            self.clusters.clear()
-            self.hosts.clear()
-            self.vms.clear()
-            # Still set last_refresh to indicate the service is ready
-            self.last_refresh = datetime.utcnow()
+        if not configured_hosts:
+            logger.info("No Hyper-V hosts configured; clearing inventory state")
+            async with self._refresh_lock:
+                self.clusters.clear()
+                self.hosts.clear()
+                self.vms.clear()
+                self._host_last_refresh.clear()
+                self.last_refresh = datetime.utcnow()
             return
 
-        # Query each host first to determine which are actually connected
-        connected_hosts: List[str] = []
-        for hostname in host_list:
-            await self._refresh_host(hostname)
-            host = self.hosts.get(hostname)
-            if host and host.connected:
-                connected_hosts.append(hostname)
+        if not target_hosts:
+            logger.debug("No target hosts provided for refresh; skipping")
+            return
 
-        if not connected_hosts:
-            logger.info("No hosts are currently connected")
-            self._rebuild_clusters(host_list)
-            self.vms.clear()
-        else:
-            self._rebuild_clusters(host_list)
+        async with self._refresh_lock:
+            logger.info(
+                "Refreshing inventory (%s) for %d host(s)",
+                reason,
+                len(target_hosts),
+            )
 
-        self.last_refresh = datetime.utcnow()
-        logger.info(
-            f"Inventory refresh completed. Connected hosts: {len(connected_hosts)}, Total VMs: {len(self.vms)}")
+            for hostname in target_hosts:
+                await self._refresh_host(hostname)
+
+            if rebuild_clusters:
+                self._rebuild_clusters(configured_hosts)
+                self.last_refresh = datetime.utcnow()
+                logger.info(
+                    "Inventory refresh (%s) completed. Connected hosts: %d, Total VMs: %d",
+                    reason,
+                    len([host for host in self.hosts.values() if host.connected]),
+                    len(self.vms),
+                )
 
     async def _refresh_dummy_data(self):
         """Refresh dummy data with some random state changes."""
@@ -270,21 +502,24 @@ class InventoryService:
 
         try:
             # Test connection
-            await asyncio.to_thread(
+            await self._run_winrm_call(
                 self._test_host_connection,
-                hostname
+                hostname,
+                description=f"connection test for {hostname}",
             )
 
             # Query VMs
-            vms = await asyncio.to_thread(
+            vms = await self._run_winrm_call(
                 self._query_host_vms,
-                hostname
+                hostname,
+                description=f"VM query for {hostname}",
             )
 
             # Determine cluster assignment
-            cluster_name = await asyncio.to_thread(
+            cluster_name = await self._run_winrm_call(
                 self._query_host_cluster,
-                hostname
+                hostname,
+                description=f"cluster lookup for {hostname}",
             )
             if not cluster_name:
                 cluster_name = "Default"
@@ -308,6 +543,8 @@ class InventoryService:
                 last_seen=datetime.utcnow(),
                 error=None
             )
+
+            self._host_last_refresh[hostname] = datetime.utcnow()
 
             expected_keys = {f"{hostname}:{vm.name}" for vm in vms}
 
@@ -355,6 +592,47 @@ class InventoryService:
 
             # Clear non-placeholder VMs for the unreachable host
             self._clear_host_vms(hostname, preserve_placeholders=True)
+            self._host_last_refresh.pop(hostname, None)
+
+    async def _run_winrm_call(
+        self,
+        func: Callable[..., T],
+        *args: Any,
+        description: str,
+    ) -> T:
+        """Execute a potentially blocking WinRM call with a timeout."""
+
+        timeout = max(1.0, float(settings.winrm_operation_timeout))
+        start = time.perf_counter()
+        logger.debug("Starting inventory WinRM operation (%s) with timeout %.1fs", description, timeout)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(func, *args),
+                timeout=timeout,
+            )
+            duration = time.perf_counter() - start
+            logger.debug(
+                "Inventory WinRM operation (%s) completed in %.2fs", description, duration
+            )
+            return result
+        except asyncio.TimeoutError as exc:
+            logger.error(
+                "Inventory WinRM operation (%s) exceeded timeout of %.1fs",
+                description,
+                timeout,
+            )
+            raise TimeoutError(
+                f"Timed out after {timeout:.1f}s during {description}"
+            ) from exc
+        except Exception:
+            duration = time.perf_counter() - start
+            logger.debug(
+                "Inventory WinRM operation (%s) raised after %.2fs",
+                description,
+                duration,
+                exc_info=True,
+            )
+            raise
 
     def _test_host_connection(self, hostname: str):
         """Test WinRM connection to a host."""
@@ -363,8 +641,17 @@ class InventoryService:
             hostname, command
         )
 
+        logger.debug(
+            "Connection test on %s exit=%s stdout_len=%d stderr_len=%d",
+            hostname,
+            exit_code,
+            len(stdout.encode("utf-8")),
+            len(stderr.encode("utf-8")),
+        )
+
         if exit_code != 0:
-            raise Exception(f"Connection test failed: {stderr}")
+            preview = stderr.strip() or stdout.strip()
+            raise Exception(f"Connection test failed (exit={exit_code}): {preview}")
 
     def _query_host_vms(self, hostname: str) -> List[VM]:
         """Query VMs from a host using PowerShell."""
@@ -643,6 +930,12 @@ class InventoryService:
         """Get a specific VM."""
         key = f"{hostname}:{vm_name}"
         return self.vms.get(key)
+
+    def has_completed_initial_refresh(self) -> bool:
+        return self._initial_refresh_event.is_set()
+
+    def initial_refresh_succeeded(self) -> bool:
+        return self._initial_refresh_succeeded
 
 
 # Global inventory service instance

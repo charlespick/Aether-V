@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     winrm_password: Optional[str] = None
     winrm_transport: str = "ntlm"  # ntlm, basic, or credssp
     winrm_port: int = 5985
+    winrm_operation_timeout: float = 15.0  # seconds to wait for WinRM calls
+    winrm_connection_timeout: float = 30.0  # network connect timeout in seconds
+    winrm_read_timeout: float = 30.0  # HTTP read timeout in seconds
+    winrm_poll_interval_seconds: float = 1.0  # how long to wait between poll cycles
 
     # Inventory settings
     inventory_refresh_interval: int = 60  # seconds
