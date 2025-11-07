@@ -28,6 +28,7 @@ class NotificationService:
         self._websocket_manager = None
         self._startup_config_notified = False
         self._agent_notification_key = "agent-deployment"
+        self._system_notification_ids: Dict[str, str] = {}
 
     def set_websocket_manager(self, manager):
         """Set the WebSocket manager for broadcasting notifications."""
@@ -212,6 +213,68 @@ class NotificationService:
         self._schedule_broadcast(notification, action='created')
 
         return notification
+
+    def upsert_system_notification(
+        self,
+        key: str,
+        *,
+        title: str,
+        message: str,
+        level: NotificationLevel,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Notification]:
+        """Create or update a long-lived system notification addressed by a key."""
+
+        if not self._initialized:
+            logger.warning(
+                "Notification service not initialized, skipping system notification update",
+            )
+            return None
+
+        notification_id = self._system_notification_ids.get(key)
+        related_entity = f"system:{key}"
+        metadata = metadata or {}
+
+        if notification_id and notification_id in self.notifications:
+            updated = self.update_notification(
+                notification_id,
+                title=title,
+                message=message,
+                level=level,
+                metadata={**self.notifications[notification_id].metadata, **metadata},
+            )
+            if updated:
+                return updated
+
+        notification = self.create_notification(
+            title=title,
+            message=message,
+            level=level,
+            category=NotificationCategory.SYSTEM,
+            related_entity=related_entity,
+            metadata=metadata,
+        )
+
+        if notification:
+            self._system_notification_ids[key] = notification.id
+
+        return notification
+
+    def clear_system_notification(self, key: str) -> bool:
+        """Remove a keyed system notification if present."""
+
+        notification_id = self._system_notification_ids.pop(key, None)
+
+        if not notification_id:
+            return False
+
+        deleted = self.delete_notification(notification_id)
+
+        if not deleted:
+            # If deletion failed, ensure the mapping is restored to avoid leaking state
+            self._system_notification_ids[key] = notification_id
+
+        return deleted
 
     def upsert_agent_deployment_notification(
         self,
@@ -472,8 +535,13 @@ class NotificationService:
     def delete_notification(self, notification_id: str) -> bool:
         """Delete a notification."""
         if notification_id in self.notifications:
-            del self.notifications[notification_id]
+            notification = self.notifications.pop(notification_id)
             logger.info(f"Deleted notification {notification_id}")
+            for key, mapped_id in list(self._system_notification_ids.items()):
+                if mapped_id == notification_id:
+                    self._system_notification_ids.pop(key, None)
+                    break
+            self._schedule_broadcast(notification, action='deleted')
             return True
         return False
 

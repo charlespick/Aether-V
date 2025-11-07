@@ -95,7 +95,9 @@ async def lifespan(app: FastAPI):
         job_started = True
         await inventory_service.start()
         inventory_started = True
-        logger.info("Application started successfully")
+        logger.info(
+            "Application services initialised; inventory refresh will continue in the background"
+        )
     else:
         logger.error(
             "Skipping job and inventory service startup because configuration errors were detected."
