@@ -360,14 +360,14 @@ class JobService:
                 )
                 return
 
-        await self._update_job(
-            job_id,
-            status=JobStatus.COMPLETED,
-            completed_at=datetime.utcnow(),
-        )
-    finally:
-        if acquired_host:
-            await self._release_host_slot(host_key, job.job_id)
+            await self._update_job(
+                job_id,
+                status=JobStatus.COMPLETED,
+                completed_at=datetime.utcnow(),
+            )
+        finally:
+            if acquired_host:
+                await self._release_host_slot(host_key, job.job_id)
 
     @staticmethod
     def _normalise_host(value: Optional[str]) -> str:
