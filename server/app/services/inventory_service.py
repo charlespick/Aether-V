@@ -57,6 +57,7 @@ class InventoryService:
         self.last_refresh: Optional[datetime] = None
         self._refresh_task: Optional[asyncio.Task] = None
         self._initial_refresh_task: Optional[asyncio.Task] = None
+        self._bootstrap_task: Optional[asyncio.Task] = None
         self._refresh_lock = asyncio.Lock()
         self._job_vm_placeholders: Dict[str, Set[str]] = {}
         self._host_last_refresh: Dict[str, datetime] = {}
@@ -73,40 +74,65 @@ class InventoryService:
         self._initial_refresh_event.clear()
         self._initial_refresh_succeeded = False
 
-        await host_deployment_service.wait_for_startup()
-        deployment_summary = host_deployment_service.get_startup_summary()
-        logger.info(
-            "Host deployment startup sequence complete (status=%s)",
-            deployment_summary.get("status"),
-        )
-
-        if settings.dummy_data:
-            logger.info("DUMMY_DATA enabled - using development data")
-            await self._initialize_dummy_data()
-            self._refresh_task = asyncio.create_task(self._dummy_refresh_loop())
-            self._initial_refresh_task = None
-            self._initial_refresh_event.set()
-            self._initial_refresh_succeeded = True
+        if self._bootstrap_task and not self._bootstrap_task.done():
+            logger.debug("Inventory bootstrap already running; skipping duplicate start")
             return
 
-        if host_deployment_service.is_startup_in_progress():
+        loop = asyncio.get_running_loop()
+        self._bootstrap_task = loop.create_task(self._bootstrap_startup_sequence())
+
+    async def _bootstrap_startup_sequence(self) -> None:
+        """Wait for dependencies before kicking off inventory refresh loops."""
+
+        current_task = asyncio.current_task()
+        try:
+            logger.debug("Inventory bootstrap waiting for host deployment startup to finish")
+            await host_deployment_service.wait_for_startup()
+            deployment_summary = host_deployment_service.get_startup_summary()
             logger.info(
-                "Host agent deployment running in background; continuing inventory startup"
+                "Host deployment startup sequence complete (status=%s)",
+                deployment_summary.get("status"),
             )
 
-        self._notify_inventory_status(
-            title="Inventory refresh in progress",
-            message=(
-                "Initial inventory synchronisation is running; host and VM data may be "
-                "incomplete until it finishes."
-            ),
-            level=NotificationLevel.INFO,
-            metadata={"phase": "startup"},
-        )
+            if settings.dummy_data:
+                logger.info("DUMMY_DATA enabled - using development data")
+                await self._initialize_dummy_data()
+                self._refresh_task = asyncio.create_task(self._dummy_refresh_loop())
+                self._initial_refresh_task = None
+                self._initial_refresh_event.set()
+                self._initial_refresh_succeeded = True
+                return
 
-        loop = asyncio.get_running_loop()
-        self._initial_refresh_task = loop.create_task(self._run_initial_refresh())
-        self._refresh_task = loop.create_task(self._staggered_refresh_loop())
+            self._notify_inventory_status(
+                title="Inventory refresh in progress",
+                message=(
+                    "Initial inventory synchronisation is running; host and VM data may be "
+                    "incomplete until it finishes."
+                ),
+                level=NotificationLevel.INFO,
+                metadata={"phase": "startup"},
+            )
+
+            loop = asyncio.get_running_loop()
+            self._initial_refresh_task = loop.create_task(self._run_initial_refresh())
+            self._refresh_task = loop.create_task(self._staggered_refresh_loop())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception("Inventory bootstrap failed: %s", exc)
+            self._notify_inventory_status(
+                title="Inventory refresh failed",
+                message=(
+                    "Inventory service could not start because dependencies were unavailable: %s"
+                )
+                % exc,
+                level=NotificationLevel.ERROR,
+                metadata={"phase": "startup", "error": str(exc)},
+            )
+            self._initial_refresh_event.set()
+        finally:
+            if self._bootstrap_task is current_task:
+                self._bootstrap_task = None
 
     async def _run_initial_refresh(self) -> None:
         try:
@@ -142,6 +168,13 @@ class InventoryService:
     async def stop(self):
         """Stop the inventory service."""
         logger.info("Stopping inventory service")
+        if self._bootstrap_task:
+            self._bootstrap_task.cancel()
+            try:
+                await self._bootstrap_task
+            except asyncio.CancelledError:
+                pass
+            self._bootstrap_task = None
         if self._refresh_task:
             self._refresh_task.cancel()
             try:
