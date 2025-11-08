@@ -159,17 +159,23 @@ class HostDeploymentService:
                 self._get_host_version,
                 description=f"version check for {hostname}",
             )
+            needs_update, normalized_host_version, decision = self._assess_host_version(
+                host_version
+            )
             logger.info(
-                "Host %s reported version %r; container version is %r",
+                "Host %s version check: container=%r host=%r -> %s",
                 hostname,
-                host_version,
-                self._container_version,
+                (self._container_version or "").strip() or None,
+                normalized_host_version or None,
+                decision,
             )
 
-            if self._needs_update(host_version):
+            if needs_update:
                 logger.info(
-                    f"Host {hostname} needs update from {host_version} to {self._container_version}"
+                    "Host %s requires agent redeployment; waiting for ingress readiness",
+                    hostname,
                 )
+                await self._wait_for_agent_endpoint_ready()
                 self._host_setup_status[hostname] = HostSetupStatus(state="updating")
                 deployment_success = await self._run_winrm_call(
                     hostname,
@@ -187,7 +193,10 @@ class HostDeploymentService:
                     )
                 return deployment_success
 
-            logger.info(f"Host {hostname} is up-to-date")
+            logger.info(
+                "Host %s is up-to-date; deployment skipped",
+                hostname,
+            )
             self._verified_host_versions[hostname] = self._container_version
             self._host_setup_status[hostname] = HostSetupStatus(state="ready")
             return True
@@ -329,49 +338,67 @@ class HostDeploymentService:
             logger.warning(f"Failed to get host version for {hostname}: {e}")
             return "0.0.0"
 
-    def _needs_update(self, host_version: str) -> bool:
-        """Check if host needs to be updated."""
+    def _assess_host_version(
+        self, host_version: Optional[str]
+    ) -> Tuple[bool, str, str]:
+        """Return whether the host requires an update, the normalised version and context."""
 
         container_version = (self._container_version or "").strip()
-        host_version = (host_version or "").strip()
+        normalized_host = (host_version or "").strip()
 
         if not container_version:
             logger.warning(
                 "Container version is empty; forcing deployment for host artifacts"
             )
-            return True
+            return True, normalized_host, "container version unavailable"
 
-        if host_version == container_version:
-            return False
+        if normalized_host == container_version:
+            return False, normalized_host, "versions match"
 
-        if host_version == "0.0.0" or not host_version:
-            return True
+        if not normalized_host:
+            return True, normalized_host, "host version missing"
+
+        if normalized_host == "0.0.0":
+            return True, normalized_host, "host reported default version 0.0.0"
 
         try:
-            # Parse versions as semantic version tuples
-            host_parts = [int(x) for x in host_version.split(".")]
+            host_parts = [int(x) for x in normalized_host.split(".")]
             container_parts = [int(x) for x in container_version.split(".")]
-
-            # Compare versions
-            return container_parts > host_parts
         except Exception:
             logger.warning(
                 "Version comparison failed for container=%r host=%r; forcing update",
                 container_version,
-                host_version,
+                normalized_host,
             )
-            return True
+            return True, normalized_host, "host version unparsable"
+
+        if container_parts > host_parts:
+            return True, normalized_host, "container version newer than host"
+
+        if container_parts == host_parts:
+            return False, normalized_host, "versions match after normalization"
+
+        return False, normalized_host, "host version ahead of container"
+
+    def _needs_update(self, host_version: str) -> bool:
+        """Check if host needs to be updated."""
+
+        needs_update, _, _ = self._assess_host_version(host_version)
+        return needs_update
 
     def _deploy_to_host(self, hostname: str, observed_host_version: Optional[str] = None) -> bool:
         """Deploy scripts and ISOs to a host."""
         container_version = (self._container_version or "").strip()
-        initial_host_version = (observed_host_version or "").strip()
 
+        needs_update, normalized_observed, decision = self._assess_host_version(
+            observed_host_version
+        )
         logger.info(
-            "Starting deployment evaluation for %s (container=%r, observed_host=%r)",
+            "Starting deployment evaluation for %s (container=%r, observed_host=%r -> %s)",
             hostname,
-            container_version,
-            initial_host_version or None,
+            container_version or None,
+            normalized_observed or None,
+            decision,
         )
 
         try:
@@ -382,24 +409,28 @@ class HostDeploymentService:
                 )
                 return False
 
-            if observed_host_version is not None and not self._needs_update(
-                observed_host_version
-            ):
+            if observed_host_version is not None and not needs_update:
                 logger.info(
                     "Skipping deployment to %s; observed host version %r already matches container %r",
                     hostname,
-                    initial_host_version,
-                    container_version,
+                    normalized_observed or None,
+                    container_version or None,
                 )
                 return True
 
             refreshed_host_version: Optional[str] = None
+            refresh_needed = True
             try:
                 refreshed_host_version = self._get_host_version(hostname)
+                refresh_needed, normalized_refresh, refresh_decision = (
+                    self._assess_host_version(refreshed_host_version)
+                )
                 logger.info(
-                    "Refreshed host version for %s prior to deployment: %r",
+                    "Refreshed host version for %s prior to deployment: container=%r host=%r -> %s",
                     hostname,
-                    refreshed_host_version,
+                    container_version or None,
+                    normalized_refresh or None,
+                    refresh_decision,
                 )
             except Exception as exc:  # pragma: no cover - defensive logging path
                 logger.warning(
@@ -408,14 +439,12 @@ class HostDeploymentService:
                     exc,
                 )
 
-            if refreshed_host_version is not None and not self._needs_update(
-                refreshed_host_version
-            ):
+            if refreshed_host_version is not None and not refresh_needed:
                 logger.info(
                     "Skipping deployment to %s after refresh; host version %r matches container %r",
                     hostname,
-                    refreshed_host_version,
-                    container_version,
+                    (refreshed_host_version or "").strip() or None,
+                    container_version or None,
                 )
                 return True
 

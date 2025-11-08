@@ -1,7 +1,7 @@
 import sys
 import types
 from pathlib import Path
-from unittest import TestCase, skipIf
+from unittest import IsolatedAsyncioTestCase, TestCase, skipIf
 from unittest import mock
 
 
@@ -155,7 +155,57 @@ class HostDeploymentServiceVersionTests(TestCase):
             result = self.service._deploy_to_host("host-1", observed_host_version="3.1.4")
 
         self.assertTrue(result)
-        get_version.assert_called_once_with("host-1")
+        get_version.assert_not_called()
         ensure_dir.assert_not_called()
         clear_dir.assert_not_called()
+
+
+@skipIf(
+    HostDeploymentService is None,
+    f"Host deployment service unavailable: {HOST_DEPLOYMENT_IMPORT_ERROR}",
+)
+class HostDeploymentServiceIngressTests(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.service = HostDeploymentService()
+        self.service._deployment_enabled = True
+        self.service._container_version = "2.0.0"
+
+    async def test_ensure_host_setup_waits_for_ingress_when_update_needed(self):
+        wait_mock = mock.AsyncMock()
+        self.service._wait_for_agent_endpoint_ready = wait_mock
+
+        async def run_call_side_effect(hostname, func, *args, **kwargs):
+            if func is self.service._get_host_version:
+                return "1.0.0"
+            if func is self.service._deploy_to_host:
+                self.assertEqual(wait_mock.await_count, 1)
+                return True
+            raise AssertionError(f"Unexpected function {func}")
+
+        run_mock = mock.AsyncMock(side_effect=run_call_side_effect)
+
+        with mock.patch.object(self.service, "_run_winrm_call", run_mock):
+            result = await self.service.ensure_host_setup("host-1")
+
+        self.assertTrue(result)
+        self.assertEqual(run_mock.await_count, 2)
+        self.assertEqual(wait_mock.await_count, 1)
+
+    async def test_ensure_host_setup_does_not_wait_when_host_current(self):
+        wait_mock = mock.AsyncMock()
+        self.service._wait_for_agent_endpoint_ready = wait_mock
+
+        async def run_call_side_effect(hostname, func, *args, **kwargs):
+            if func is self.service._get_host_version:
+                return "2.0.0"
+            raise AssertionError(f"Unexpected function {func}")
+
+        run_mock = mock.AsyncMock(side_effect=run_call_side_effect)
+
+        with mock.patch.object(self.service, "_run_winrm_call", run_mock):
+            result = await self.service.ensure_host_setup("host-1")
+
+        self.assertTrue(result)
+        self.assertEqual(run_mock.await_count, 1)
+        wait_mock.assert_not_called()
 
