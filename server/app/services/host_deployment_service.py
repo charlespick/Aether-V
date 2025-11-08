@@ -373,8 +373,18 @@ class HostDeploymentService:
     def _assess_host_version(
         self, host_version: Optional[str]
     ) -> Tuple[bool, str, str]:
-        """Return whether the host requires an update, the normalised version and context."""
+        """
+        Determine whether the host requires an update, returning the normalized version and a reason.
 
+        Args:
+            host_version (Optional[str]): The version string reported by the host.
+
+        Returns:
+            Tuple[bool, str, str]: A tuple containing:
+                - needs_update (bool): Whether the host requires an update.
+                - normalized_version (str): The normalized version string of the host.
+                - decision_reason (str): A string explaining the decision.
+        """
         container_version = self._normalize_version_text(self._container_version)
         normalized_host = self._normalize_version_text(host_version)
 

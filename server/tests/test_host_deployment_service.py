@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - test path guard
 
 
 try:  # pragma: no cover - prefer real dependency when available
-    import httpx  # type: ignore  # noqa: F401
+    pass
 except ModuleNotFoundError:  # pragma: no cover - fallback stub for minimal envs
     httpx_module = types.ModuleType("httpx")
 
@@ -183,7 +183,7 @@ class HostDeploymentServiceVersionTests(TestCase):
         self.assertEqual(version, "2.0.0")
         command = exec_mock.call_args[0][1]
         self.assertIn("\n$trimmed = $content.Trim()", command)
-        self.assertIn("\n$trimmed = $trimmed.TrimStart([char]0xFEFF)", command)
+        self.assertIn("$trimmed = $trimmed.TrimStart([char]0xFEFF)", command)
 
 
 @skipIf(
