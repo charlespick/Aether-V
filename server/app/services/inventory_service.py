@@ -35,6 +35,7 @@ T = TypeVar("T")
 
 
 INVENTORY_SCRIPT_NAME = "Inventory.Collect.ps1"
+PREPARING_HOST_MESSAGE = "Preparing host, will retry later"
 
 
 class InventoryScriptMissingError(RuntimeError):
@@ -66,6 +67,13 @@ class InventoryService:
         self._refresh_overrun_active = False
         self._initial_refresh_event = asyncio.Event()
         self._initial_refresh_succeeded = False
+        self._preparing_hosts: Set[str] = set()
+        self._preparing_notification_prefix = "inventory-preparing"
+        self._slow_host_notification_prefix = "inventory-slow-host"
+        self._slow_hosts: Set[str] = set()
+        self._total_host_refresh_duration = 0.0
+        self._host_refresh_samples = 0
+        self._average_host_refresh_seconds = 0.0
 
     async def start(self):
         """Start the inventory service and begin periodic refresh."""
@@ -73,6 +81,11 @@ class InventoryService:
 
         self._initial_refresh_event.clear()
         self._initial_refresh_succeeded = False
+        self._total_host_refresh_duration = 0.0
+        self._host_refresh_samples = 0
+        self._average_host_refresh_seconds = 0.0
+        self._preparing_hosts.clear()
+        self._slow_hosts.clear()
 
         if self._bootstrap_task and not self._bootstrap_task.done():
             logger.debug("Inventory bootstrap already running; skipping duplicate start")
@@ -86,13 +99,14 @@ class InventoryService:
 
         current_task = asyncio.current_task()
         try:
-            logger.debug("Inventory bootstrap waiting for host deployment startup to finish")
-            await host_deployment_service.wait_for_startup()
             deployment_summary = host_deployment_service.get_startup_summary()
-            logger.info(
-                "Host deployment startup sequence complete (status=%s)",
-                deployment_summary.get("status"),
-            )
+            if deployment_summary:
+                logger.info(
+                    "Inventory bootstrap observing host deployment status=%s (success=%d failed=%d)",
+                    deployment_summary.get("status"),
+                    deployment_summary.get("successful_hosts", 0),
+                    deployment_summary.get("failed_hosts", 0),
+                )
 
             if settings.dummy_data:
                 logger.info("DUMMY_DATA enabled - using development data")
@@ -192,6 +206,16 @@ class InventoryService:
 
         notification_service.clear_system_notification(self._inventory_status_key)
         notification_service.clear_system_notification(self._refresh_overrun_key)
+        for hostname in list(self._preparing_hosts):
+            notification_service.clear_system_notification(
+                self._preparing_notification_key(hostname)
+            )
+        self._preparing_hosts.clear()
+        for hostname in list(self._slow_hosts):
+            notification_service.clear_system_notification(
+                self._slow_host_notification_key(hostname)
+            )
+        self._slow_hosts.clear()
 
     async def _initialize_dummy_data(self):
         """Initialize with dummy data for development."""
@@ -411,22 +435,33 @@ class InventoryService:
 
             ordered_hosts = self._ordered_hosts(host_list)
             per_host_delay = interval / max(len(ordered_hosts), 1)
+            cycle_skipped: List[str] = []
+            cycle_refreshed: List[str] = []
 
             for index, hostname in enumerate(ordered_hosts):
                 rebuild_clusters = index == len(ordered_hosts) - 1
                 try:
-                    await self.refresh_inventory(
+                    result = await self.refresh_inventory(
                         [hostname],
                         rebuild_clusters=rebuild_clusters,
                         reason="background",
+                        expected_interval=interval,
                     )
+                    cycle_refreshed.extend(result.get("refreshed_hosts", []))
+                    cycle_skipped.extend(result.get("skipped_hosts", []))
                 except Exception as exc:  # pragma: no cover - defensive logging
                     logger.error("Background refresh for %s failed: %s", hostname, exc)
 
                 if index < len(ordered_hosts) - 1:
                     await asyncio.sleep(per_host_delay)
 
-            self._finalise_cycle_refresh(ordered_hosts, cycle_start, interval)
+            self._finalise_cycle_refresh(
+                ordered_hosts,
+                cycle_start,
+                interval,
+                skipped_hosts=cycle_skipped,
+                refreshed_hosts=cycle_refreshed,
+            )
 
             elapsed = time.perf_counter() - cycle_start
             remaining = interval - elapsed
@@ -440,12 +475,20 @@ class InventoryService:
         )
 
     def _finalise_cycle_refresh(
-        self, hosts_in_cycle: Iterable[str], cycle_start: float, interval: float
+        self,
+        hosts_in_cycle: Iterable[str],
+        cycle_start: float,
+        interval: float,
+        *,
+        skipped_hosts: Optional[Sequence[str]] = None,
+        refreshed_hosts: Optional[Sequence[str]] = None,
     ) -> None:
         duration = time.perf_counter() - cycle_start
         cycle_hosts = list(hosts_in_cycle)
         host_count = len(cycle_hosts)
         configured_hosts = [host for host in settings.get_hyperv_hosts_list() if host]
+        skipped_list = list(skipped_hosts or [])
+        refreshed_list = list(refreshed_hosts or [])
 
         if not configured_hosts:
             # Inventory cleared elsewhere when no hosts are configured, but ensure
@@ -460,6 +503,8 @@ class InventoryService:
                     "cycle_duration_seconds": round(duration, 2),
                     "interval_seconds": interval,
                     "hosts": cycle_hosts,
+                    "skipped_hosts": skipped_list,
+                    "refreshed_hosts": refreshed_list,
                 },
             )
             self._handle_refresh_overrun(duration, interval, host_count)
@@ -472,6 +517,11 @@ class InventoryService:
                 "interval_seconds": interval,
                 "last_refresh": self.last_refresh.isoformat(),
                 "hosts": cycle_hosts,
+                "skipped_hosts": skipped_list,
+                "refreshed_hosts": refreshed_list,
+                "average_host_refresh_seconds": round(
+                    self._average_host_refresh_seconds, 2
+                ),
             }
             self._notify_inventory_status(
                 title="Inventory synchronised",
@@ -544,12 +594,13 @@ class InventoryService:
         *,
         rebuild_clusters: bool = True,
         reason: str = "manual",
-    ) -> None:
+        expected_interval: Optional[float] = None,
+    ) -> Dict[str, List[str]]:
         """Refresh inventory from configured hosts."""
 
         if settings.dummy_data:
             await self._refresh_dummy_data()
-            return
+            return {"refreshed_hosts": [], "skipped_hosts": []}
 
         configured_hosts = [host for host in settings.get_hyperv_hosts_list() if host]
         target_hosts = (
@@ -566,11 +617,14 @@ class InventoryService:
                 self.vms.clear()
                 self._host_last_refresh.clear()
                 self.last_refresh = datetime.utcnow()
-            return
+            return {"refreshed_hosts": [], "skipped_hosts": []}
 
         if not target_hosts:
             logger.debug("No target hosts provided for refresh; skipping")
-            return
+            return {"refreshed_hosts": [], "skipped_hosts": []}
+
+        refreshed_hosts: List[str] = []
+        skipped_hosts: List[str] = []
 
         async with self._refresh_lock:
             logger.info(
@@ -580,9 +634,17 @@ class InventoryService:
             )
 
             for hostname in target_hosts:
-                await self._refresh_host(hostname)
+                refreshed, skipped = await self._refresh_host(
+                    hostname,
+                    reason=reason,
+                    expected_interval=expected_interval if reason == "background" else None,
+                )
+                if refreshed:
+                    refreshed_hosts.append(hostname)
+                if skipped:
+                    skipped_hosts.append(hostname)
 
-            if rebuild_clusters:
+            if rebuild_clusters and refreshed_hosts:
                 self._rebuild_clusters(configured_hosts)
                 self.last_refresh = datetime.utcnow()
                 logger.info(
@@ -591,6 +653,14 @@ class InventoryService:
                     len([host for host in self.hosts.values() if host.connected]),
                     len(self.vms),
                 )
+            elif rebuild_clusters and not refreshed_hosts:
+                logger.info(
+                    "Inventory refresh (%s) deferred; %d host(s) pending preparation",
+                    reason,
+                    len(skipped_hosts),
+                )
+
+        return {"refreshed_hosts": refreshed_hosts, "skipped_hosts": skipped_hosts}
 
     async def _refresh_dummy_data(self):
         """Refresh dummy data with some random state changes."""
@@ -608,11 +678,35 @@ class InventoryService:
 
         self.last_refresh = datetime.utcnow()
 
-    async def _refresh_host(self, hostname: str):
-        """Refresh inventory for a single host."""
-        logger.info(f"Refreshing inventory for host: {hostname}")
+    async def _refresh_host(
+        self,
+        hostname: str,
+        *,
+        reason: str,
+        expected_interval: Optional[float],
+    ) -> tuple[bool, bool]:
+        """Refresh inventory for a single host.
+
+        Returns a tuple of (refreshed, skipped) where skipped indicates the host was
+        deferred because it is still preparing deployment artifacts.
+        """
+
+        logger.info("Refreshing inventory for host: %s", hostname)
+
+        if not await self._ensure_host_ready(hostname):
+            logger.info(
+                "Host %s is still preparing required artifacts; deferring inventory refresh",
+                hostname,
+            )
+            return False, True
+
+        attempt_started = False
+        refreshed = False
+        start_time = 0.0
 
         try:
+            attempt_started = True
+            start_time = time.perf_counter()
             payload = await self._collect_with_recovery(hostname)
             cluster_name, vms = self._parse_inventory_snapshot(hostname, payload)
 
@@ -660,10 +754,12 @@ class InventoryService:
             for key in keys_to_remove:
                 del self.vms[key]
 
-            logger.info(f"Host {hostname}: {len(vms)} VMs")
+            logger.info("Host %s: %d VMs", hostname, len(vms))
+            refreshed = True
+            return True, False
 
         except Exception as e:
-            logger.error(f"Failed to refresh host {hostname}: {e}")
+            logger.error("Failed to refresh host %s: %s", hostname, e)
 
             # Check if host was previously connected and create notification
             previous_host = self.hosts.get(hostname)
@@ -691,6 +787,122 @@ class InventoryService:
             # Clear non-placeholder VMs for the unreachable host
             self._clear_host_vms(hostname, preserve_placeholders=True)
             self._host_last_refresh.pop(hostname, None)
+            return False, False
+
+        finally:
+            if attempt_started and expected_interval is not None and reason == "background":
+                duration = time.perf_counter() - start_time
+                self._record_host_refresh_duration(hostname, duration, expected_interval, refreshed)
+
+    async def _ensure_host_ready(self, hostname: str) -> bool:
+        """Check whether a host is ready for inventory collection."""
+
+        if settings.dummy_data or not host_deployment_service.is_enabled:
+            return True
+
+        try:
+            ready = await host_deployment_service.ensure_inventory_ready(hostname)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception(
+                "Failed to verify deployment readiness for %s: %s", hostname, exc
+            )
+            ready = False
+
+        if ready:
+            self._clear_preparing_host(hostname)
+            return True
+
+        self._mark_host_preparing(hostname)
+        return False
+
+    def _mark_host_preparing(self, hostname: str) -> None:
+        """Record that a host is still preparing deployment artifacts."""
+
+        previous_host = self.hosts.get(hostname)
+        last_seen = previous_host.last_seen if previous_host else None
+        cluster = previous_host.cluster if previous_host else None
+
+        self.hosts[hostname] = Host(
+            hostname=hostname,
+            cluster=cluster,
+            connected=False,
+            last_seen=last_seen,
+            error=PREPARING_HOST_MESSAGE,
+        )
+        self._host_last_refresh.pop(hostname, None)
+
+        key = self._preparing_notification_key(hostname)
+        notification_service.upsert_system_notification(
+            key,
+            title="Preparing host for inventory",
+            message=(
+                f"Host {hostname} is synchronising provisioning artifacts. "
+                "Inventory refresh will retry automatically."
+            ),
+            level=NotificationLevel.INFO,
+            metadata={"host": hostname},
+        )
+        self._preparing_hosts.add(hostname)
+
+    def _clear_preparing_host(self, hostname: str) -> None:
+        """Clear preparing state and notifications for a host."""
+
+        if hostname in self._preparing_hosts:
+            notification_service.clear_system_notification(
+                self._preparing_notification_key(hostname)
+            )
+            self._preparing_hosts.discard(hostname)
+
+        host = self.hosts.get(hostname)
+        if host and host.error == PREPARING_HOST_MESSAGE:
+            host.error = None
+
+    def _record_host_refresh_duration(
+        self,
+        hostname: str,
+        duration: float,
+        interval: float,
+        success: bool,
+    ) -> None:
+        """Track host refresh duration and surface warnings for overruns."""
+
+        self._total_host_refresh_duration += duration
+        self._host_refresh_samples += 1
+        self._average_host_refresh_seconds = (
+            self._total_host_refresh_duration / self._host_refresh_samples
+            if self._host_refresh_samples
+            else 0.0
+        )
+
+        if duration > interval:
+            metadata = {
+                "host": hostname,
+                "duration_seconds": round(duration, 2),
+                "interval_seconds": interval,
+                "refresh_succeeded": success,
+            }
+            notification_service.upsert_system_notification(
+                self._slow_host_notification_key(hostname),
+                title="Inventory refresh exceeded interval",
+                message=(
+                    f"Inventory refresh for {hostname} took {duration:.1f}s, exceeding "
+                    f"the configured interval of {interval:.1f}s."
+                ),
+                level=NotificationLevel.WARNING,
+                metadata=metadata,
+            )
+            self._slow_hosts.add(hostname)
+        elif hostname in self._slow_hosts:
+            notification_service.clear_system_notification(
+                self._slow_host_notification_key(hostname)
+            )
+            self._slow_hosts.discard(hostname)
+
+    def _preparing_notification_key(self, hostname: str) -> str:
+        return f"{self._preparing_notification_prefix}:{hostname}"
+
+    def _slow_host_notification_key(self, hostname: str) -> str:
+        return f"{self._slow_host_notification_prefix}:{hostname}"
 
     async def _collect_with_recovery(self, hostname: str) -> Dict[str, Any]:
         """Collect inventory from a host, redeploying scripts if they are missing."""
@@ -1118,6 +1330,10 @@ class InventoryService:
             "initial_refresh_succeeded": self._initial_refresh_succeeded,
             "refresh_overrun": self._refresh_overrun_active,
             "host_refresh_timestamps": dict(self._host_last_refresh),
+            "average_host_refresh_seconds": self._average_host_refresh_seconds,
+            "host_refresh_samples": self._host_refresh_samples,
+            "preparing_hosts": sorted(self._preparing_hosts),
+            "slow_hosts": sorted(self._slow_hosts),
         }
 
 

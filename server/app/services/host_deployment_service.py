@@ -76,6 +76,7 @@ class HostDeploymentService:
         self._agent_download_base_url: Optional[str] = None
         self._deployment_enabled = self._initialize_agent_download_base_url()
         self._load_container_version()
+        self._verified_host_versions: Dict[str, str] = {}
         self._startup_task: Optional[asyncio.Task[None]] = None
         self._startup_event: Optional[asyncio.Event] = None
         self._startup_progress = StartupDeploymentProgress()
@@ -117,6 +118,7 @@ class HostDeploymentService:
         except Exception as e:
             logger.error(f"Failed to load container version: {e}")
             self._container_version = "0.0.0"
+        self._verified_host_versions.clear()
 
     def get_container_version(self) -> str:
         """Get the container version."""
@@ -147,18 +149,41 @@ class HostDeploymentService:
                 logger.info(
                     f"Host {hostname} needs update from {host_version} to {self._container_version}"
                 )
-                return await self._run_winrm_call(
+                deployment_success = await self._run_winrm_call(
                     hostname,
                     self._deploy_to_host,
                     description=f"deployment for {hostname}",
                 )
+                if deployment_success:
+                    self._verified_host_versions[hostname] = self._container_version
+                else:
+                    self._verified_host_versions.pop(hostname, None)
+                return deployment_success
 
             logger.info(f"Host {hostname} is up-to-date")
+            self._verified_host_versions[hostname] = self._container_version
             return True
 
         except Exception as e:
             logger.error(f"Failed to ensure host setup for {hostname}: {e}")
+            self._verified_host_versions.pop(hostname, None)
             return False
+
+    async def ensure_inventory_ready(self, hostname: str) -> bool:
+        """Validate that a host is prepared for inventory collection."""
+
+        if not self._deployment_enabled:
+            return True
+
+        container_version = self._container_version
+        cached_version = self._verified_host_versions.get(hostname)
+        if cached_version == container_version:
+            return True
+
+        ready = await self.ensure_host_setup(hostname)
+        if ready:
+            self._verified_host_versions[hostname] = container_version
+        return ready
 
     async def _run_winrm_call(
         self,
