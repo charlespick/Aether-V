@@ -414,6 +414,7 @@ class JobService:
                         try:
                             pending.remove((job_id, waiter))
                         except ValueError:
+                            # It's possible the (job_id, waiter) tuple was already removed from the queue.
                             pass
                         if not pending:
                             self._host_waiters.pop(host, None)
@@ -434,8 +435,7 @@ class JobService:
                 next_job_id, next_waiter = queue.popleft()
                 if not queue:
                     self._host_waiters.pop(host, None)
-                else:
-                    self._host_waiters[host] = queue
+
                 self._host_running[host] = next_job_id
                 logger.info(
                     "Provisioning job %s released host slot on %s; waking job %s",
