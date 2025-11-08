@@ -211,6 +211,33 @@ end {
         Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
     }
 
+    function Remove-EmptyDirectoryTree {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)][string]$Root
+        )
+
+        if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+            return
+        }
+
+        $subdirectories = @()
+        try {
+            $subdirectories = Get-ChildItem -LiteralPath $Root -Directory -Recurse -Force -ErrorAction Stop |
+                Sort-Object { $_.FullName.Length } -Descending
+        }
+        catch {
+            Write-Host "Unable to enumerate subdirectories for '$Root': $($_.Exception.Message)" -ForegroundColor Yellow
+            $subdirectories = @()
+        }
+
+        foreach ($directory in $subdirectories) {
+            Remove-EmptyDirectory -Path $directory.FullName
+        }
+
+        Remove-EmptyDirectory -Path $Root
+    }
+
     function Remove-ProvisioningIsos {
         [CmdletBinding()]
         param(
@@ -380,17 +407,29 @@ end {
         Write-Host "Unregistering VM '$VMName' from Hyper-V."
         Remove-VM -Name $VMName -Force -Confirm:$false -ErrorAction Stop
 
+        $removalDeadline = (Get-Date).AddSeconds(30)
+        while ((Get-Date) -lt $removalDeadline) {
+            $existingVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+            if (-not $existingVm) {
+                break
+            }
+
+            Start-Sleep -Seconds 1
+        }
+
         $existingVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
         if ($existingVm) {
             throw "VM '$VMName' is still registered after removal attempt."
         }
 
+        Start-Sleep -Seconds 3
+
         if ($vmFolder) {
             try {
-                Remove-EmptyDirectory -Path $vmFolder
+                Remove-EmptyDirectoryTree -Root $vmFolder
                 $parentFolder = Split-Path -Path $vmFolder -Parent
                 if ($parentFolder -and $parentFolder -ne $vmFolder) {
-                    Remove-EmptyDirectory -Path $parentFolder
+                    Remove-EmptyDirectoryTree -Root $parentFolder
                 }
             }
             catch {
