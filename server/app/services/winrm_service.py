@@ -244,8 +244,8 @@ class _PSRPStreamCursor:
 
         def iter_property_dict(data: Any) -> Iterable[tuple[str, Any]]:
             if isinstance(data, dict):
-                return data.items()
-            return ()
+                yield from data.items()
+            return
 
         def iter_property_list(data: Any) -> Iterable[tuple[str, Any]]:
             if isinstance(data, list):
@@ -253,7 +253,7 @@ class _PSRPStreamCursor:
                     if isinstance(entry, dict):
                         for key, value in entry.items():
                             yield key, value
-            return ()
+
 
         properties: list[tuple[str, Any]] = []
 
