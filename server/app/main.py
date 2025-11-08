@@ -1,5 +1,6 @@
 """Main application entry point."""
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -102,14 +103,20 @@ async def lifespan(app: FastAPI):
         settings.get_hyperv_hosts_list()
     )
 
-    await host_deployment_service.wait_for_startup()
-    deployment_summary = host_deployment_service.get_startup_summary()
-    logger.info(
-        "Startup agent deployment finished with status=%s (success=%d failed=%d)",
-        deployment_summary.get("status"),
-        deployment_summary.get("successful_hosts", 0),
-        deployment_summary.get("failed_hosts", 0),
-    )
+    async def _log_startup_deployment_summary() -> None:
+        try:
+            await host_deployment_service.wait_for_startup()
+            deployment_summary = host_deployment_service.get_startup_summary()
+            logger.info(
+                "Startup agent deployment finished with status=%s (success=%d failed=%d)",
+                deployment_summary.get("status"),
+                deployment_summary.get("successful_hosts", 0),
+                deployment_summary.get("failed_hosts", 0),
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Failed to record startup deployment summary")
+
+    asyncio.create_task(_log_startup_deployment_summary())
 
     if not config_result.has_errors:
         await job_service.start()
