@@ -325,18 +325,35 @@ class HostDeploymentService:
 
     def _needs_update(self, host_version: str) -> bool:
         """Check if host needs to be updated."""
-        if host_version == "0.0.0":
+
+        container_version = (self._container_version or "").strip()
+        host_version = (host_version or "").strip()
+
+        if not container_version:
+            logger.warning(
+                "Container version is empty; forcing deployment for host artifacts"
+            )
+            return True
+
+        if host_version == container_version:
+            return False
+
+        if host_version == "0.0.0" or not host_version:
             return True
 
         try:
             # Parse versions as semantic version tuples
             host_parts = [int(x) for x in host_version.split(".")]
-            container_parts = [int(x) for x in self._container_version.split(".")]
+            container_parts = [int(x) for x in container_version.split(".")]
 
             # Compare versions
             return container_parts > host_parts
-        except Exception as e:
-            logger.warning(f"Version comparison failed: {e}, forcing update")
+        except Exception:
+            logger.warning(
+                "Version comparison failed for container=%r host=%r; forcing update",
+                container_version,
+                host_version,
+            )
             return True
 
     def _deploy_to_host(self, hostname: str) -> bool:
