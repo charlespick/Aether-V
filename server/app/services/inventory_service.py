@@ -173,21 +173,21 @@ class InventoryService:
             try:
                 await self._bootstrap_task
             except asyncio.CancelledError:
-                pass
+                logger.debug("Inventory bootstrap task cancellation acknowledged")
             self._bootstrap_task = None
         if self._refresh_task:
             self._refresh_task.cancel()
             try:
                 await self._refresh_task
             except asyncio.CancelledError:
-                pass
+                logger.debug("Inventory refresh loop cancelled")
             self._refresh_task = None
         if self._initial_refresh_task:
             self._initial_refresh_task.cancel()
             try:
                 await self._initial_refresh_task
             except asyncio.CancelledError:
-                pass
+                logger.debug("Initial inventory refresh task cancelled")
             self._initial_refresh_task = None
 
         notification_service.clear_system_notification(self._inventory_status_key)
@@ -1090,6 +1090,35 @@ class InventoryService:
 
     def initial_refresh_succeeded(self) -> bool:
         return self._initial_refresh_succeeded
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Return diagnostic information about inventory refresh behaviour."""
+
+        bootstrap_running = (
+            self._bootstrap_task is not None and not self._bootstrap_task.done()
+        )
+        refresh_loop_running = (
+            self._refresh_task is not None and not self._refresh_task.done()
+        )
+        initial_refresh_running = (
+            self._initial_refresh_task is not None
+            and not self._initial_refresh_task.done()
+        )
+
+        return {
+            "hosts_tracked": len(self.hosts),
+            "vms_tracked": len(self.vms),
+            "clusters_tracked": len(self.clusters),
+            "last_refresh": self.last_refresh,
+            "refresh_in_progress": self._refresh_lock.locked(),
+            "bootstrap_running": bootstrap_running,
+            "refresh_loop_running": refresh_loop_running,
+            "initial_refresh_running": initial_refresh_running,
+            "initial_refresh_completed": self._initial_refresh_event.is_set(),
+            "initial_refresh_succeeded": self._initial_refresh_succeeded,
+            "refresh_overrun": self._refresh_overrun_active,
+            "host_refresh_timestamps": dict(self._host_last_refresh),
+        }
 
 
 # Global inventory service instance

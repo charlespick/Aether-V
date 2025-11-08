@@ -671,6 +671,34 @@ class JobService:
         await self._broadcast_job_output(job_id, lines)
         return lines
 
+    async def get_metrics(self) -> Dict[str, Any]:
+        """Return diagnostic information about the job service."""
+
+        queue_depth = self._queue.qsize() if self._queue else 0
+        async with self._lock:
+            jobs_snapshot = list(self.jobs.values())
+
+        status_counts = {
+            JobStatus.PENDING: 0,
+            JobStatus.RUNNING: 0,
+            JobStatus.COMPLETED: 0,
+            JobStatus.FAILED: 0,
+        }
+        for job in jobs_snapshot:
+            status_counts[job.status] = status_counts.get(job.status, 0) + 1
+
+        return {
+            "started": self._started,
+            "queue_depth": queue_depth,
+            "worker_count": len(self._worker_tasks),
+            "configured_concurrency": max(1, settings.job_worker_concurrency),
+            "pending_jobs": status_counts.get(JobStatus.PENDING, 0),
+            "running_jobs": status_counts.get(JobStatus.RUNNING, 0),
+            "completed_jobs": status_counts.get(JobStatus.COMPLETED, 0),
+            "failed_jobs": status_counts.get(JobStatus.FAILED, 0),
+            "total_tracked_jobs": len(jobs_snapshot),
+        }
+
 
 default_job_service = JobService()
 job_service = default_job_service

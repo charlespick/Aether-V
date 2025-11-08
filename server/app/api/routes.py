@@ -22,6 +22,7 @@ from ..core.models import (
     AboutResponse,
     BuildInfo,
     VMState,
+    ServiceDiagnosticsResponse,
 )
 from ..core.auth import (
     Permission,
@@ -52,6 +53,7 @@ from ..services.vm_control_service import (
     VMControlError,
 )
 from ..services.websocket_service import websocket_manager
+from ..services.remote_task_service import remote_task_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -214,6 +216,29 @@ async def readiness_check():
         version=build_metadata.version,
         timestamp=datetime.utcnow(),
         build=_current_build_info(),
+    )
+
+
+@router.get(
+    "/api/v1/diagnostics/services",
+    response_model=ServiceDiagnosticsResponse,
+    tags=["Diagnostics"],
+)
+async def get_service_diagnostics(
+    user: dict = Depends(require_permission(Permission.ADMIN)),
+):
+    """Return operational diagnostics for remote task and background services."""
+
+    remote_metrics = remote_task_service.get_metrics()
+    job_metrics = await job_service.get_metrics()
+    inventory_metrics = inventory_service.get_metrics()
+    host_metrics = await host_deployment_service.get_metrics()
+
+    return ServiceDiagnosticsResponse(
+        remote_tasks=remote_metrics,
+        jobs=job_metrics,
+        inventory=inventory_metrics,
+        host_deployment=host_metrics,
     )
 
 

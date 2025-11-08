@@ -173,3 +173,76 @@ class JobSubmission(BaseModel):
         default=None,
         description="Hostname of the connected Hyper-V host that will execute the job",
     )
+
+
+class RemoteTaskPoolMetrics(BaseModel):
+    """Snapshot of a remote task worker pool."""
+
+    queue_depth: int
+    inflight: int
+    current_workers: int
+    min_workers: Optional[int] = None
+    max_workers: Optional[int] = None
+    configured_workers: Optional[int] = None
+
+
+class RemoteTaskMetrics(BaseModel):
+    """Aggregated diagnostics for the remote task service."""
+
+    started: bool
+    average_duration_seconds: float
+    completed_tasks: int
+    scale_up_backlog_threshold: int
+    scale_up_duration_threshold_seconds: float
+    idle_timeout_seconds: float
+    fast_pool: RemoteTaskPoolMetrics
+    job_pool: RemoteTaskPoolMetrics
+
+
+class JobServiceMetrics(BaseModel):
+    """Diagnostic information about job processing."""
+
+    started: bool
+    queue_depth: int
+    worker_count: int
+    configured_concurrency: int
+    pending_jobs: int
+    running_jobs: int
+    completed_jobs: int
+    failed_jobs: int
+    total_tracked_jobs: int
+
+
+class InventoryServiceMetrics(BaseModel):
+    """Diagnostic information about the inventory refresh loop."""
+
+    hosts_tracked: int
+    vms_tracked: int
+    clusters_tracked: int
+    last_refresh: Optional[datetime]
+    refresh_in_progress: bool
+    bootstrap_running: bool
+    refresh_loop_running: bool
+    initial_refresh_running: bool
+    initial_refresh_completed: bool
+    initial_refresh_succeeded: bool
+    refresh_overrun: bool
+    host_refresh_timestamps: Dict[str, datetime]
+
+
+class HostDeploymentMetrics(BaseModel):
+    """Diagnostic information about host agent deployment."""
+
+    enabled: bool
+    ingress_ready: bool
+    startup_task_running: bool
+    startup: Dict[str, Any]
+
+
+class ServiceDiagnosticsResponse(BaseModel):
+    """Composite diagnostics payload returned by the API."""
+
+    remote_tasks: RemoteTaskMetrics
+    jobs: JobServiceMetrics
+    inventory: InventoryServiceMetrics
+    host_deployment: HostDeploymentMetrics

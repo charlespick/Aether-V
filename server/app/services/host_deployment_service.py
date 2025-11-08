@@ -973,6 +973,26 @@ class HostDeploymentService:
             metadata=metadata,
         )
 
+    async def get_metrics(self) -> Dict[str, Any]:
+        """Return diagnostic information about host deployment tasks."""
+
+        async with self._progress_lock:
+            progress_snapshot = self._startup_progress.copy()
+
+        async with self._ingress_lock:
+            ingress_ready = self._ingress_ready
+
+        startup_task_running = (
+            self._startup_task is not None and not self._startup_task.done()
+        )
+
+        return {
+            "enabled": self._deployment_enabled,
+            "ingress_ready": ingress_ready,
+            "startup_task_running": startup_task_running,
+            "startup": progress_snapshot.as_dict(),
+        }
+
 
 # Global host deployment service instance
 host_deployment_service = HostDeploymentService()

@@ -67,6 +67,7 @@ class RemoteTaskService:
         self._fast_inflight = 0
         self._fast_current_workers = 0
         self._job_current_workers = 0
+        self._job_inflight = 0
 
     async def start(self) -> None:
         """Initialise the worker pool if it is not already running."""
@@ -94,6 +95,7 @@ class RemoteTaskService:
             self._fast_inflight = 0
             self._fast_current_workers = 0
             self._job_current_workers = 0
+            self._job_inflight = 0
 
             for _ in range(self._min_concurrency):
                 self._spawn_worker("fast")
@@ -258,6 +260,8 @@ class RemoteTaskService:
                 start = monotonic()
                 if queue_name == "fast":
                     self._fast_inflight += 1
+                else:
+                    self._job_inflight += 1
                 try:
                     result = await self._execute_task(task)
                 except Exception as exc:  # pragma: no cover - defensive logging
@@ -269,6 +273,8 @@ class RemoteTaskService:
                 finally:
                     if queue_name == "fast":
                         self._fast_inflight -= 1
+                    else:
+                        self._job_inflight -= 1
                     duration = monotonic() - start
                     if metrics_enabled and task.track_duration:
                         self._update_metrics(duration)
@@ -334,10 +340,14 @@ class RemoteTaskService:
         if self._fast_current_workers >= self._max_concurrency:
             return
 
-        if (
-            self._avg_duration > 0.0
-            and self._avg_duration > self._scale_up_duration_threshold
+        if self._avg_duration > 0.0 and (
+            self._avg_duration >= self._scale_up_duration_threshold
         ):
+            logger.debug(
+                "Skipping fast-pool scale up because average duration %.2fs exceeds threshold %.2fs",
+                self._avg_duration,
+                self._scale_up_duration_threshold,
+            )
             return
 
         self._spawn_worker("fast")
@@ -347,6 +357,36 @@ class RemoteTaskService:
             backlog,
             self._avg_duration,
         )
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Return a snapshot of the internal worker pool state."""
+
+        fast_depth = self._fast_queue.qsize() if self._fast_queue else 0
+        job_depth = self._job_queue.qsize() if self._job_queue else 0
+        return {
+            "started": self._started,
+            "average_duration_seconds": self._avg_duration,
+            "completed_tasks": self._completed,
+            "scale_up_backlog_threshold": self._scale_up_backlog,
+            "scale_up_duration_threshold_seconds": self._scale_up_duration_threshold,
+            "idle_timeout_seconds": self._idle_seconds,
+            "fast_pool": {
+                "queue_depth": fast_depth,
+                "inflight": self._fast_inflight,
+                "current_workers": self._fast_current_workers,
+                "min_workers": self._min_concurrency,
+                "max_workers": self._max_concurrency,
+                "configured_workers": None,
+            },
+            "job_pool": {
+                "queue_depth": job_depth,
+                "inflight": self._job_inflight,
+                "current_workers": self._job_current_workers,
+                "min_workers": None,
+                "max_workers": None,
+                "configured_workers": self._job_concurrency,
+            },
+        }
 
 
 remote_task_service = RemoteTaskService()

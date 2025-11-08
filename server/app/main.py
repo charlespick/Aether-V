@@ -188,11 +188,13 @@ async def security_and_audit_middleware(request: Request, call_next):
     user_agent = request.headers.get("user-agent", "unknown")
 
     # Don't log sensitive headers
-    safe_headers = {
-        k: v
-        for k, v in request.headers.items()
-        if k.lower() not in ["authorization", "cookie", "x-api-key"]
-    }
+    if settings.debug:
+        safe_headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower() not in ["authorization", "cookie", "x-api-key"]
+        }
+        logger.debug("Request headers (sanitized): %s", safe_headers)
 
     logger.info(
         f"Request started: {request.method} {request.url.path} "
