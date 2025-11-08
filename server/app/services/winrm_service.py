@@ -5,7 +5,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Callable, Dict, Iterable, Iterator, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Set
 
 from pypsrp.exceptions import (
     AuthenticationError,
@@ -45,6 +45,7 @@ class _PSRPStreamCursor:
     stderr_chunks: int = 0
     stdout_bytes: int = 0
     stderr_bytes: int = 0
+    information_index: int = 0
     exit_code: Optional[int] = None
 
     _EXIT_SENTINEL: str = "__AETHER_V_EXIT_CODE__:"
@@ -76,6 +77,21 @@ class _PSRPStreamCursor:
 
         self.output_index = len(ps.output)
 
+        # Drain information stream (Write-Host, Write-Information)
+        information_items = ps.streams.information[self.information_index :]
+        if information_items:
+            for record in information_items:
+                text = self._stringify_information(record)
+                if not text:
+                    continue
+
+                payload = self._ensure_line_termination(text)
+                self.stdout_chunks += 1
+                self.stdout_bytes += len(payload.encode("utf-8", errors="ignore"))
+                self.on_chunk("stdout", payload)
+
+        self.information_index = len(ps.streams.information)
+
         # Drain error stream
         error_items = ps.streams.error[self.error_index :]
         if error_items:
@@ -101,23 +117,215 @@ class _PSRPStreamCursor:
         self.error_index = len(ps.streams.error)
 
     @staticmethod
-    def _stringify(item: Any) -> str:
+    def _stringify(item: Any, *, _seen: Optional[Set[int]] = None) -> str:
         """Best-effort string conversion for PSRP data."""
 
         if item is None:
             return ""
 
-        formatter = getattr(item, "to_string", None)
+        if _seen is None:
+            _seen = set()
+
+        obj_id = id(item)
+        if obj_id in _seen:
+            return ""
+
+        _seen.add(obj_id)
+
+        try:
+            formatter = getattr(item, "to_string", None)
+            if callable(formatter):
+                try:
+                    text = formatter()
+                    if text:
+                        return text
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.debug("Failed to format PSRP object via to_string", exc_info=True)
+
+            complex_text = _PSRPStreamCursor._stringify_complex(item, _seen)
+            if complex_text:
+                return complex_text
+
+            textual = getattr(item, "to_string", None)
+            if isinstance(textual, str) and textual.strip():
+                return textual
+
+            if hasattr(item, "value") and isinstance(getattr(item, "value"), str):
+                return getattr(item, "value")
+
+            return str(item)
+        finally:
+            _seen.discard(obj_id)
+
+    @staticmethod
+    def _stringify_information(record: Any) -> str:
+        """Convert an information stream record into printable text."""
+
+        message_data = getattr(record, "message_data", None)
+        extracted = _PSRPStreamCursor._extract_information_message(message_data)
+        if extracted:
+            return extracted
+
+        formatter = getattr(record, "to_string", None)
         if callable(formatter):
             try:
-                return formatter()
+                text = formatter()
+                if text:
+                    return text
             except Exception:  # pragma: no cover - defensive logging
-                logger.debug("Failed to format PSRP object via to_string", exc_info=True)
+                logger.debug("Failed to format information record", exc_info=True)
 
-        if hasattr(item, "value") and isinstance(getattr(item, "value"), str):
-            return getattr(item, "value")
+        textual = getattr(record, "message", None)
+        if isinstance(textual, str) and textual.strip():
+            return textual.strip()
 
-        return str(item)
+        return str(record)
+
+    @staticmethod
+    def _extract_information_message(message_data: Any) -> str:
+        """Return friendly text from Write-Information/Write-Host payloads."""
+
+        def _clean(value: str) -> str:
+            return value.rstrip("\r\n")
+
+        if message_data is None:
+            return ""
+
+        if isinstance(message_data, bytes):
+            try:
+                decoded = message_data.decode("utf-8")
+            except UnicodeDecodeError:
+                decoded = message_data.decode("utf-8", errors="ignore")
+            if decoded.strip():
+                return _clean(decoded)
+            return ""
+
+        if isinstance(message_data, str):
+            if message_data.strip():
+                return _clean(message_data)
+            return ""
+
+        if isinstance(message_data, dict):
+            for key in ("message", "Message"):
+                value = message_data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return _clean(value)
+            return ""
+
+        message_attr = getattr(message_data, "message", None)
+        if isinstance(message_attr, str) and message_attr.strip():
+            return _clean(message_attr)
+
+        for attr in ("Message", "Value"):
+            value = getattr(message_data, attr, None)
+            if isinstance(value, str) and value.strip():
+                return _clean(value)
+
+        adapted = getattr(message_data, "adapted_properties", None)
+        if isinstance(adapted, dict):
+            for key, value in adapted.items():
+                if key.lower() == "message" and isinstance(value, str) and value.strip():
+                    return _clean(value)
+
+        property_sets = getattr(message_data, "property_sets", None)
+        if isinstance(property_sets, list):
+            for entry in property_sets:
+                if not isinstance(entry, dict):
+                    continue
+                for key, value in entry.items():
+                    if key.lower() == "message" and isinstance(value, str) and value.strip():
+                        return _clean(value)
+
+        return _PSRPStreamCursor._stringify(message_data)
+
+    @staticmethod
+    def _stringify_complex(item: Any, seen: Set[int]) -> str:
+        """Render pypsrp complex objects by enumerating their properties."""
+
+        def iter_property_dict(data: Any) -> Iterable[tuple[str, Any]]:
+            if isinstance(data, dict):
+                yield from data.items()
+            return
+
+        def iter_property_list(data: Any) -> Iterable[tuple[str, Any]]:
+            if isinstance(data, list):
+                for entry in data:
+                    if isinstance(entry, dict):
+                        for key, value in entry.items():
+                            yield key, value
+
+
+        properties: list[tuple[str, Any]] = []
+
+        property_sets = getattr(item, "property_sets", None)
+        if property_sets:
+            properties.extend(iter_property_list(property_sets))
+
+        adapted = getattr(item, "adapted_properties", None)
+        if adapted:
+            properties.extend(iter_property_dict(adapted))
+
+        extended = getattr(item, "extended_properties", None)
+        if extended:
+            properties.extend(iter_property_dict(extended))
+
+        if not properties:
+            return ""
+
+        lines: list[str] = []
+        for key, value in properties:
+            value_text = _PSRPStreamCursor._coerce_property_value(value, seen)
+            if not value_text:
+                continue
+
+            needs_block = "\n" in value_text or _PSRPStreamCursor._is_complex_like(value)
+            if needs_block:
+                indented = "\n".join(f"  {segment}" for segment in value_text.splitlines())
+                formatted = f"\n{indented}"
+            else:
+                formatted = f" {value_text}"
+
+            lines.append(f"{key}:{formatted}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _is_complex_like(value: Any) -> bool:
+        """Return True when the value exposes complex object metadata."""
+
+        return any(
+            hasattr(value, attr)
+            for attr in ("adapted_properties", "extended_properties", "property_sets")
+        )
+
+    @staticmethod
+    def _coerce_property_value(value: Any, seen: Set[int]) -> str:
+        """Normalise nested property values into printable text."""
+
+        if value is None:
+            return ""
+
+        if isinstance(value, (str, int, float, bool)):
+            return str(value)
+
+        if isinstance(value, (list, tuple, set)):
+            parts = [
+                _PSRPStreamCursor._coerce_property_value(element, seen)
+                for element in value
+            ]
+            filtered = [part for part in parts if part]
+            return ", ".join(filtered)
+
+        if isinstance(value, dict):
+            parts = []
+            for key, nested in value.items():
+                nested_text = _PSRPStreamCursor._coerce_property_value(nested, seen)
+                if not nested_text:
+                    continue
+                parts.append(f"{key}={nested_text}")
+            return ", ".join(parts)
+
+        return _PSRPStreamCursor._stringify(value, _seen=seen).strip()
 
     @staticmethod
     def _ensure_line_termination(text: str) -> str:
