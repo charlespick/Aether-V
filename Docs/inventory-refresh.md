@@ -4,8 +4,8 @@ The inventory refresh service keeps Aether-V's in-memory model of clusters, host
 
 ## Startup and bootstrapping
 - `inventory_service.start()` now runs immediately after the remote task and notification services, before the job service, so the first refresh can begin while host deployment still rolls out updates.
-- The bootstrap coroutine no longer blocks on host deployment completion. Instead, each host refresh calls `host_deployment_service.ensure_inventory_ready()` to verify the installed script version matches the running container.
-- When a host is still preparing artifacts, the service records a transient `Host` entry with `"Preparing host, will retry later"`, raises an informational notification, and skips the refresh until the deployment service reports a match.【F:server/app/services/inventory_service.py†L52-L65】【F:server/app/services/inventory_service.py†L627-L675】
+- The bootstrap coroutine no longer blocks on host deployment completion. Each host refresh asks `host_deployment_service.ensure_inventory_ready()` for a readiness summary so version mismatches are deferred while connectivity failures continue into the normal refresh flow.
+- Hosts flagged with out-of-date deployment artifacts record a transient `Host` entry with `"Preparing host, will retry later"`, raise an informational notification, and skip refreshes until deployment reports the expected version; connectivity failures bypass the skip so unreachable notifications still surface.【F:server/app/services/inventory_service.py†L52-L76】【F:server/app/services/inventory_service.py†L815-L864】
 
 ## Refresh lifecycle
 - Startup schedules the initial full refresh (`reason="startup"`) plus the staggered background loop. Both flows honour the host-level readiness check before contacting WinRM.【F:server/app/services/inventory_service.py†L115-L169】【F:server/app/services/inventory_service.py†L353-L422】
@@ -14,7 +14,7 @@ The inventory refresh service keeps Aether-V's in-memory model of clusters, host
 
 ## Host communication and recovery
 - WinRM calls run through `remote_task_service.run_blocking` with the `INVENTORY` category, giving inventory work its own concurrency lane and timeout enforcement. Script execution errors trigger targeted redeploy attempts before escalating.【F:server/app/services/inventory_service.py†L780-L861】【F:server/app/services/remote_task_service.py†L105-L204】
-- `host_deployment_service.ensure_inventory_ready()` caches verified container versions per host so subsequent refreshes skip redundant version checks. Failed checks or deployments clear the cache entry so the next refresh will retry.【F:server/app/services/host_deployment_service.py†L70-L116】【F:server/app/services/host_deployment_service.py†L118-L141】
+- `host_deployment_service.ensure_inventory_ready()` now returns a readiness summary, caching verified versions, flagging hosts that are still updating artifacts, and surfacing connection errors so inventory can raise unreachable notifications.【F:server/app/services/host_deployment_service.py†L68-L216】
 
 ## Concurrency and isolation
 - An `asyncio.Lock` serialises refresh mutations so manual triggers, the initial sync, and the background loop cannot interleave updates to shared dictionaries.【F:server/app/services/inventory_service.py†L564-L623】
@@ -29,7 +29,7 @@ The inventory refresh service keeps Aether-V's in-memory model of clusters, host
 
 ## Metrics and diagnostics
 - `inventory_service.get_metrics()` now exposes the rolling average single-host refresh time, refresh sample count, and tracked sets of preparing/slow hosts alongside per-host timestamps.【F:server/app/services/inventory_service.py†L1043-L1118】
-- Deployment diagnostics continue to publish per-host setup status, providing context for hosts still flagged as preparing.【F:server/app/services/host_deployment_service.py†L714-L969】
+- Deployment diagnostics continue to publish per-host setup status, providing context for hosts still flagged as preparing.【F:server/app/services/host_deployment_service.py†L735-L804】【F:server/app/services/host_deployment_service.py†L1000-L1049】
 
 ## Mermaid overview
 ```mermaid

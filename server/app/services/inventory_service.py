@@ -19,7 +19,7 @@ from ..core.models import (
     VM,
     VMState,
 )
-from .host_deployment_service import host_deployment_service
+from .host_deployment_service import host_deployment_service, InventoryReadiness
 from .notification_service import notification_service
 from .remote_task_service import (
     remote_task_service,
@@ -812,20 +812,27 @@ class InventoryService:
         if settings.dummy_data or not host_deployment_service.is_enabled:
             return True
 
+        readiness: Optional[InventoryReadiness]
         try:
-            ready = await host_deployment_service.ensure_inventory_ready(hostname)
+            readiness = await host_deployment_service.ensure_inventory_ready(hostname)
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.exception(
                 "Failed to verify deployment readiness for %s: %s", hostname, exc
             )
-            ready = False
+            readiness = InventoryReadiness(ready=False, preparing=False, error=str(exc))
 
-        if ready:
+        if readiness.ready:
             self._clear_preparing_host(hostname)
             return True
 
-        self._mark_host_preparing(hostname)
-        return False
+        if readiness.preparing:
+            self._mark_host_preparing(hostname)
+            return False
+
+        self._clear_preparing_host(hostname)
+        if readiness.error:
+            logger.debug("Host %s not ready for inventory due to deployment error: %s", hostname, readiness.error)
+        return True
 
     def _mark_host_preparing(self, hostname: str) -> None:
         """Record that a host is still preparing deployment artifacts."""
