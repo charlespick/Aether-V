@@ -61,6 +61,7 @@ class InventoryService:
         self._bootstrap_task: Optional[asyncio.Task] = None
         self._refresh_lock = asyncio.Lock()
         self._job_vm_placeholders: Dict[str, Set[str]] = {}
+        self._job_vm_originals: Dict[str, Dict[str, Optional[VM]]] = {}
         self._host_last_refresh: Dict[str, datetime] = {}
         self._inventory_status_key = "inventory-loading"
         self._refresh_overrun_key = "inventory-refresh-capacity"
@@ -1273,6 +1274,7 @@ class InventoryService:
         )
         self.vms[key] = placeholder
         self._job_vm_placeholders.setdefault(job_id, set()).add(key)
+        self._job_vm_originals.pop(job_id, None)
         logger.info(
             "Tracking in-progress VM %s on host %s for job %s", vm_name, host, job_id
         )
@@ -1282,9 +1284,78 @@ class InventoryService:
         keys = self._job_vm_placeholders.pop(job_id, set())
         for key in keys:
             vm = self.vms.get(key)
-            if vm and vm.state == VMState.CREATING:
+            if vm and vm.state in {VMState.CREATING, VMState.DELETING}:
                 del self.vms[key]
+        self._job_vm_originals.pop(job_id, None)
         logger.info("Cleared in-progress VM placeholders for job %s", job_id)
+
+    def mark_vm_deleting(self, job_id: str, vm_name: str, host: str) -> None:
+        """Mark a VM as deleting while a job is in progress."""
+
+        if not job_id or not vm_name or not host:
+            return
+
+        key = f"{host}:{vm_name}"
+        existing = self.vms.get(key)
+        if existing:
+            self._job_vm_originals.setdefault(job_id, {})[key] = existing.model_copy(deep=True)
+            existing.state = VMState.DELETING
+        else:
+            self._job_vm_originals.setdefault(job_id, {})[key] = None
+            self.vms[key] = VM(name=vm_name, host=host, state=VMState.DELETING, cpu_cores=0, memory_gb=0.0)
+
+        self._job_vm_placeholders.setdefault(job_id, set()).add(key)
+        logger.info(
+            "Marking VM %s on host %s as deleting for job %s", vm_name, host, job_id
+        )
+
+    def finalize_vm_deletion(
+        self, job_id: str, vm_name: str, host: str, success: bool
+    ) -> None:
+        """Apply inventory updates after a deletion job completes."""
+
+        if not job_id or not vm_name or not host:
+            return
+
+        key = f"{host}:{vm_name}"
+        original_map = self._job_vm_originals.pop(job_id, {})
+        original_vm = original_map.get(key)
+        placeholder_keys = self._job_vm_placeholders.pop(job_id, set())
+
+        if success:
+            if key in self.vms:
+                self.vms.pop(key, None)
+            logger.info(
+                "Removed VM %s on host %s from inventory after successful deletion job %s",
+                vm_name,
+                host,
+                job_id,
+            )
+        else:
+            if original_vm is not None:
+                self.vms[key] = original_vm
+                logger.info(
+                    "Restored VM %s on host %s to state %s after failed deletion job %s",
+                    vm_name,
+                    host,
+                    original_vm.state,
+                    job_id,
+                )
+            else:
+                self.vms.pop(key, None)
+                logger.info(
+                    "Removed transient delete placeholder for VM %s on host %s after failed job %s",
+                    vm_name,
+                    host,
+                    job_id,
+                )
+
+        for placeholder_key in placeholder_keys:
+            if placeholder_key == key:
+                continue
+            vm = self.vms.get(placeholder_key)
+            if vm and vm.state in {VMState.CREATING, VMState.DELETING}:
+                del self.vms[placeholder_key]
 
     def get_all_clusters(self) -> List[Cluster]:
         """Get all clusters."""

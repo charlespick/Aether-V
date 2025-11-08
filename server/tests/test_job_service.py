@@ -21,6 +21,7 @@ try:
         NotificationCategory,
         NotificationLevel,
         JobSubmission,
+        VMDeleteRequest,
     )
     from server.app.services.job_service import JobService
     IMPORT_ERROR = None
@@ -90,12 +91,22 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             def __init__(self):
                 self.tracked: List[Tuple[str, str, str]] = []
                 self.cleared: List[str] = []
+                self.deleting: List[Tuple[str, str, str]] = []
+                self.finalised: List[Tuple[str, str, str, bool]] = []
 
             def track_job_vm(self, job_id: str, vm_name: str, host: str) -> None:
                 self.tracked.append((job_id, vm_name, host))
 
             def clear_job_vm(self, job_id: str) -> None:
                 self.cleared.append(job_id)
+
+            def mark_vm_deleting(self, job_id: str, vm_name: str, host: str) -> None:
+                self.deleting.append((job_id, vm_name, host))
+
+            def finalize_vm_deletion(
+                self, job_id: str, vm_name: str, host: str, success: bool
+            ) -> None:
+                self.finalised.append((job_id, vm_name, host, success))
 
         return _InventoryStub()
 
@@ -323,6 +334,86 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             "super-secret",
         )
 
+    async def test_submit_delete_job_enqueues_job(self):
+        await self.job_service.start()
+
+        original_process = self.job_service._process_job
+        processed: List[str] = []
+
+        async def fake_process(job_id: str) -> None:
+            processed.append(job_id)
+
+        self.job_service._process_job = fake_process  # type: ignore[assignment]
+
+        request = VMDeleteRequest(vm_name="vm-to-remove", hyperv_host="hyperv01", force=False)
+        try:
+            job = await self.job_service.submit_delete_job(request)
+            await asyncio.wait_for(asyncio.sleep(0), timeout=1)
+
+            self.assertIn(job.job_id, processed)
+            async with self.job_service._lock:
+                stored = self.job_service.jobs[job.job_id]
+                self.assertEqual(stored.job_type, "delete_vm")
+                self.assertEqual(stored.target_host, "hyperv01")
+        finally:
+            self.job_service._process_job = original_process
+
+    async def test_after_job_update_tracks_vm_deletion_lifecycle(self):
+        job = Job(
+            job_id="job-delete-1",
+            job_type="delete_vm",
+            status=JobStatus.PENDING,
+            created_at=datetime.utcnow(),
+            target_host="hyperv01",
+            parameters={"vm_name": "app-server"},
+            output=[],
+        )
+
+        async with self.job_service._lock:
+            self.job_service.jobs[job.job_id] = job
+
+        await self.job_service._update_job(
+            job.job_id,
+            status=JobStatus.RUNNING,
+            started_at=datetime.utcnow(),
+        )
+        self.assertIn((job.job_id, "app-server", "hyperv01"), self.inventory_stub.deleting)
+
+        await self.job_service._update_job(
+            job.job_id,
+            status=JobStatus.COMPLETED,
+            completed_at=datetime.utcnow(),
+        )
+        self.assertIn((job.job_id, "app-server", "hyperv01", True), self.inventory_stub.finalised)
+
+    async def test_after_job_update_restores_inventory_on_failed_delete(self):
+        job = Job(
+            job_id="job-delete-2",
+            job_type="delete_vm",
+            status=JobStatus.PENDING,
+            created_at=datetime.utcnow(),
+            target_host="hyperv02",
+            parameters={"vm_name": "db-server"},
+            output=[],
+        )
+
+        async with self.job_service._lock:
+            self.job_service.jobs[job.job_id] = job
+
+        await self.job_service._update_job(
+            job.job_id,
+            status=JobStatus.RUNNING,
+            started_at=datetime.utcnow(),
+        )
+        await self.job_service._update_job(
+            job.job_id,
+            status=JobStatus.FAILED,
+            error="boom",
+            completed_at=datetime.utcnow(),
+        )
+
+        self.assertIn((job.job_id, "db-server", "hyperv02", False), self.inventory_stub.finalised)
+
     async def test_only_one_provisioning_job_runs_per_host(self):
         await self.job_service.start()
 
@@ -375,4 +466,44 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             self.assertEqual(start_order, [job1.job_id, job2.job_id])
         finally:
             self.job_service._execute_provisioning_job = original_execute
+
+    async def test_only_one_delete_job_runs_per_host(self):
+        await self.job_service.start()
+
+        original_execute = self.job_service._execute_delete_job
+
+        first_job_started = asyncio.Event()
+        second_job_started = asyncio.Event()
+        release_first_job = asyncio.Event()
+        start_order: List[str] = []
+
+        async def fake_execute(job):
+            start_order.append(job.job_id)
+            if not first_job_started.is_set():
+                first_job_started.set()
+                await release_first_job.wait()
+            else:
+                second_job_started.set()
+
+        self.job_service._execute_delete_job = fake_execute  # type: ignore[assignment]
+
+        request1 = VMDeleteRequest(vm_name="vm-alpha", hyperv_host="hyperv01", force=False)
+        request2 = VMDeleteRequest(vm_name="vm-beta", hyperv_host="HYPERV01", force=False)
+
+        try:
+            job1 = await self.job_service.submit_delete_job(request1)
+            job2 = await self.job_service.submit_delete_job(request2)
+
+            await asyncio.wait_for(first_job_started.wait(), timeout=1)
+            self.assertEqual(start_order, [job1.job_id])
+
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(second_job_started.wait(), timeout=0.2)
+
+            release_first_job.set()
+
+            await asyncio.wait_for(second_job_started.wait(), timeout=1)
+            self.assertEqual(start_order, [job1.job_id, job2.job_id])
+        finally:
+            self.job_service._execute_delete_job = original_execute
 

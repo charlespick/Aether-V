@@ -330,6 +330,7 @@ const VM_STATE_META = {
     Running: { emoji: '🟢', badgeClass: 'running', dotClass: 'running' },
     Creating: { emoji: '🟡', badgeClass: 'creating', dotClass: 'creating' },
     Starting: { emoji: '🟡', badgeClass: 'creating', dotClass: 'creating' },
+    Deleting: { emoji: '🗑️', badgeClass: 'deleting', dotClass: 'off' },
     Off: { emoji: '⚫', badgeClass: 'off', dotClass: 'off' },
     Paused: { emoji: '⏸️', badgeClass: 'off', dotClass: 'off' },
     Saved: { emoji: '💾', badgeClass: 'off', dotClass: 'off' },
