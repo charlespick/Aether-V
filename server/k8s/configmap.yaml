@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aetherv-config
+  namespace: aetherv
+data:
+  # Application
+  # DEBUG: "false"  # Default: false (enable for verbose logging)
+  # ENVIRONMENT_NAME: "Production Environment"  # Default display name
+
+  # Authentication
+  # AUTH_ENABLED: "true"  # Default: true (leave enabled for production)
+  # ALLOW_DEV_AUTH: "false"  # Default: false; must be true before disabling auth
+
+  # OIDC
+  OIDC_ISSUER_URL: "https://login.microsoftonline.com/<tenant-id>/v2.0"
+  OIDC_CLIENT_ID: "<client-id>"
+  OIDC_REDIRECT_URI: "https://aetherv.example.com/auth/callback"
+  # OIDC_API_AUDIENCE: "api://<client-id>"  # Optional explicit API audience override
+  OIDC_READER_PERMISSIONS: "Aether.Reader"
+  OIDC_WRITER_PERMISSIONS: "Aether.Writer"
+  OIDC_ADMIN_PERMISSIONS: "Aether.Admin"
+  # OIDC_ROLE_NAME: "vm-admin"  # Legacy fallback role mapping (optional)
+  # OIDC_FORCE_HTTPS: "true"  # Default: true (set false only for local HTTP testing)
+
+  # Security
+  # JWKS_CACHE_TTL: "300"  # Default: 300 seconds
+  # MAX_TOKEN_AGE: "3600"  # Default: 3600 seconds
+  # SESSION_MAX_AGE: "3600"  # Default: 3600 seconds
+  # COOKIE_SECURE: "true"  # Default: true
+  # COOKIE_SAMESITE: "lax"  # Default: lax
+
+  # Hyper-V hosts
+  HYPERV_HOSTS: "hyperv01.example.com,hyperv02.example.com"
+
+  # WinRM
+  # WINRM_TRANSPORT: "ntlm"  # Default: ntlm (supports ntlm, basic, credssp)
+  # WINRM_PORT: "5985"  # Default: 5985
+
+  # Inventory
+  # INVENTORY_REFRESH_INTERVAL: "60"  # Default: 60 seconds
+
+  # Jobs
+  # JOB_WORKER_CONCURRENCY: "6"  # Default: 6 concurrent provisioning jobs
+  # JOB_LONG_TIMEOUT_SECONDS: "900"  # Default: 15 minutes for provisioning/deletion jobs
+  # JOB_SHORT_TIMEOUT_SECONDS: "60"  # Default: 60 seconds for quick power actions
+
+  # Remote WinRM execution
+  # REMOTE_TASK_MIN_CONCURRENCY: "6"   # Default: 6 initial concurrent remote operations
+  # REMOTE_TASK_MAX_CONCURRENCY: "24"  # Default: baseline cap before dynamic scaling considers more workers
+  # REMOTE_TASK_DYNAMIC_CEILING: "48"   # Default: maximum fast-pool workers after adaptive scaling
+  # REMOTE_TASK_SCALE_UP_BACKLOG: "2"  # Default: scale up when at least this many tasks are queued
+  # REMOTE_TASK_IDLE_SECONDS: "30.0"   # Default: idle time before scaling workers down
+  # REMOTE_TASK_SCALE_UP_DURATION_THRESHOLD: "30.0"  # Default: telemetry for average remote task duration
+  # REMOTE_TASK_JOB_CONCURRENCY: "6"   # Default: dedicated workers for long running jobs
+  # REMOTE_TASK_RESOURCE_SCALE_INTERVAL_SECONDS: "15.0"  # Default: seconds between resource checks
+  # REMOTE_TASK_RESOURCE_OBSERVATION_WINDOW_SECONDS: "45.0"  # Default: sustained capacity period before scaling
+  # REMOTE_TASK_RESOURCE_CPU_THRESHOLD: "60.0"  # Default: max average CPU percent to allow scaling
+  # REMOTE_TASK_RESOURCE_MEMORY_THRESHOLD: "70.0"  # Default: max average memory percent to allow scaling
+  # REMOTE_TASK_RESOURCE_SCALE_INCREMENT: "2"  # Default: additional fast-pool workers per expansion step
+
+  # WebSockets
+  # WEBSOCKET_TIMEOUT: "1800"  # Default: 1800 seconds
+  # WEBSOCKET_PING_INTERVAL: "30"  # Default: 30 seconds
+  # WEBSOCKET_REFRESH_TIME: "1500"  # Default: 1500 seconds
+
+  # Deployment
+  # HOST_INSTALL_DIRECTORY: "C:\\Program Files\\Aether-V"  # Default agent path
+  # HOST_DEPLOYMENT_TIMEOUT: "60.0"  # Default: 60 seconds per host WinRM operation
+  # AGENT_STARTUP_CONCURRENCY: "3"  # Default: 3 parallel host startups
+  # AGENT_STARTUP_INGRESS_TIMEOUT: "120.0"  # Default: wait up to 120s for ingress readiness
+  # AGENT_STARTUP_INGRESS_POLL_INTERVAL: "3.0"  # Default: poll ingress readiness every 3s
+  # AGENT_DOWNLOAD_BASE_URL: "https://aetherv.example.com/agent"  # Required for automated host updates
+  # AGENT_DOWNLOAD_MAX_ATTEMPTS: "5"  # Default: 5 download retries
+  # AGENT_DOWNLOAD_RETRY_INTERVAL: "2.0"  # Default: 2 seconds between retries
+
+  # Development
+  # DUMMY_DATA: "false"  # Default: false (enables mock data when true)

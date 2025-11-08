@@ -1,0 +1,1 @@
+"""Aether-V Server application."""

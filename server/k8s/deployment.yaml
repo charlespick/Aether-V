@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aetherv-server
+  namespace: aetherv
+  labels:
+    app: aetherv-server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Only one instance due to in-memory state
+  selector:
+    matchLabels:
+      app: aetherv-server
+  template:
+    metadata:
+      labels:
+        app: aetherv-server
+    spec:
+      containers:
+      - name: server
+        image: ghcr.io/charlespick/aetherv-server:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        envFrom:
+        - configMapRef:
+            name: aetherv-config
+        - secretRef:
+            name: aetherv-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+      restartPolicy: Always

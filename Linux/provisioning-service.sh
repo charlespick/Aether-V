@@ -24,30 +24,121 @@ MODULES_DIR="/usr/local/bin/modules"
 # Domain join is handled via ignored parameters for Linux, no separate module needed
 MODULE_EXECUTION_ORDER=(
     "mod_general"
-    "mod_net" 
+    "mod_net"
     "mod_ansible"
 )
+
+# Error reporting helpers
+MAX_ERROR_SUMMARY_LENGTH=200
+CURRENT_ERROR_SUMMARY="error:unknown"
+PROVISIONING_SUCCESS=0
+FAILURE_PUBLISHED=0
+
+set_error_summary() {
+    local summary="$1"
+    if [[ -z "$summary" ]]; then
+        summary="error:unknown"
+    fi
+    CURRENT_ERROR_SUMMARY="$summary"
+}
+
+truncate_error_summary() {
+    local message="$1"
+    if [[ -z "$message" ]]; then
+        echo ""
+        return
+    fi
+
+    if [[ ${#message} -le $MAX_ERROR_SUMMARY_LENGTH ]]; then
+        echo "$message"
+    else
+        echo "${message:0:$MAX_ERROR_SUMMARY_LENGTH}"
+    fi
+}
+
+publish_guest_error() {
+    local raw_message="$1"
+    local message
+    message=$(truncate_error_summary "$raw_message")
+
+    if ! write_hyperv_kvp "hlvmm.meta.guest_provisioning_error" "$message"; then
+        echo "WARNING: Failed to publish guest provisioning error summary" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+set_guest_state() {
+    local status="$1"
+
+    if ! write_hyperv_kvp "hlvmm.meta.guest_provisioning_system_state" "$status"; then
+        echo "ERROR: Failed to update guest provisioning system state to '$status'" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+set_guest_failure() {
+    local summary="$1"
+    if [[ -z "$summary" ]]; then
+        summary="error:unknown"
+    fi
+
+    publish_guest_error "$summary" || true
+    set_guest_state "provisioningfailed" || true
+    FAILURE_PUBLISHED=1
+}
+
+set_guest_success() {
+    publish_guest_error "" || true
+    if set_guest_state "provisioningapplied"; then
+        PROVISIONING_SUCCESS=1
+    fi
+}
+
+on_exit() {
+    if [[ $PROVISIONING_SUCCESS -eq 1 || $FAILURE_PUBLISHED -eq 1 ]]; then
+        return
+    fi
+
+    # Treat any unexpected exit prior to publishing success as a failure
+    set_guest_failure "$CURRENT_ERROR_SUMMARY"
+}
+
+trap 'on_exit' EXIT
+
+# Initialize default error summary
+set_error_summary "error initializing:kvp_daemon"
 
 # Load and execute modules
 execute_modules() {
     local decrypted_keys_dir="$1"
-    
+
     echo "Starting module execution with ${#MODULE_EXECUTION_ORDER[@]} modules..."
-    
+
     for module_name in "${MODULE_EXECUTION_ORDER[@]}"; do
         local module_path="$MODULES_DIR/${module_name}.sh"
-        
+
         if [[ -f "$module_path" ]]; then
             echo "Loading module: $module_name"
             # Source the module file
             source "$module_path"
-            
+
             # Check if the module's execute function exists
             if declare -f "${module_name}_execute" >/dev/null; then
+                set_error_summary "error applying:${module_name}"
                 # Execute the module
                 "${module_name}_execute" "$decrypted_keys_dir"
+                local module_exit_code=$?
+                if [[ $module_exit_code -ne 0 ]]; then
+                    echo "ERROR: Module $module_name failed with exit code $module_exit_code"
+                    return $module_exit_code
+                fi
             else
                 echo "ERROR: Module $module_name does not have an execute function"
+                return 1
             fi
         else
             echo "WARNING: Module file not found: $module_path (skipping)"
@@ -316,72 +407,17 @@ update_phase_status() {
     echo "$phase" > "$phase_file"
 }
 
-# Function to copy version file from CD-ROM before ejecting
-copy_version_file() {
-    local cidata_device=$(blkid -t LABEL=CIDATA -o device 2>/dev/null | head -1)
-    local version_copied=false
-    
-    if [[ -n "$cidata_device" ]]; then
-        # Create temporary mount point
-        local temp_mount="/tmp/cidata_mount"
-        mkdir -p "$temp_mount"
-        
-        # Mount the device
-        if mount "$cidata_device" "$temp_mount" 2>/dev/null; then
-            echo "Mounted CIDATA device at $temp_mount"
-            
-            # Copy version file if it exists
-            if [[ -f "$temp_mount/version" ]]; then
-                local target_dir="/var/lib/hyperv"
-                mkdir -p "$target_dir"
-                cp "$temp_mount/version" "$target_dir/version"
-                echo "Copied version file from CD-ROM to $target_dir/version"
-                version_copied=true
-            else
-                echo "Warning: Version file not found on CD-ROM"
-            fi
-            
-            # Unmount
-            umount "$temp_mount"
-            rmdir "$temp_mount"
-        else
-            echo "Warning: Failed to mount CIDATA device for version file copy"
-        fi
-    fi
-    
-    return $([ "$version_copied" = true ] && echo 0 || echo 1)
-}
 
-# Function to eject CD-ROM drives
-eject_cdroms() {
-    local cidata_device=$(blkid -t LABEL=CIDATA -o device 2>/dev/null | head -1)
-    
-    if [[ -n "$cidata_device" ]]; then
-        # Unmount if necessary
-        local mount_point=$(mount | grep "^$cidata_device " | awk '{print $3}')
-        [[ -n "$mount_point" ]] && umount "$mount_point" 2>/dev/null
-        
-        # Eject the device
-        eject "$cidata_device" 2>/dev/null
-        echo "Ejected CIDATA device: $cidata_device"
-    fi
-}
+
+
 
 phase_one() {
     echo "Starting phase one..."
     update_phase_status "phase_one"
 
-    # Copy version file from CD-ROM before ejecting
-    if ! copy_version_file; then
-        echo "ERROR: Failed to copy version file from CD-ROM"
-        return 1
-    fi
-
-    # Eject CD-ROM drives early to prevent interference with reboots
-    eject_cdroms
-
     # Wait until hlvmm.meta.host_provisioning_system_state equals waitingforpublickey
     echo "Waiting for host to signal 'waitingforpublickey'..."
+    set_error_summary "error waiting:host_signal"
     local timeout=300 # 5 minutes
     local elapsed=0
     
@@ -416,6 +452,7 @@ phase_one() {
     fi
 
     # Read hlvmm.meta.version and verify it matches expected version
+    set_error_summary "error validating:manifest"
     echo "Verifying provisioning system manifest..."
     manifest_raw=$(read_hyperv_kvp "hlvmm.meta.version")
     
@@ -435,6 +472,7 @@ phase_one() {
     echo "Provisioning system version verified: $expected_version"
 
     # Generate a public/private key pair
+    set_error_summary "error generating:rsa_keys"
     echo "Generating RSA key pair..."
     key_dir="/var/lib/hyperv/keys"
     mkdir -p "$key_dir"
@@ -453,6 +491,7 @@ phase_one() {
     public_key_der=$(openssl rsa -pubin -in "$public_key" -RSAPublicKey_out -outform DER | base64 -w 0)
 
     # Publish the public key to hlvmm.meta.guest_provisioning_public_key in KVP
+    set_error_summary "error publishing:public_key"
     echo "Publishing public key to KVP..."
     if write_hyperv_kvp "hlvmm.meta.guest_provisioning_public_key" "$public_key_der"; then
         echo "Public key published successfully"
@@ -463,7 +502,9 @@ phase_one() {
 
     # Set hlvmm.meta.guest_provisioning_system_state to waitingforaeskey
     echo "Setting guest state to 'waitingforaeskey'..."
-    if write_hyperv_kvp "hlvmm.meta.guest_provisioning_system_state" "waitingforaeskey"; then
+    set_error_summary "error publishing:guest_state"
+    if set_guest_state "waitingforaeskey"; then
+        publish_guest_error "" || true
         echo "Guest state set successfully"
     else
         echo "ERROR: Failed to set guest state"
@@ -472,6 +513,7 @@ phase_one() {
 
     # Wait for hlvmm.meta.host_provisioning_system_state to equal provisioningdatapublished
     echo "Waiting for host to publish provisioning data..."
+    set_error_summary "error waiting:provisioning_data"
     timeout=300 # 5 minutes
     elapsed=0
     
@@ -493,6 +535,7 @@ phase_one() {
     done
 
     # Read the shared AES key from KVP
+    set_error_summary "error decrypting:shared_aes_key"
     echo "Reading shared AES key from KVP..."
     shared_aes_key=$(read_hyperv_kvp "hlvmm.meta.shared_aes_key")
     if [[ -z "$shared_aes_key" ]]; then
@@ -524,6 +567,7 @@ phase_one() {
     echo "AES key decrypted successfully (rsa_padding_mode:pkcs1)"
     
     # Function to scan for hlvmm.data keys (including chunked base names)
+    set_error_summary "error reading:provisioning_data"
     scan_hlvmm_data_keys() {
         local kvp_file="/var/lib/hyperv/.kvp_pool_0"
         local keys=()
@@ -594,6 +638,7 @@ phase_one() {
     rm -f "$temp_aes_key"
 
     # Save each decrypted key to a file using the actual KVP key name
+    set_error_summary "error decrypting:provisioning_data"
     echo "Decrypting provisioning data keys..."
     for key in "${hlvmm_data_keys[@]}"; do
         # Create safe filename by replacing dots with underscores  
@@ -685,6 +730,7 @@ phase_one() {
     }
 
     # Try checksum verification with retry logic
+    set_error_summary "error validating:checksum"
     if ! verify_provisioning_checksum 1; then
         echo "Initial checksum verification failed. Waiting 30 seconds before retrying..."
         sleep 30
@@ -709,6 +755,7 @@ phase_one() {
         chmod 700 "$decrypted_keys_dir"
         
         # Re-decrypt all keys
+        set_error_summary "error decrypting:provisioning_data"
         echo "Decrypting provisioning data keys (retry attempt)..."
         for key in "${hlvmm_data_keys[@]}"; do
             echo "  Processing key: $key (retry)"
@@ -726,6 +773,7 @@ phase_one() {
         done
         
         # Retry checksum verification
+        set_error_summary "error validating:checksum"
         if ! verify_provisioning_checksum 2; then
             echo "FATAL: Checksum verification failed after retry. Aborting provisioning."
             return 1
@@ -733,8 +781,24 @@ phase_one() {
     fi
 
     # Execute all modules in order
+    echo "Publishing guest state 'applying' before module execution..."
+    set_error_summary "error publishing:guest_state"
+    if set_guest_state "applying"; then
+        publish_guest_error "" || true
+        set_error_summary "error applying:modules"
+    else
+        echo "ERROR: Failed to update guest state to applying"
+        return 1
+    fi
+
     execute_modules "$decrypted_keys_dir"
-    
+    local module_exit_code=$?
+    if [[ $module_exit_code -ne 0 ]]; then
+        return $module_exit_code
+    fi
+
+    set_error_summary "error publishing:success_state"
+    set_guest_success
     echo "Phase one completed."
     reboot
 }
@@ -773,6 +837,10 @@ phase_two() {
 }
 
 read_phase_status
+if [[ "$current_phase" != "nophasestartedyet" ]]; then
+    # Subsequent phases run after provisioning has already been reported as successful
+    PROVISIONING_SUCCESS=1
+fi
 case "$current_phase" in
     "nophasestartedyet")
         phase_one

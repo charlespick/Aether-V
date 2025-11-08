@@ -1,0 +1,200 @@
+version: 1
+id: vm-provisioning
+name: "Virtual machine provisioning"
+description: "Schema describing inputs required to request a new virtual machine."
+fields:
+  - id: vm_name
+    label: "VM name"
+    description: "Unique name for the new virtual machine."
+    hint: "Example: web-01"
+    type: string
+    required: true
+    validations:
+      min_length: 1
+      max_length: 64
+  - id: image_name
+    label: "Image"
+    description: "Identifier of the golden image to clone."
+    hint: "Windows Server 2022"
+    type: string
+    required: true
+  - id: gb_ram
+    label: "Memory (GB)"
+    description: "Amount of memory to assign to the VM in gigabytes."
+    type: integer
+    required: true
+    default: 4
+    validations:
+      minimum: 1
+      maximum: 512
+  - id: cpu_cores
+    label: "vCPUs"
+    description: "Number of virtual CPU cores."
+    type: integer
+    required: true
+    default: 2
+    validations:
+      minimum: 1
+      maximum: 64
+  - id: vlan_id
+    label: "VLAN ID"
+    description: "Optional VLAN identifier for the primary network adapter."
+    hint: "120"
+    type: integer
+    required: false
+    validations:
+      minimum: 1
+      maximum: 4094
+  - id: guest_la_uid
+    label: "Local administrator"
+    description: "Username for the guest operating system's local administrator."
+    hint: "Administrator"
+    type: string
+    required: true
+  - id: guest_la_pw
+    label: "Local administrator password"
+    description: "Password for the guest operating system's local administrator."
+    type: secret
+    required: true
+  - id: guest_v4_ipaddr
+    label: "IPv4 address"
+    description: "Static IPv4 address to assign to the guest."
+    hint: "192.0.2.50"
+    type: ipv4
+    required: false
+  - id: guest_v4_cidrprefix
+    label: "IPv4 prefix length"
+    description: "CIDR prefix length that accompanies the static IPv4 address."
+    hint: "24"
+    type: integer
+    required: false
+    validations:
+      minimum: 1
+      maximum: 32
+  - id: guest_v4_defaultgw
+    label: "Default gateway"
+    description: "Default IPv4 gateway for the guest."
+    hint: "192.0.2.1"
+    type: ipv4
+    required: false
+  - id: guest_v4_dns1
+    label: "Primary DNS server"
+    description: "Primary IPv4 DNS server for the guest."
+    hint: "192.0.2.53"
+    type: ipv4
+    required: false
+  - id: guest_v4_dns2
+    label: "Secondary DNS server"
+    description: "Secondary IPv4 DNS server for the guest."
+    hint: "192.0.2.54"
+    type: ipv4
+    required: false
+  - id: guest_net_dnssuffix
+    label: "DNS suffix"
+    description: "DNS search suffix for the guest network configuration."
+    hint: "corp.example.com"
+    type: string
+    required: false
+  - id: guest_domain_jointarget
+    label: "Domain FQDN"
+    description: "Fully qualified domain name to join."
+    hint: "corp.example.com"
+    type: string
+    required: false
+    applicability:
+      os_family:
+        - windows
+  - id: guest_domain_joinuid
+    label: "Domain join account"
+    description: "User account used to join the domain."
+    hint: "EXAMPLE\\svc_join"
+    type: string
+    required: false
+    applicability:
+      os_family:
+        - windows
+  - id: guest_domain_joinpw
+    label: "Domain join password"
+    description: "Password for the domain join account."
+    type: secret
+    required: false
+    applicability:
+      os_family:
+        - windows
+  - id: guest_domain_joinou
+    label: "Domain join OU"
+    description: "Organizational unit path for the computer account."
+    hint: "OU=Servers,DC=corp,DC=example,DC=com"
+    type: string
+    required: false
+    applicability:
+      os_family:
+        - windows
+  - id: cnf_ansible_ssh_user
+    label: "Ansible SSH user"
+    description: "Username used by Ansible for SSH automation."
+    hint: "ansible"
+    type: string
+    required: false
+    applicability:
+      os_family:
+        - linux
+  - id: cnf_ansible_ssh_key
+    label: "Ansible SSH public key"
+    description: "Public key provided to the guest for Ansible SSH access."
+    hint: "ssh-ed25519 AAAA..."
+    type: multiline
+    required: false
+    applicability:
+      os_family:
+        - linux
+  - id: vm_clustered
+    label: "Add VM to cluster"
+    description: "Request that the new VM be registered with the Failover Cluster."
+    type: boolean
+    required: false
+    default: false
+parameter_sets:
+  - id: static_ipv4
+    label: "Static IPv4 configuration"
+    description: "Provide the required networking fields to request a static IPv4 assignment."
+    variants:
+      - id: static_ipv4_core
+        label: "Static IPv4 without DNS servers"
+        required:
+          - guest_v4_ipaddr
+          - guest_v4_cidrprefix
+          - guest_v4_defaultgw
+      - id: static_ipv4_with_dns
+        label: "Static IPv4 with DNS servers"
+        required:
+          - guest_v4_ipaddr
+          - guest_v4_cidrprefix
+          - guest_v4_defaultgw
+          - guest_v4_dns1
+        optional:
+          - guest_v4_dns2
+  - id: windows_domain_join
+    label: "Windows domain join"
+    description: "Provide domain join credentials to add the VM to an Active Directory domain."
+    variants:
+      - id: domain_join_minimal
+        label: "Domain join without OU"
+        required:
+          - guest_domain_jointarget
+          - guest_domain_joinuid
+          - guest_domain_joinpw
+      - id: domain_join_with_ou
+        label: "Domain join with OU"
+        required:
+          - guest_domain_jointarget
+          - guest_domain_joinuid
+          - guest_domain_joinpw
+          - guest_domain_joinou
+  - id: linux_ansible
+    label: "Linux Ansible automation"
+    description: "Provide SSH credentials to enable Ansible automation on Linux guests."
+    mode: all-or-none
+    members:
+      - cnf_ansible_ssh_user
+      - cnf_ansible_ssh_key
