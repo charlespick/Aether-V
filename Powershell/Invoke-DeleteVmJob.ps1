@@ -192,50 +192,330 @@ end {
         }
     }
 
-    function Remove-EmptyDirectory {
+    function Normalize-FileSystemPath {
         [CmdletBinding()]
         param(
-            [Parameter(Mandatory = $true)][string]$Path
+            [Parameter()][AllowNull()][string]$Path
         )
 
-        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
-            return
+        if ([string]::IsNullOrWhiteSpace($Path)) {
+            return $null
         }
 
-        $items = Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop
-        if ($items.Count -gt 0) {
-            return
-        }
-
-        Write-Host "Removing empty directory '$Path'."
-        Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
-    }
-
-    function Remove-EmptyDirectoryTree {
-        [CmdletBinding()]
-        param(
-            [Parameter(Mandatory = $true)][string]$Root
-        )
-
-        if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
-            return
-        }
-
-        $subdirectories = @()
         try {
-            $subdirectories = Get-ChildItem -LiteralPath $Root -Directory -Recurse -Force -ErrorAction Stop |
-                Sort-Object { $_.FullName.Length } -Descending
+            $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
+            if ($resolved -and $resolved.ProviderPath) {
+                return $resolved.ProviderPath
+            }
         }
         catch {
-            Write-Host "Unable to enumerate subdirectories for '$Root': $($_.Exception.Message)" -ForegroundColor Yellow
-            $subdirectories = @()
+            try {
+                return [System.IO.Path]::GetFullPath($Path)
+            }
+            catch {
+                return $Path
+            }
         }
 
-        foreach ($directory in $subdirectories) {
-            Remove-EmptyDirectory -Path $directory.FullName
+        return $Path
+    }
+
+    function Find-AncestorFolderByLeafName {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)][string]$Path,
+            [Parameter(Mandatory = $true)][string]$VmName
+        )
+
+        $current = $Path
+        while ($current) {
+            $leaf = Split-Path -Path $current -Leaf
+            if ($leaf -and $leaf.Equals($VmName, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $current
+            }
+
+            $parent = Split-Path -Path $current -Parent
+            if ([string]::IsNullOrWhiteSpace($parent) -or $parent.Equals($current, [System.StringComparison]::OrdinalIgnoreCase)) {
+                break
+            }
+
+            $current = $parent
         }
 
-        Remove-EmptyDirectory -Path $Root
+        return $null
+    }
+
+    function Get-VmDirectoryCleanupPlan {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)][object]$Vm,
+            [Parameter()][string[]]$DiskPaths
+        )
+
+        $vmName = $Vm.Name
+        if ([string]::IsNullOrWhiteSpace($vmName)) {
+            return $null
+        }
+
+        $candidatePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+        if ($Vm.ConfigurationLocation) {
+            $normalized = Normalize-FileSystemPath -Path $Vm.ConfigurationLocation
+            if ($normalized) { [void]$candidatePaths.Add($normalized) }
+        }
+
+        if ($Vm.Path) {
+            $normalizedVmPath = Normalize-FileSystemPath -Path $Vm.Path
+            if ($normalizedVmPath) { [void]$candidatePaths.Add($normalizedVmPath) }
+        }
+
+        foreach ($diskPath in $DiskPaths) {
+            if ([string]::IsNullOrWhiteSpace($diskPath)) {
+                continue
+            }
+
+            try {
+                $parent = Split-Path -Path $diskPath -Parent
+            }
+            catch {
+                $parent = $null
+            }
+
+            if ($parent) {
+                $normalizedParent = Normalize-FileSystemPath -Path $parent
+                if ($normalizedParent) {
+                    [void]$candidatePaths.Add($normalizedParent)
+                }
+            }
+        }
+
+        $vmHomeFolder = $null
+        foreach ($path in $candidatePaths) {
+            $candidateHome = Find-AncestorFolderByLeafName -Path $path -VmName $vmName
+            if ($candidateHome) {
+                $vmHomeFolder = $candidateHome
+                break
+            }
+        }
+
+        if (-not $vmHomeFolder) {
+            foreach ($diskPath in $DiskPaths) {
+                if ([string]::IsNullOrWhiteSpace($diskPath)) {
+                    continue
+                }
+
+                try {
+                    $diskParent = Split-Path -Path $diskPath -Parent
+                }
+                catch {
+                    $diskParent = $null
+                }
+
+                if ($diskParent) {
+                    $vmHomeFolder = Normalize-FileSystemPath -Path $diskParent
+                    if ($vmHomeFolder) {
+                        break
+                    }
+                }
+            }
+        }
+
+        if (-not $vmHomeFolder -and $Vm.Path) {
+            $vmHomeFolder = Normalize-FileSystemPath -Path $Vm.Path
+        }
+
+        if (-not $vmHomeFolder) {
+            return $null
+        }
+
+        $hypervRootFolder = $null
+        try {
+            $hypervRootFolder = Split-Path -Path $vmHomeFolder -Parent
+            if ($hypervRootFolder) {
+                $hypervRootFolder = Normalize-FileSystemPath -Path $hypervRootFolder
+            }
+        }
+        catch {
+            $hypervRootFolder = $null
+        }
+
+        $targetSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        [void]$targetSet.Add($vmHomeFolder)
+
+        if ($hypervRootFolder) {
+            [void]$targetSet.Add($hypervRootFolder)
+        }
+
+        $virtualMachinesFolder = $null
+        $homeExists = Test-Path -LiteralPath $vmHomeFolder -PathType Container
+        if ($homeExists) {
+            $virtualMachinesCandidate = Join-Path -Path $vmHomeFolder -ChildPath 'Virtual Machines'
+            if (Test-Path -LiteralPath $virtualMachinesCandidate -PathType Container) {
+                $virtualMachinesFolder = Normalize-FileSystemPath -Path $virtualMachinesCandidate
+            }
+            else {
+                try {
+                    $childDirectories = Get-ChildItem -LiteralPath $vmHomeFolder -Directory -Force -ErrorAction Stop
+                    foreach ($directory in $childDirectories) {
+                        if ($directory.Name.Equals('Virtual Machines', [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $virtualMachinesFolder = $directory.FullName
+                        }
+                        [void]$targetSet.Add($directory.FullName)
+                    }
+                }
+                catch {
+                    Write-Host "Unable to enumerate child directories for '$vmHomeFolder': $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+
+            if (-not $virtualMachinesFolder -and (Test-Path -LiteralPath $virtualMachinesCandidate -PathType Container)) {
+                $virtualMachinesFolder = Normalize-FileSystemPath -Path $virtualMachinesCandidate
+            }
+
+            if ($virtualMachinesFolder) {
+                [void]$targetSet.Add($virtualMachinesFolder)
+            }
+
+            try {
+                $subdirectories = Get-ChildItem -LiteralPath $vmHomeFolder -Directory -Recurse -Force -ErrorAction Stop
+                foreach ($subdirectory in $subdirectories) {
+                    [void]$targetSet.Add($subdirectory.FullName)
+                }
+            }
+            catch {
+                Write-Host "Unable to enumerate recursive directories for '$vmHomeFolder': $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+
+        $cleanupTargets = @()
+        foreach ($entry in $targetSet) {
+            if ($entry) {
+                $cleanupTargets += $entry
+            }
+        }
+
+        if ($cleanupTargets.Count -eq 0) {
+            return $null
+        }
+
+        $orderedTargets = $cleanupTargets | Sort-Object { $_.Length } -Descending -Unique
+
+        $isoCleanupTargets = New-Object 'System.Collections.Generic.List[string]'
+        if ($vmHomeFolder) {
+            $isoCleanupTargets.Add($vmHomeFolder) | Out-Null
+        }
+        if ($hypervRootFolder -and $hypervRootFolder -ne $vmHomeFolder) {
+            $isoCleanupTargets.Add($hypervRootFolder) | Out-Null
+        }
+
+        return [pscustomobject]@{
+            HomeFolder = $vmHomeFolder
+            HypervRoot = $hypervRootFolder
+            VirtualMachinesFolder = $virtualMachinesFolder
+            Targets = $orderedTargets
+            IsoTargets = $isoCleanupTargets.ToArray()
+        }
+    }
+
+    function Invoke-DirectoryCleanupPlan {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)][psobject]$CleanupPlan,
+            [int]$MaxAttempts = 5,
+            [int]$DelaySeconds = 5
+        )
+
+        if (-not $CleanupPlan -or -not $CleanupPlan.Targets) {
+            return
+        }
+
+        $targets = @($CleanupPlan.Targets)
+        if ($targets.Count -eq 0) {
+            return
+        }
+
+        Write-Host "Beginning empty directory cleanup for VM home folder." 
+
+        for ($attempt = 1; $attempt -le [math]::Max(1, $MaxAttempts); $attempt++) {
+            Write-Host "Empty directory cleanup attempt $attempt/$MaxAttempts."
+
+            $remainingEmptyTargets = New-Object 'System.Collections.Generic.List[string]'
+
+            foreach ($target in $targets) {
+                if ([string]::IsNullOrWhiteSpace($target)) {
+                    continue
+                }
+
+                if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+                    continue
+                }
+
+                $items = @()
+                try {
+                    $items = @(Get-ChildItem -LiteralPath $target -Force -ErrorAction Stop)
+                }
+                catch {
+                    Write-Host "Unable to inspect directory '$target': $($_.Exception.Message)" -ForegroundColor Yellow
+                    continue
+                }
+
+                if ($items.Count -gt 0) {
+                    continue
+                }
+
+                Write-Host "Removing empty directory '$target'."
+                try {
+                    Remove-Item -LiteralPath $target -Force -ErrorAction Stop
+                }
+                catch {
+                    Write-Host "Failed to remove directory '$target': $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+
+                Start-Sleep -Milliseconds 200
+
+                if (Test-Path -LiteralPath $target -PathType Container) {
+                    $postItems = @(Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue)
+                    if (-not $postItems -or $postItems.Count -eq 0) {
+                        $remainingEmptyTargets.Add($target) | Out-Null
+                    }
+                }
+            }
+
+            if ($remainingEmptyTargets.Count -eq 0) {
+                Write-Host "Empty directory cleanup completed successfully." -ForegroundColor Green
+                return
+            }
+
+            if ($attempt -lt $MaxAttempts) {
+                Write-Host "Waiting $DelaySeconds seconds before retrying empty directory cleanup." -ForegroundColor Yellow
+                Start-Sleep -Seconds $DelaySeconds
+            }
+            else {
+                break
+            }
+        }
+
+        $stillEmpty = @()
+        foreach ($target in $targets) {
+            if ([string]::IsNullOrWhiteSpace($target)) {
+                continue
+            }
+
+            if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+                continue
+            }
+
+            $items = @(Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue)
+            if (-not $items -or $items.Count -eq 0) {
+                $stillEmpty += $target
+            }
+        }
+
+        if ($stillEmpty.Count -gt 0) {
+            throw "Unable to remove empty directories after $MaxAttempts attempts: $($stillEmpty -join ', ')"
+        }
+
+        Write-Host "Directory cleanup completed with remaining non-empty folders." -ForegroundColor Yellow
     }
 
     function Remove-ProvisioningIsos {
@@ -314,6 +594,22 @@ end {
             Remove-FileWithVerification -Path $path -Description 'virtual hard disk'
         }
 
+        $cleanupPlan = Get-VmDirectoryCleanupPlan -Vm $vm -DiskPaths $diskPaths
+        if ($cleanupPlan) {
+            if ($cleanupPlan.HomeFolder) {
+                Write-Host "Identified VM home folder: '$($cleanupPlan.HomeFolder)'."
+            }
+            if ($cleanupPlan.HypervRoot) {
+                Write-Host "Identified Hyper-V root folder: '$($cleanupPlan.HypervRoot)'."
+            }
+            if ($cleanupPlan.VirtualMachinesFolder) {
+                Write-Host "Identified VM 'Virtual Machines' folder: '$($cleanupPlan.VirtualMachinesFolder)'."
+            }
+        }
+        else {
+            Write-Host "Unable to determine a complete folder cleanup plan for VM '$VMName'." -ForegroundColor Yellow
+        }
+
         $dvdDrives = @(Get-VMDvdDrive -VMName $VMName -ErrorAction SilentlyContinue)
         $isoPaths = @()
         foreach ($drive in $dvdDrives) {
@@ -337,71 +633,29 @@ end {
             Remove-FileWithVerification -Path $path -Description 'ISO'
         }
 
-        $candidateFolders = New-Object 'System.Collections.Generic.HashSet[string]'
-
-        if ($vm.ConfigurationLocation) {
+        $isoCleanupFolders = @()
+        if ($cleanupPlan -and $cleanupPlan.IsoTargets) {
+            $isoCleanupFolders += $cleanupPlan.IsoTargets
+        }
+        elseif ($vm.Path) {
+            $isoCleanupFolders += $vm.Path
             try {
-                $configItem = Get-Item -LiteralPath $vm.ConfigurationLocation -ErrorAction Stop
-                if ($configItem -and $configItem.PSIsContainer) {
-                    [void]$candidateFolders.Add($configItem.FullName)
+                $parentFolder = Split-Path -Path $vm.Path -Parent
+                if ($parentFolder) {
+                    $isoCleanupFolders += $parentFolder
                 }
             }
             catch {
-                # Ignore missing configuration directories
+                # Ignore errors determining fallback parent path
             }
         }
 
-        if ($vm.Path) {
-            try {
-                $vmPathItem = Get-Item -LiteralPath $vm.Path -ErrorAction Stop
-                if ($vmPathItem -and $vmPathItem.PSIsContainer) {
-                    [void]$candidateFolders.Add($vmPathItem.FullName)
-                }
-            }
-            catch {
-                # Ignore missing VM paths
-            }
+        if (-not $cleanupPlan) {
+            Write-Host "Unable to determine full cleanup plan for VM '$VMName'; using fallback ISO cleanup." -ForegroundColor Yellow
         }
 
-        foreach ($path in $diskPaths) {
-            try {
-                $folder = Split-Path -Path $path -Parent
-                if ($folder) {
-                    $folderItem = Get-Item -LiteralPath $folder -ErrorAction Stop
-                    if ($folderItem -and $folderItem.PSIsContainer) {
-                        [void]$candidateFolders.Add($folderItem.FullName)
-                    }
-                }
-            }
-            catch {
-                # Ignore missing disk folders
-            }
-        }
-
-        $candidateArray = @()
-        foreach ($entry in $candidateFolders) {
-            if ($entry) {
-                $candidateArray += $entry
-            }
-        }
-
-        $vmFolder = $null
-        foreach ($folder in $candidateArray) {
-            if ($folder -and (Split-Path -Path $folder -Leaf) -eq $VMName) {
-                $vmFolder = $folder
-                break
-            }
-        }
-        if (-not $vmFolder -and $candidateArray.Count -gt 0) {
-            $vmFolder = $candidateArray[0]
-        }
-
-        if ($vmFolder) {
-            Remove-ProvisioningIsos -Folder $vmFolder
-            $parentFolder = Split-Path -Path $vmFolder -Parent
-            if ($parentFolder -and $parentFolder -ne $vmFolder) {
-                Remove-ProvisioningIsos -Folder $parentFolder
-            }
+        foreach ($folder in ($isoCleanupFolders | Sort-Object -Unique)) {
+            Remove-ProvisioningIsos -Folder $folder
         }
 
         Write-Host "Unregistering VM '$VMName' from Hyper-V."
@@ -424,13 +678,9 @@ end {
 
         Start-Sleep -Seconds 3
 
-        if ($vmFolder) {
+        if ($cleanupPlan) {
             try {
-                Remove-EmptyDirectoryTree -Root $vmFolder
-                $parentFolder = Split-Path -Path $vmFolder -Parent
-                if ($parentFolder -and $parentFolder -ne $vmFolder) {
-                    Remove-EmptyDirectoryTree -Root $parentFolder
-                }
+                Invoke-DirectoryCleanupPlan -CleanupPlan $cleanupPlan -MaxAttempts 5 -DelaySeconds 5
             }
             catch {
                 Write-Host "Folder cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
