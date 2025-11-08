@@ -889,8 +889,7 @@ class InventoryService:
         self._host_refresh_samples += 1
         self._average_host_refresh_seconds = (
             self._total_host_refresh_duration / self._host_refresh_samples
-            if self._host_refresh_samples
-            else 0.0
+
         )
 
         if duration > interval:

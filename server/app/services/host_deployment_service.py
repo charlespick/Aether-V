@@ -208,7 +208,7 @@ class HostDeploymentService:
         status = self._host_setup_status.get(hostname, HostSetupStatus())
 
         if ready:
-            self._verified_host_versions[hostname] = container_version
+            pass
             return InventoryReadiness(ready=True, preparing=False, error=None)
 
         preparing = status.state in {"updating", "update-failed"}
