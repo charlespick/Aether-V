@@ -45,6 +45,7 @@ class _PSRPStreamCursor:
     stderr_chunks: int = 0
     stdout_bytes: int = 0
     stderr_bytes: int = 0
+    information_index: int = 0
     exit_code: Optional[int] = None
 
     _EXIT_SENTINEL: str = "__AETHER_V_EXIT_CODE__:"
@@ -75,6 +76,21 @@ class _PSRPStreamCursor:
                 self.on_chunk("stdout", payload)
 
         self.output_index = len(ps.output)
+
+        # Drain information stream (Write-Host, Write-Information)
+        information_items = ps.streams.information[self.information_index :]
+        if information_items:
+            for record in information_items:
+                text = self._stringify_information(record)
+                if not text:
+                    continue
+
+                payload = self._ensure_line_termination(text)
+                self.stdout_chunks += 1
+                self.stdout_bytes += len(payload.encode("utf-8", errors="ignore"))
+                self.on_chunk("stdout", payload)
+
+        self.information_index = len(ps.streams.information)
 
         # Drain error stream
         error_items = ps.streams.error[self.error_index :]
@@ -140,6 +156,37 @@ class _PSRPStreamCursor:
             return str(item)
         finally:
             _seen.discard(obj_id)
+
+    @staticmethod
+    def _stringify_information(record: Any) -> str:
+        """Convert an information stream record into printable text."""
+
+        message_data = getattr(record, "message_data", None)
+        if isinstance(message_data, bytes):
+            try:
+                return message_data.decode("utf-8")
+            except UnicodeDecodeError:
+                return message_data.decode("utf-8", errors="ignore")
+
+        if message_data is not None:
+            text = _PSRPStreamCursor._stringify(message_data)
+            if text:
+                return text
+
+        formatter = getattr(record, "to_string", None)
+        if callable(formatter):
+            try:
+                text = formatter()
+                if text:
+                    return text
+            except Exception:  # pragma: no cover - defensive logging
+                logger.debug("Failed to format information record", exc_info=True)
+
+        textual = getattr(record, "message", None)
+        if isinstance(textual, str) and textual.strip():
+            return textual
+
+        return str(record)
 
     @staticmethod
     def _stringify_complex(item: Any, seen: Set[int]) -> str:

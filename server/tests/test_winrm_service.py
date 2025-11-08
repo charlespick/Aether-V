@@ -1,5 +1,6 @@
 """Unit tests for helpers in the WinRM service."""
 
+from pypsrp.powershell import InformationRecord
 from pypsrp.serializer import GenericComplexObject
 
 from app.services.winrm_service import _PSRPStreamCursor
@@ -42,3 +43,23 @@ def test_stringify_handles_nested_complex_property_values():
         "Tags: compute, lab\n"
         "Metadata: owner=ops"
     )
+
+
+def test_stringify_information_prefers_message_data_text():
+    record = InformationRecord(message_data="Copy complete")
+
+    rendered = _PSRPStreamCursor._stringify_information(record)
+
+    assert rendered == "Copy complete"
+
+
+def test_stringify_information_falls_back_to_complex_data():
+    payload = GenericComplexObject()
+    payload.to_string = "System.Object"
+    payload.adapted_properties = {"Message": "Transferring"}
+
+    record = InformationRecord(message_data=payload)
+
+    rendered = _PSRPStreamCursor._stringify_information(record)
+
+    assert rendered == "Message: Transferring"
