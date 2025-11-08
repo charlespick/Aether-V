@@ -159,7 +159,12 @@ class HostDeploymentService:
                 self._get_host_version,
                 description=f"version check for {hostname}",
             )
-            logger.info(f"Host {hostname} version: {host_version}")
+            logger.info(
+                "Host %s reported version %r; container version is %r",
+                hostname,
+                host_version,
+                self._container_version,
+            )
 
             if self._needs_update(host_version):
                 logger.info(
@@ -169,6 +174,7 @@ class HostDeploymentService:
                 deployment_success = await self._run_winrm_call(
                     hostname,
                     self._deploy_to_host,
+                    host_version,
                     description=f"deployment for {hostname}",
                 )
                 if deployment_success:
@@ -356,9 +362,17 @@ class HostDeploymentService:
             )
             return True
 
-    def _deploy_to_host(self, hostname: str) -> bool:
+    def _deploy_to_host(self, hostname: str, observed_host_version: Optional[str] = None) -> bool:
         """Deploy scripts and ISOs to a host."""
-        logger.info(f"Starting deployment to {hostname}")
+        container_version = (self._container_version or "").strip()
+        initial_host_version = (observed_host_version or "").strip()
+
+        logger.info(
+            "Starting deployment evaluation for %s (container=%r, observed_host=%r)",
+            hostname,
+            container_version,
+            initial_host_version or None,
+        )
 
         try:
             if not self._deployment_enabled:
@@ -367,6 +381,45 @@ class HostDeploymentService:
                     hostname,
                 )
                 return False
+
+            if observed_host_version is not None and not self._needs_update(
+                observed_host_version
+            ):
+                logger.info(
+                    "Skipping deployment to %s; observed host version %r already matches container %r",
+                    hostname,
+                    initial_host_version,
+                    container_version,
+                )
+                return True
+
+            refreshed_host_version: Optional[str] = None
+            try:
+                refreshed_host_version = self._get_host_version(hostname)
+                logger.info(
+                    "Refreshed host version for %s prior to deployment: %r",
+                    hostname,
+                    refreshed_host_version,
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging path
+                logger.warning(
+                    "Unable to refresh host version for %s prior to deployment: %s",
+                    hostname,
+                    exc,
+                )
+
+            if refreshed_host_version is not None and not self._needs_update(
+                refreshed_host_version
+            ):
+                logger.info(
+                    "Skipping deployment to %s after refresh; host version %r matches container %r",
+                    hostname,
+                    refreshed_host_version,
+                    container_version,
+                )
+                return True
+
+            logger.info(f"Starting deployment to {hostname}")
 
             script_files = self._collect_script_files()
             iso_files = self._collect_iso_files()

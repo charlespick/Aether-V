@@ -2,6 +2,7 @@ import sys
 import types
 from pathlib import Path
 from unittest import TestCase, skipIf
+from unittest import mock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -139,4 +140,22 @@ class HostDeploymentServiceVersionTests(TestCase):
     def test_needs_update_accepts_matching_semantic_versions(self):
         self.service._container_version = "2.0.1"
         self.assertFalse(self.service._needs_update("2.0.1"))
+
+    def test_deploy_to_host_skips_when_versions_match_after_refresh(self):
+        self.service._deployment_enabled = True
+        self.service._container_version = "3.1.4"
+
+        with mock.patch.object(
+            self.service, "_get_host_version", return_value="3.1.4"
+        ) as get_version, mock.patch.object(
+            self.service, "_ensure_install_directory"
+        ) as ensure_dir, mock.patch.object(
+            self.service, "_clear_host_install_directory"
+        ) as clear_dir:
+            result = self.service._deploy_to_host("host-1", observed_host_version="3.1.4")
+
+        self.assertTrue(result)
+        get_version.assert_called_once_with("host-1")
+        ensure_dir.assert_not_called()
+        clear_dir.assert_not_called()
 
