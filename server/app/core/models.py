@@ -46,6 +46,7 @@ class VMState(str, Enum):
     STOPPING = "Stopping"
     UNKNOWN = "Unknown"
     CREATING = "Creating"
+    DELETING = "Deleting"
 
 
 class Cluster(BaseModel):

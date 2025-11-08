@@ -66,7 +66,10 @@ All settings are managed via environment variables (ConfigMap/Secrets):
 - `HOST_INSTALL_DIRECTORY`
 - `AGENT_DOWNLOAD_BASE_URL`
 
-See [Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details.
+See [Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details, plus
+[Docs/vm-provisioning-service.md](Docs/vm-provisioning-service.md) and
+[Docs/vm-deletion-service.md](Docs/vm-deletion-service.md) for end-to-end job
+workflows.
 
 ## API & UI
 

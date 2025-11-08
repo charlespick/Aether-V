@@ -448,6 +448,30 @@ async def delete_vm(
             detail=f"VM {request.vm_name} not found on host {request.hyperv_host}"
         )
 
+    if vm.host != request.hyperv_host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"VM {request.vm_name} is tracked on host {vm.host}, not {request.hyperv_host}"
+            ),
+        )
+
+    host_record = inventory_service.hosts.get(request.hyperv_host)
+    if not host_record or not host_record.connected:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Host {request.hyperv_host} is not currently connected",
+        )
+
+    if vm.state != VMState.OFF and not request.force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Virtual machine must be turned off before deletion. "
+                "Set force=true to override when using the API."
+            ),
+        )
+
     # Create job
     job = await job_service.submit_delete_job(request)
     return job

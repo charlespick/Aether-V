@@ -841,6 +841,16 @@ tbody tr:last-child td {
     color: #fcd34d;
 }
 
+.status.deleting {
+    background: #fed7aa;
+    color: #9a3412;
+}
+
+[data-theme="dark"] .status.deleting {
+    background: rgba(249, 115, 22, 0.2);
+    color: #fb923c;
+}
+
 .status.connected {
     background: #dcfce7;
     color: #166534;
@@ -2270,6 +2280,10 @@ tbody tr:last-child td {
 
 .vm-status-dot.creating {
     background: #f59e0b;
+}
+
+.vm-status-dot.deleting {
+    background: #f97316;
 }
 
 .vm-card-details {

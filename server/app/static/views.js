@@ -669,7 +669,7 @@ class VMView extends BaseView {
             return false;
         }
         const normalized = String(action).toLowerCase();
-        return normalized === 'stop' || normalized === 'shutdown' || normalized === 'reset';
+        return ['stop', 'shutdown', 'reset', 'delete'].includes(normalized);
     }
 
     getActionConfirmationCopy(action) {
@@ -697,6 +697,14 @@ class VMView extends BaseView {
                 title: 'Confirm reset',
                 message: `Reset ${vmName}? This power cycles the VM and will interrupt any running processes.`,
                 confirmLabel: 'Reset',
+            };
+        }
+
+        if (normalized === 'delete') {
+            return {
+                title: 'Confirm delete',
+                message: `Delete ${vmName}? This permanently removes the VM registration and disks from the host.`,
+                confirmLabel: 'Delete',
             };
         }
 
@@ -922,6 +930,7 @@ class VMView extends BaseView {
             { action: 'shutdown', icon: '⏻', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
             { action: 'stop', icon: '⏹️', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
             { action: 'reset', icon: '🔄', tooltip: 'Reset', aria: 'Reset virtual machine' },
+            { action: 'delete', icon: '🗑️', tooltip: 'Delete', aria: 'Delete virtual machine' },
         ];
 
         return actions.map(({ action, icon, tooltip, aria }) => {
@@ -945,6 +954,7 @@ class VMView extends BaseView {
             shutdown: false,
             stop: false,
             reset: false,
+            delete: false,
         };
 
         if (this.actionInProgress) {
@@ -957,9 +967,16 @@ class VMView extends BaseView {
             availability.reset = true;
         } else if (normalized === 'off') {
             availability.start = true;
+            availability.delete = true;
         } else if (normalized === 'paused' || normalized === 'saved') {
             availability.start = true;
             availability.stop = true;
+            availability.delete = true;
+        } else if (normalized === 'deleting') {
+            // Prevent any actions while deletion is pending
+            Object.keys(availability).forEach(key => {
+                availability[key] = false;
+            });
         }
 
         return availability;
@@ -1109,6 +1126,7 @@ class VMView extends BaseView {
             shutdown: 'shut down',
             stop: 'stop',
             reset: 'reset',
+            delete: 'delete',
         };
         return labels[action] || action || 'perform';
     }
@@ -1149,6 +1167,8 @@ class VMView extends BaseView {
                 return `Stop command accepted for VM ${name}.`;
             case 'reset':
                 return `Reset command accepted for VM ${name}.`;
+            case 'delete':
+                return `Delete command accepted for VM ${name}.`;
             default:
                 return `Command accepted for VM ${name}.`;
         }
@@ -1162,6 +1182,8 @@ class VMView extends BaseView {
             case 'shutdown':
             case 'stop':
                 return 'Stopping';
+            case 'delete':
+                return 'Deleting';
             default:
                 return this.vmData && this.vmData.state ? this.vmData.state : 'Unknown';
         }
@@ -1174,11 +1196,17 @@ class VMView extends BaseView {
 
         this.destroyActionConfirmation(true);
 
-        const actionLabel = this.getActionLabel(action);
         const host = this.vmHost || this.vmData.host || this.data.host;
         if (!host) {
             return;
         }
+
+        if (action === 'delete') {
+            await this.executeDeleteVm(host);
+            return;
+        }
+
+        const actionLabel = this.getActionLabel(action);
 
         const encodedHost = encodeURIComponent(host);
         const encodedVm = encodeURIComponent(this.vmData.name);
@@ -1230,6 +1258,72 @@ class VMView extends BaseView {
             console.error('VM action error:', error);
             this.setActionFeedback(`Failed to ${actionLabel} VM: ${error.message}`, 'error', {
                 title: 'VM action failed',
+            });
+        } finally {
+            this.setButtonsBusy(false);
+        }
+    }
+
+    async executeDeleteVm(host) {
+        if (!host || !this.vmData || !this.vmData.name) {
+            return;
+        }
+
+        this.setButtonsBusy(true);
+        this.setActionFeedback(`Submitting delete request for ${this.vmData.name}...`, 'info', {
+            title: 'Deleting virtual machine',
+            persist: true,
+            icon: '⏳',
+        });
+
+        try {
+            const response = await fetch('/api/v1/vms/delete', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    vm_name: this.vmData.name,
+                    hyperv_host: host,
+                    force: false,
+                }),
+            });
+
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (err) {
+                payload = null;
+            }
+
+            if (response.ok) {
+                const jobId = payload && payload.job_id ? payload.job_id : null;
+                const message = jobId
+                    ? `Delete job ${jobId} queued for VM ${this.vmData.name}.`
+                    : `Delete request accepted for VM ${this.vmData.name}.`;
+                this.setActionFeedback(message, 'success', {
+                    title: 'VM deletion queued',
+                });
+
+                if (this.vmData) {
+                    this.vmData.state = 'Deleting';
+                }
+                this.updateActionButtonStates();
+
+                setTimeout(() => {
+                    viewManager.switchView('vm', { name: this.vmData.name, host });
+                }, 400);
+            } else {
+                const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
+                this.setActionFeedback(`Unable to delete VM: ${detail}`, 'error', {
+                    title: 'VM deletion failed',
+                });
+            }
+        } catch (error) {
+            console.error('VM delete action error:', error);
+            this.setActionFeedback(`Failed to delete VM: ${error.message}`, 'error', {
+                title: 'VM deletion failed',
             });
         } finally {
             this.setButtonsBusy(false);

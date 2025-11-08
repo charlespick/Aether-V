@@ -279,6 +279,9 @@ class JobService:
     async def submit_delete_job(self, request: VMDeleteRequest) -> Job:
         """Persist a VM deletion job request for future orchestration."""
 
+        if not self._started or self._queue is None:
+            raise RuntimeError("Job service is not running")
+
         job_id = str(uuid.uuid4())
         job = Job(
             job_id=job_id,
@@ -292,6 +295,10 @@ class JobService:
         async with self._lock:
             self.jobs[job_id] = job
 
+        await self._sync_job_notification(job)
+        await self._broadcast_job_status(job)
+
+        await self._queue.put(job_id)
         logger.info("Queued delete job %s for VM %s", job_id, request.vm_name)
         return self._prepare_job_response(job)
 
@@ -334,7 +341,7 @@ class JobService:
         acquired_host = False
 
         try:
-            if job.job_type == "provision_vm" and host_key:
+            if job.job_type in {"provision_vm", "delete_vm"} and host_key:
                 await self._acquire_host_slot(host_key, job.job_id)
                 acquired_host = True
 
@@ -345,6 +352,8 @@ class JobService:
             try:
                 if job.job_type == "provision_vm":
                     await self._execute_provisioning_job(job)
+                elif job.job_type == "delete_vm":
+                    await self._execute_delete_job(job)
                 else:
                     raise NotImplementedError(
                         f"Job type '{job.job_type}' is not supported"
@@ -397,7 +406,7 @@ class JobService:
                         queue.append((job_id, waiter))
                         enqueued = True
                         logger.info(
-                            "Provisioning job %s waiting for host slot on %s",
+                            "Job %s waiting for host slot on %s",
                             job_id,
                             host,
                         )
@@ -438,16 +447,14 @@ class JobService:
 
                 self._host_running[host] = next_job_id
                 logger.info(
-                    "Provisioning job %s released host slot on %s; waking job %s",
+                    "Job %s released host slot on %s; waking job %s",
                     job_id,
                     host,
                     next_job_id,
                 )
             else:
                 self._host_running.pop(host, None)
-                logger.info(
-                    "Provisioning job %s released host slot on %s", job_id, host
-                )
+                logger.info("Job %s released host slot on %s", job_id, host)
 
         if next_waiter is not None:
             next_waiter.set()
@@ -468,7 +475,9 @@ class JobService:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        command = self._build_master_invocation_command(json_payload)
+        command = self._build_agent_invocation_command(
+            "Invoke-ProvisioningJob.ps1", json_payload
+        )
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Optional[Tuple[str, str]]] = asyncio.Queue()
@@ -508,6 +517,65 @@ class JobService:
         exit_code = await command_task
         if exit_code != 0:
             raise RuntimeError(f"Provisioning script exited with code {exit_code}")
+
+    async def _execute_delete_job(self, job: Job) -> None:
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError("Delete job is missing a target host")
+
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(f"Failed to prepare host {target_host} for deletion")
+
+        json_payload = await asyncio.to_thread(
+            json.dumps,
+            job.parameters,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        command = self._build_agent_invocation_command(
+            "Invoke-DeleteVmJob.ps1", json_payload
+        )
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Optional[Tuple[str, str]]] = asyncio.Queue()
+
+        def publish_chunk(stream: str, chunk: str) -> None:
+            asyncio.run_coroutine_threadsafe(queue.put((stream, chunk)), loop)
+
+        def run_command() -> int:
+            try:
+                return winrm_service.stream_ps_command(
+                    target_host, command, publish_chunk
+                )
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
+        category, timeout = self._get_job_runtime_profile(job.job_type)
+
+        command_task = asyncio.create_task(
+            remote_task_service.run_blocking(
+                target_host,
+                run_command,
+                description=f"delete job {job.job_id}",
+                category=category,
+                timeout=timeout,
+            )
+        )
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                stream_type, payload = item
+                await self._handle_stream_chunk(job.job_id, stream_type, payload)
+        finally:
+            await self._finalize_job_streams(job.job_id)
+
+        exit_code = await command_task
+        if exit_code != 0:
+            raise RuntimeError(f"Delete script exited with code {exit_code}")
 
     async def _handle_stream_chunk(
         self, job_id: str, stream: str, payload: str
@@ -616,6 +684,22 @@ class JobService:
                     inventory_service.track_job_vm(job.job_id, vm_name, target_host)
                 elif job.status in {JobStatus.COMPLETED, JobStatus.FAILED}:
                     inventory_service.clear_job_vm(job.job_id)
+            elif job.job_type == "delete_vm":
+                vm_name = self._extract_vm_name(job)
+                target_host = (job.target_host or "").strip()
+                if vm_name and target_host:
+                    if job.status == JobStatus.RUNNING:
+                        inventory_service.mark_vm_deleting(
+                            job.job_id, vm_name, target_host
+                        )
+                    elif job.status == JobStatus.COMPLETED:
+                        inventory_service.finalize_vm_deletion(
+                            job.job_id, vm_name, target_host, success=True
+                        )
+                    elif job.status == JobStatus.FAILED:
+                        inventory_service.finalize_vm_deletion(
+                            job.job_id, vm_name, target_host, success=False
+                        )
 
         await self._broadcast_job_status(job)
 
@@ -704,6 +788,13 @@ class JobService:
         return job.job_type.replace("_", " ").title()
 
     def _extract_vm_name(self, job: Job) -> Optional[str]:
+        if job.job_type == "delete_vm":
+            value = job.parameters.get("vm_name")
+            if isinstance(value, str):
+                value = value.strip()
+                if value:
+                    return value
+
         definition = job.parameters.get("definition") or {}
         fields = definition.get("fields") or {}
         value = fields.get("vm_name")
@@ -713,12 +804,12 @@ class JobService:
                 return value
         return None
 
-    def _build_master_invocation_command(self, payload: str) -> str:
+    def _build_agent_invocation_command(self, script_name: str, payload: str) -> str:
         payload_bytes = payload.encode("utf-8")
         encoded = base64.b64encode(payload_bytes).decode("ascii")
         script_path = (
             PureWindowsPath(settings.host_install_directory)
-            / "Invoke-ProvisioningJob.ps1"
+            / script_name
         )
         script_literal = self._ps_literal(str(script_path))
         return (
