@@ -173,6 +173,18 @@ class HostDeploymentServiceVersionTests(TestCase):
         ensure_dir.assert_not_called()
         clear_dir.assert_not_called()
 
+    def test_get_host_version_reads_value_with_padding(self):
+        with mock.patch(
+            "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
+            return_value=("\ufeff2.0.0\x00\r\n", "", 0),
+        ) as exec_mock:
+            version = self.service._get_host_version("host-1")
+
+        self.assertEqual(version, "2.0.0")
+        command = exec_mock.call_args[0][1]
+        self.assertIn("\n$trimmed = $content.Trim()", command)
+        self.assertIn("\n$trimmed = $trimmed.TrimStart([char]0xFEFF)", command)
+
 
 @skipIf(
     HostDeploymentService is None,

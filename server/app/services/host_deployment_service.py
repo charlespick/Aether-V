@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
@@ -297,25 +298,27 @@ class HostDeploymentService:
         """Get the version currently deployed on a host."""
         version_file_path = f"{settings.host_install_directory}\\version"
 
-        command = (
-            "$ErrorActionPreference = 'Stop'; "
-            f"$versionPath = {self._ps_literal(version_file_path)}; "
-            "if (-not (Test-Path -LiteralPath $versionPath)) { return } "
-            "try {"
-            "    $content = [System.IO.File]::ReadAllText($versionPath, [System.Text.Encoding]::UTF8)"
-            "} catch {"
-            "    try {"
-            "        $content = [System.IO.File]::ReadAllText($versionPath)"
-            "    } catch {"
-            "        $content = $null"
-            "    }"
-            "} "
-            "if ($content -eq $null) { return } "
-            "$trimmed = $content.Trim()"  # remove whitespace and newlines
-            "$trimmed = $trimmed.TrimStart([char]0xFEFF)"  # strip UTF-8 BOM if present
-            "$trimmed = $trimmed.Trim([char]0)"  # strip any embedded null characters
-            "if (-not [string]::IsNullOrWhiteSpace($trimmed)) { Write-Output $trimmed }"
-        )
+        command = textwrap.dedent(
+            f"""
+            $ErrorActionPreference = 'Stop';
+            $versionPath = {self._ps_literal(version_file_path)};
+            if (-not (Test-Path -LiteralPath $versionPath)) {{ return }}
+            try {{
+                $content = [System.IO.File]::ReadAllText($versionPath, [System.Text.Encoding]::UTF8)
+            }} catch {{
+                try {{
+                    $content = [System.IO.File]::ReadAllText($versionPath)
+                }} catch {{
+                    $content = $null
+                }}
+            }}
+            if ($content -eq $null) {{ return }}
+            $trimmed = $content.Trim()
+            $trimmed = $trimmed.TrimStart([char]0xFEFF)
+            $trimmed = $trimmed.Trim([char]0)
+            if (-not [string]::IsNullOrWhiteSpace($trimmed)) {{ Write-Output $trimmed }}
+            """
+        ).strip()
 
         try:
             stdout, stderr, exit_code = winrm_service.execute_ps_command(
