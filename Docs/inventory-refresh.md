@@ -23,6 +23,7 @@ The inventory refresh service keeps Aether-V's in-memory model of clusters, host
 
 ## Notifications and readiness
 - Cycle-completion notifications include refreshed vs. deferred hosts and the rolling average host refresh duration, while system notifications warn when a single host refresh exceeds the configured interval.【F:server/app/services/inventory_service.py†L409-L447】【F:server/app/services/inventory_service.py†L715-L770】
+- When the rolling average per-host refresh time pushes past the configured interval, the service surfaces an "Inventory refresh saturation" warning explaining that hosts are too slow for the selected cadence and pointing operators toward retuning the schedule or investigating host performance.【F:server/app/services/inventory_service.py†L538-L577】
 - Preparatory skips raise informational notifications until the host completes deployment; warnings clear automatically once refresh durations fall back under the interval.【F:server/app/services/inventory_service.py†L627-L675】【F:server/app/services/inventory_service.py†L715-L770】
 - The readiness endpoint now reports `ready` as soon as configuration validation passes, independent of inventory status, so HTTP endpoints become routable immediately.【F:server/app/api/routes.py†L198-L227】
 

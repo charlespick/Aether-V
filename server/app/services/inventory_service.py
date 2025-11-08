@@ -546,16 +546,28 @@ class InventoryService:
                 self._refresh_overrun_active = False
             return
 
-        if duration > interval:
+        if not self._host_refresh_samples:
+            if self._refresh_overrun_active:
+                notification_service.clear_system_notification(
+                    self._refresh_overrun_key
+                )
+                self._refresh_overrun_active = False
+            return
+
+        average_duration = self._average_host_refresh_seconds
+
+        if average_duration > interval:
             message = (
-                "Inventory background refresh took %.1fs which exceeds the configured "
-                "interval of %.1fs. Consider adding resources or increasing the "
-                "inventory refresh interval."
-            ) % (duration, interval)
+                "Average per-host inventory refresh is %.1fs which exceeds the "
+                "configured interval of %.1fs. Hosts are too slow for your "
+                "configuration; consider adjusting the interval or investigating "
+                "host performance."
+            ) % (average_duration, interval)
             metadata = {
                 "cycle_duration_seconds": round(duration, 2),
                 "interval_seconds": interval,
                 "hosts_in_cycle": host_count,
+                "average_host_refresh_seconds": round(average_duration, 2),
             }
             notification_service.upsert_system_notification(
                 self._refresh_overrun_key,
