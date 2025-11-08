@@ -133,6 +133,20 @@ class HostDeploymentServiceVersionTests(TestCase):
         self.service._container_version = "unknown"
         self.assertFalse(self.service._needs_update("unknown"))
 
+    def test_normalize_version_text_handles_bom_and_null_padding(self):
+        raw_value = "\ufeff2.0.1\x00\r\n"
+        self.assertEqual(
+            self.service._normalize_version_text(raw_value),
+            "2.0.1",
+        )
+
+    def test_normalize_version_text_returns_first_non_empty_line(self):
+        raw_value = "\n\r  \n 2.3.4 \nextra"
+        self.assertEqual(
+            self.service._normalize_version_text(raw_value),
+            "2.3.4",
+        )
+
     def test_needs_update_requires_upgrade_for_lower_host_version(self):
         self.service._container_version = "2.0.1"
         self.assertTrue(self.service._needs_update("2.0.0"))

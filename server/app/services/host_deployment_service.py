@@ -126,9 +126,15 @@ class HostDeploymentService:
         """Load version from container artifacts."""
         version_file = settings.version_file_path
         try:
-            with open(version_file, "r") as f:
-                self._container_version = f.read().strip()
-            logger.info(f"Container version: {self._container_version}")
+            with open(version_file, "r", encoding="utf-8") as f:
+                raw_version = f.read()
+            normalized = self._normalize_version_text(raw_version)
+            if not normalized:
+                logger.warning(
+                    "Container version file %s did not contain a usable value", version_file
+                )
+            self._container_version = normalized
+            logger.info("Container version: %s", self._container_version or "<empty>")
         except Exception as e:
             logger.error(f"Failed to load container version: {e}")
             self._container_version = "0.0.0"
@@ -292,7 +298,23 @@ class HostDeploymentService:
         version_file_path = f"{settings.host_install_directory}\\version"
 
         command = (
-            f"Get-Content -Path '{version_file_path}' -ErrorAction SilentlyContinue"
+            "$ErrorActionPreference = 'Stop'; "
+            f"$versionPath = {self._ps_literal(version_file_path)}; "
+            "if (-not (Test-Path -LiteralPath $versionPath)) { return } "
+            "try {"
+            "    $content = [System.IO.File]::ReadAllText($versionPath, [System.Text.Encoding]::UTF8)"
+            "} catch {"
+            "    try {"
+            "        $content = [System.IO.File]::ReadAllText($versionPath)"
+            "    } catch {"
+            "        $content = $null"
+            "    }"
+            "} "
+            "if ($content -eq $null) { return } "
+            "$trimmed = $content.Trim()"  # remove whitespace and newlines
+            "$trimmed = $trimmed.TrimStart([char]0xFEFF)"  # strip UTF-8 BOM if present
+            "$trimmed = $trimmed.Trim([char]0)"  # strip any embedded null characters
+            "if (-not [string]::IsNullOrWhiteSpace($trimmed)) { Write-Output $trimmed }"
         )
 
         try:
@@ -308,14 +330,24 @@ class HostDeploymentService:
                 len(stderr.encode("utf-8")),
             )
 
-            if exit_code == 0 and stdout.strip():
-                return stdout.strip()
-            else:
-                # Version file doesn't exist, return 0.0.0
+            normalized_stdout = self._normalize_version_text(stdout)
+
+            if exit_code == 0 and normalized_stdout:
                 logger.debug(
-                    "Host %s did not return a version; treating as 0.0.0 (exit=%s)",
+                    "Host %s reported version raw=%r normalized=%r",
+                    hostname,
+                    stdout,
+                    normalized_stdout,
+                )
+                return normalized_stdout
+            else:
+                # Version file doesn't exist or unreadable
+                logger.warning(
+                    "Host %s did not provide a usable version (exit=%s, raw stdout=%r, stderr=%r)",
                     hostname,
                     exit_code,
+                    stdout,
+                    stderr,
                 )
                 return "0.0.0"
         except WinRMAuthenticationError as exc:
@@ -343,8 +375,8 @@ class HostDeploymentService:
     ) -> Tuple[bool, str, str]:
         """Return whether the host requires an update, the normalised version and context."""
 
-        container_version = (self._container_version or "").strip()
-        normalized_host = (host_version or "").strip()
+        container_version = self._normalize_version_text(self._container_version)
+        normalized_host = self._normalize_version_text(host_version)
 
         if not container_version:
             logger.warning(
@@ -385,6 +417,28 @@ class HostDeploymentService:
 
         needs_update, _, _ = self._assess_host_version(host_version)
         return needs_update
+
+    @staticmethod
+    def _normalize_version_text(value: Optional[str]) -> str:
+        """Clean version text by trimming whitespace, BOMs, nulls, and blank lines."""
+
+        if not value:
+            return ""
+
+        text = value.replace("\ufeff", "").replace("\x00", "")
+        text = text.strip()
+
+        if not text:
+            return ""
+
+        if "\n" in text or "\r" in text:
+            for line in text.replace("\r", "\n").split("\n"):
+                cleaned = line.strip()
+                if cleaned:
+                    return cleaned
+            return ""
+
+        return text
 
     def _deploy_to_host(self, hostname: str, observed_host_version: Optional[str] = None) -> bool:
         """Deploy scripts and ISOs to a host."""
