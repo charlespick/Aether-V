@@ -156,7 +156,7 @@ class HostDeploymentService:
         Returns:
             True if setup successful, False otherwise
         """
-        logger.info(f"Ensuring host setup for {hostname}")
+        logger.debug("Ensuring host setup for %s", hostname)
         self._host_setup_status[hostname] = HostSetupStatus(state="checking")
 
         try:
@@ -169,7 +169,7 @@ class HostDeploymentService:
             needs_update, normalized_host_version, decision = self._assess_host_version(
                 host_version
             )
-            logger.info(
+            logger.debug(
                 "Host %s version check: container=%r host=%r -> %s",
                 hostname,
                 (self._container_version or "").strip() or None,
@@ -200,10 +200,7 @@ class HostDeploymentService:
                     )
                 return deployment_success
 
-            logger.info(
-                "Host %s is up-to-date; deployment skipped",
-                hostname,
-            )
+            logger.info("Host %s is up-to-date; deployment skipped", hostname)
             self._verified_host_versions[hostname] = self._container_version
             self._host_setup_status[hostname] = HostSetupStatus(state="ready")
             return True
@@ -450,7 +447,7 @@ class HostDeploymentService:
         needs_update, normalized_observed, decision = self._assess_host_version(
             observed_host_version
         )
-        logger.info(
+        logger.debug(
             "Starting deployment evaluation for %s (container=%r, observed_host=%r -> %s)",
             hostname,
             container_version or None,
@@ -467,7 +464,7 @@ class HostDeploymentService:
                 return False
 
             if observed_host_version is not None and not needs_update:
-                logger.info(
+                logger.debug(
                     "Skipping deployment to %s; observed host version %r already matches container %r",
                     hostname,
                     normalized_observed or None,
@@ -482,7 +479,7 @@ class HostDeploymentService:
                 refresh_needed, normalized_refresh, refresh_decision = (
                     self._assess_host_version(refreshed_host_version)
                 )
-                logger.info(
+                logger.debug(
                     "Refreshed host version for %s prior to deployment: container=%r host=%r -> %s",
                     hostname,
                     container_version or None,
@@ -498,10 +495,8 @@ class HostDeploymentService:
 
             if refreshed_host_version is not None and not refresh_needed:
                 logger.info(
-                    "Skipping deployment to %s after refresh; host version %r matches container %r",
+                    "Skipping deployment to %s; host version matches container",
                     hostname,
-                    (refreshed_host_version or "").strip() or None,
-                    container_version or None,
                 )
                 return True
 
@@ -584,7 +579,7 @@ class HostDeploymentService:
                 logger.warning(f"No script files found in {script_dir}")
                 return True
 
-            logger.info(f"Found {len(script_files)} scripts to deploy")
+            logger.debug("Found %d scripts to deploy", len(script_files))
 
             for script_file in script_files:
                 remote_path = self._build_remote_path(script_file.name)
@@ -617,7 +612,7 @@ class HostDeploymentService:
                 logger.warning(f"No ISO files found in {iso_dir}")
                 return False
 
-            logger.info(f"Found {len(iso_files)} ISOs to deploy")
+            logger.debug("Found %d ISOs to deploy", len(iso_files))
 
             for iso_file in iso_files:
                 remote_path = self._build_remote_path(iso_file.name)
