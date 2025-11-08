@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
@@ -126,9 +127,15 @@ class HostDeploymentService:
         """Load version from container artifacts."""
         version_file = settings.version_file_path
         try:
-            with open(version_file, "r") as f:
-                self._container_version = f.read().strip()
-            logger.info(f"Container version: {self._container_version}")
+            with open(version_file, "r", encoding="utf-8") as f:
+                raw_version = f.read()
+            normalized = self._normalize_version_text(raw_version)
+            if not normalized:
+                logger.warning(
+                    "Container version file %s did not contain a usable value", version_file
+                )
+            self._container_version = normalized
+            logger.info("Container version: %s", self._container_version or "<empty>")
         except Exception as e:
             logger.error(f"Failed to load container version: {e}")
             self._container_version = "0.0.0"
@@ -149,7 +156,7 @@ class HostDeploymentService:
         Returns:
             True if setup successful, False otherwise
         """
-        logger.info(f"Ensuring host setup for {hostname}")
+        logger.debug("Ensuring host setup for %s", hostname)
         self._host_setup_status[hostname] = HostSetupStatus(state="checking")
 
         try:
@@ -159,16 +166,28 @@ class HostDeploymentService:
                 self._get_host_version,
                 description=f"version check for {hostname}",
             )
-            logger.info(f"Host {hostname} version: {host_version}")
+            needs_update, normalized_host_version, decision = self._assess_host_version(
+                host_version
+            )
+            logger.debug(
+                "Host %s version check: container=%r host=%r -> %s",
+                hostname,
+                (self._container_version or "").strip() or None,
+                normalized_host_version or None,
+                decision,
+            )
 
-            if self._needs_update(host_version):
+            if needs_update:
                 logger.info(
-                    f"Host {hostname} needs update from {host_version} to {self._container_version}"
+                    "Host %s requires agent redeployment; waiting for ingress readiness",
+                    hostname,
                 )
+                await self._wait_for_agent_endpoint_ready()
                 self._host_setup_status[hostname] = HostSetupStatus(state="updating")
                 deployment_success = await self._run_winrm_call(
                     hostname,
                     self._deploy_to_host,
+                    host_version,
                     description=f"deployment for {hostname}",
                 )
                 if deployment_success:
@@ -181,7 +200,7 @@ class HostDeploymentService:
                     )
                 return deployment_success
 
-            logger.info(f"Host {hostname} is up-to-date")
+            logger.info("Host %s is up-to-date; deployment skipped", hostname)
             self._verified_host_versions[hostname] = self._container_version
             self._host_setup_status[hostname] = HostSetupStatus(state="ready")
             return True
@@ -276,9 +295,27 @@ class HostDeploymentService:
         """Get the version currently deployed on a host."""
         version_file_path = f"{settings.host_install_directory}\\version"
 
-        command = (
-            f"Get-Content -Path '{version_file_path}' -ErrorAction SilentlyContinue"
-        )
+        command = textwrap.dedent(
+            f"""
+            $ErrorActionPreference = 'Stop';
+            $versionPath = {self._ps_literal(version_file_path)};
+            if (-not (Test-Path -LiteralPath $versionPath)) {{ return }}
+            try {{
+                $content = [System.IO.File]::ReadAllText($versionPath, [System.Text.Encoding]::UTF8)
+            }} catch {{
+                try {{
+                    $content = [System.IO.File]::ReadAllText($versionPath)
+                }} catch {{
+                    $content = $null
+                }}
+            }}
+            if ($content -eq $null) {{ return }}
+            $trimmed = $content.Trim()
+            $trimmed = $trimmed.TrimStart([char]0xFEFF)
+            $trimmed = $trimmed.Trim([char]0)
+            if (-not [string]::IsNullOrWhiteSpace($trimmed)) {{ Write-Output $trimmed }}
+            """
+        ).strip()
 
         try:
             stdout, stderr, exit_code = winrm_service.execute_ps_command(
@@ -293,14 +330,24 @@ class HostDeploymentService:
                 len(stderr.encode("utf-8")),
             )
 
-            if exit_code == 0 and stdout.strip():
-                return stdout.strip()
-            else:
-                # Version file doesn't exist, return 0.0.0
+            normalized_stdout = self._normalize_version_text(stdout)
+
+            if exit_code == 0 and normalized_stdout:
                 logger.debug(
-                    "Host %s did not return a version; treating as 0.0.0 (exit=%s)",
+                    "Host %s reported version raw=%r normalized=%r",
+                    hostname,
+                    stdout,
+                    normalized_stdout,
+                )
+                return normalized_stdout
+            else:
+                # Version file doesn't exist or unreadable
+                logger.warning(
+                    "Host %s did not provide a usable version (exit=%s, raw stdout=%r, stderr=%r)",
                     hostname,
                     exit_code,
+                    stdout,
+                    stderr,
                 )
                 return "0.0.0"
         except WinRMAuthenticationError as exc:
@@ -323,25 +370,100 @@ class HostDeploymentService:
             logger.warning(f"Failed to get host version for {hostname}: {e}")
             return "0.0.0"
 
-    def _needs_update(self, host_version: str) -> bool:
-        """Check if host needs to be updated."""
-        if host_version == "0.0.0":
-            return True
+    def _assess_host_version(
+        self, host_version: Optional[str]
+    ) -> Tuple[bool, str, str]:
+        """
+        Determine whether the host requires an update, returning the normalized version and a reason.
+
+        Args:
+            host_version (Optional[str]): The version string reported by the host.
+
+        Returns:
+            Tuple[bool, str, str]: A tuple containing:
+                - needs_update (bool): Whether the host requires an update.
+                - normalized_version (str): The normalized version string of the host.
+                - decision_reason (str): A string explaining the decision.
+        """
+        container_version = self._normalize_version_text(self._container_version)
+        normalized_host = self._normalize_version_text(host_version)
+
+        if not container_version:
+            logger.warning(
+                "Container version is empty; forcing deployment for host artifacts"
+            )
+            return True, normalized_host, "container version unavailable"
+
+        if normalized_host == container_version:
+            return False, normalized_host, "versions match"
+
+        if not normalized_host:
+            return True, normalized_host, "host version missing"
+
+        if normalized_host == "0.0.0":
+            return True, normalized_host, "host reported default version 0.0.0"
 
         try:
-            # Parse versions as semantic version tuples
-            host_parts = [int(x) for x in host_version.split(".")]
-            container_parts = [int(x) for x in self._container_version.split(".")]
+            host_parts = [int(x) for x in normalized_host.split(".")]
+            container_parts = [int(x) for x in container_version.split(".")]
+        except Exception:
+            logger.warning(
+                "Version comparison failed for container=%r host=%r; forcing update",
+                container_version,
+                normalized_host,
+            )
+            return True, normalized_host, "host version unparsable"
 
-            # Compare versions
-            return container_parts > host_parts
-        except Exception as e:
-            logger.warning(f"Version comparison failed: {e}, forcing update")
-            return True
+        if container_parts > host_parts:
+            return True, normalized_host, "container version newer than host"
 
-    def _deploy_to_host(self, hostname: str) -> bool:
+        if container_parts == host_parts:
+            return False, normalized_host, "versions match after normalization"
+
+        return False, normalized_host, "host version ahead of container"
+
+    def _needs_update(self, host_version: str) -> bool:
+        """Check if host needs to be updated."""
+
+        needs_update, _, _ = self._assess_host_version(host_version)
+        return needs_update
+
+    @staticmethod
+    def _normalize_version_text(value: Optional[str]) -> str:
+        """Clean version text by trimming whitespace, BOMs, nulls, and blank lines."""
+
+        if not value:
+            return ""
+
+        text = value.replace("\ufeff", "").replace("\x00", "")
+        text = text.strip()
+
+        if not text:
+            return ""
+
+        if "\n" in text or "\r" in text:
+            for line in text.replace("\r", "\n").split("\n"):
+                cleaned = line.strip()
+                if cleaned:
+                    return cleaned
+            return ""
+
+        return text
+
+    def _deploy_to_host(self, hostname: str, observed_host_version: Optional[str] = None) -> bool:
         """Deploy scripts and ISOs to a host."""
-        logger.info(f"Starting deployment to {hostname}")
+        container_version = (self._container_version or "").strip()
+
+        needs_update, normalized_observed, decision = self._assess_host_version(
+            observed_host_version
+        )
+        logger.debug(
+            "Starting deployment evaluation for %s (container=%r, observed_host=%r -> %s)",
+            hostname,
+            container_version or None,
+            normalized_observed or None,
+            decision,
+        )
 
         try:
             if not self._deployment_enabled:
@@ -350,6 +472,45 @@ class HostDeploymentService:
                     hostname,
                 )
                 return False
+
+            if observed_host_version is not None and not needs_update:
+                logger.debug(
+                    "Skipping deployment to %s; observed host version %r already matches container %r",
+                    hostname,
+                    normalized_observed or None,
+                    container_version or None,
+                )
+                return True
+
+            refreshed_host_version: Optional[str] = None
+            refresh_needed = True
+            try:
+                refreshed_host_version = self._get_host_version(hostname)
+                refresh_needed, normalized_refresh, refresh_decision = (
+                    self._assess_host_version(refreshed_host_version)
+                )
+                logger.debug(
+                    "Refreshed host version for %s prior to deployment: container=%r host=%r -> %s",
+                    hostname,
+                    container_version or None,
+                    normalized_refresh or None,
+                    refresh_decision,
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging path
+                logger.warning(
+                    "Unable to refresh host version for %s prior to deployment: %s",
+                    hostname,
+                    exc,
+                )
+
+            if refreshed_host_version is not None and not refresh_needed:
+                logger.info(
+                    "Skipping deployment to %s; host version matches container",
+                    hostname,
+                )
+                return True
+
+            logger.info(f"Starting deployment to {hostname}")
 
             script_files = self._collect_script_files()
             iso_files = self._collect_iso_files()
@@ -428,7 +589,7 @@ class HostDeploymentService:
                 logger.warning(f"No script files found in {script_dir}")
                 return True
 
-            logger.info(f"Found {len(script_files)} scripts to deploy")
+            logger.debug("Found %d scripts to deploy", len(script_files))
 
             for script_file in script_files:
                 remote_path = self._build_remote_path(script_file.name)
@@ -461,7 +622,7 @@ class HostDeploymentService:
                 logger.warning(f"No ISO files found in {iso_dir}")
                 return False
 
-            logger.info(f"Found {len(iso_files)} ISOs to deploy")
+            logger.debug("Found %d ISOs to deploy", len(iso_files))
 
             for iso_file in iso_files:
                 remote_path = self._build_remote_path(iso_file.name)
