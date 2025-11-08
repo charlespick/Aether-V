@@ -380,16 +380,9 @@ end {
         Write-Host "Unregistering VM '$VMName' from Hyper-V."
         Remove-VM -Name $VMName -Force -Confirm:$false -ErrorAction Stop
 
-        try {
-            $existingVm = Get-VM -Name $VMName -ErrorAction Stop
-            if ($existingVm) {
-                throw "VM '$VMName' is still registered after removal attempt."
-            }
-        }
-        catch {
-            if ($_.Exception -isnot [Microsoft.HyperV.PowerShell.VirtualMachineNotFoundException]) {
-                throw $_
-            }
+        $existingVm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+        if ($existingVm) {
+            throw "VM '$VMName' is still registered after removal attempt."
         }
 
         if ($vmFolder) {
