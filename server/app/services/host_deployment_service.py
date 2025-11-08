@@ -5,7 +5,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar, Literal
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
@@ -65,6 +65,19 @@ class StartupDeploymentProgress:
         }
 
 
+@dataclass(slots=True)
+class HostSetupStatus:
+    state: Literal["unknown", "checking", "ready", "updating", "update-failed", "error"] = "unknown"
+    error: Optional[str] = None
+
+
+@dataclass(slots=True)
+class InventoryReadiness:
+    ready: bool
+    preparing: bool
+    error: Optional[str] = None
+
+
 T = TypeVar("T")
 
 
@@ -75,6 +88,8 @@ class HostDeploymentService:
         self._container_version: str = ""
         self._agent_download_base_url: Optional[str] = None
         self._deployment_enabled = self._initialize_agent_download_base_url()
+        self._verified_host_versions: Dict[str, str] = {}
+        self._host_setup_status: Dict[str, HostSetupStatus] = {}
         self._load_container_version()
         self._startup_task: Optional[asyncio.Task[None]] = None
         self._startup_event: Optional[asyncio.Event] = None
@@ -117,6 +132,8 @@ class HostDeploymentService:
         except Exception as e:
             logger.error(f"Failed to load container version: {e}")
             self._container_version = "0.0.0"
+        self._verified_host_versions.clear()
+        self._host_setup_status.clear()
 
     def get_container_version(self) -> str:
         """Get the container version."""
@@ -133,6 +150,7 @@ class HostDeploymentService:
             True if setup successful, False otherwise
         """
         logger.info(f"Ensuring host setup for {hostname}")
+        self._host_setup_status[hostname] = HostSetupStatus(state="checking")
 
         try:
             # Check host version in a worker thread because it performs network I/O
@@ -147,18 +165,55 @@ class HostDeploymentService:
                 logger.info(
                     f"Host {hostname} needs update from {host_version} to {self._container_version}"
                 )
-                return await self._run_winrm_call(
+                self._host_setup_status[hostname] = HostSetupStatus(state="updating")
+                deployment_success = await self._run_winrm_call(
                     hostname,
                     self._deploy_to_host,
                     description=f"deployment for {hostname}",
                 )
+                if deployment_success:
+                    self._verified_host_versions[hostname] = self._container_version
+                    self._host_setup_status[hostname] = HostSetupStatus(state="ready")
+                else:
+                    self._verified_host_versions.pop(hostname, None)
+                    self._host_setup_status[hostname] = HostSetupStatus(
+                        state="update-failed", error="deployment failed"
+                    )
+                return deployment_success
 
             logger.info(f"Host {hostname} is up-to-date")
+            self._verified_host_versions[hostname] = self._container_version
+            self._host_setup_status[hostname] = HostSetupStatus(state="ready")
             return True
 
         except Exception as e:
             logger.error(f"Failed to ensure host setup for {hostname}: {e}")
+            self._verified_host_versions.pop(hostname, None)
+            self._host_setup_status[hostname] = HostSetupStatus(state="error", error=str(e))
             return False
+
+    async def ensure_inventory_ready(self, hostname: str) -> InventoryReadiness:
+        """Validate that a host is prepared for inventory collection."""
+
+        if not self._deployment_enabled:
+            return InventoryReadiness(ready=True, preparing=False, error=None)
+
+        container_version = self._container_version
+        cached_version = self._verified_host_versions.get(hostname)
+        if cached_version == container_version:
+            self._host_setup_status[hostname] = HostSetupStatus(state="ready")
+            return InventoryReadiness(ready=True, preparing=False, error=None)
+
+        ready = await self.ensure_host_setup(hostname)
+        status = self._host_setup_status.get(hostname, HostSetupStatus())
+
+        if ready:
+            pass
+            return InventoryReadiness(ready=True, preparing=False, error=None)
+
+        preparing = status.state in {"updating", "update-failed"}
+        error = status.error if status.state == "error" else None
+        return InventoryReadiness(ready=False, preparing=preparing, error=error)
 
     async def _run_winrm_call(
         self,

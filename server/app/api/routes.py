@@ -202,14 +202,7 @@ async def readiness_check():
             build=_current_build_info(),
         )
 
-    if not inventory_service.has_completed_initial_refresh():
-        readiness_status = "ready_pending_inventory"
-        if host_deployment_service.is_startup_in_progress():
-            readiness_status = "ready_deploying_agents"
-    elif not inventory_service.initial_refresh_succeeded():
-        readiness_status = "ready_inventory_failed"
-    else:
-        readiness_status = "ready"
+    readiness_status = "ready"
 
     return HealthResponse(
         status=readiness_status,

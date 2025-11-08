@@ -119,10 +119,10 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_log_startup_deployment_summary())
 
     if not config_result.has_errors:
-        await job_service.start()
-        job_started = True
         await inventory_service.start()
         inventory_started = True
+        await job_service.start()
+        job_started = True
         logger.info(
             "Application services initialised; inventory refresh will continue in the background"
         )
