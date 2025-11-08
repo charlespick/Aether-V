@@ -83,6 +83,7 @@ The service deploys the following to `{HOST_INSTALL_DIRECTORY}` on each host:
 - `Provisioning.RegisterVM.ps1` - Registers VM with Hyper-V and applies configuration
 - `Provisioning.WaitForProvisioningKey.ps1` - Waits for VM to signal readiness via KVP
 - `Provisioning.PublishProvisioningData.ps1` - Publishes provisioning data to VM via Hyper-V KVP
+- `Inventory.Collect.ps1` - Collects host and VM inventory information locally and returns a single JSON payload to the server
 
 **ISOs:**
 

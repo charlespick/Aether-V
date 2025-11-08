@@ -1,12 +1,13 @@
 """Inventory management service for tracking Hyper-V hosts and VMs."""
+
 import asyncio
 import hashlib
 import json
 import logging
 import random
-import textwrap
 import time
 from datetime import datetime, timedelta
+from pathlib import PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, TypeVar
 
 from ..core.config import settings
@@ -20,12 +21,30 @@ from ..core.models import (
 )
 from .host_deployment_service import host_deployment_service
 from .notification_service import notification_service
+from .remote_task_service import (
+    remote_task_service,
+    RemoteTaskCategory,
+    RemoteTaskTimeoutError,
+)
 from .winrm_service import winrm_service
 
 logger = logging.getLogger(__name__)
 
 
 T = TypeVar("T")
+
+
+INVENTORY_SCRIPT_NAME = "Inventory.Collect.ps1"
+
+
+class InventoryScriptMissingError(RuntimeError):
+    """Raised when the inventory collection script is missing on the host."""
+
+    def __init__(self, hostname: str, script_path: str, message: str):
+        super().__init__(message)
+        self.hostname = hostname
+        self.script_path = script_path
+        self.detail = message
 
 
 class InventoryService:
@@ -38,6 +57,7 @@ class InventoryService:
         self.last_refresh: Optional[datetime] = None
         self._refresh_task: Optional[asyncio.Task] = None
         self._initial_refresh_task: Optional[asyncio.Task] = None
+        self._bootstrap_task: Optional[asyncio.Task] = None
         self._refresh_lock = asyncio.Lock()
         self._job_vm_placeholders: Dict[str, Set[str]] = {}
         self._host_last_refresh: Dict[str, datetime] = {}
@@ -54,33 +74,65 @@ class InventoryService:
         self._initial_refresh_event.clear()
         self._initial_refresh_succeeded = False
 
-        if settings.dummy_data:
-            logger.info("DUMMY_DATA enabled - using development data")
-            await self._initialize_dummy_data()
-            self._refresh_task = asyncio.create_task(self._dummy_refresh_loop())
-            self._initial_refresh_task = None
-            self._initial_refresh_event.set()
-            self._initial_refresh_succeeded = True
+        if self._bootstrap_task and not self._bootstrap_task.done():
+            logger.debug("Inventory bootstrap already running; skipping duplicate start")
             return
 
-        if host_deployment_service.is_startup_in_progress():
+        loop = asyncio.get_running_loop()
+        self._bootstrap_task = loop.create_task(self._bootstrap_startup_sequence())
+
+    async def _bootstrap_startup_sequence(self) -> None:
+        """Wait for dependencies before kicking off inventory refresh loops."""
+
+        current_task = asyncio.current_task()
+        try:
+            logger.debug("Inventory bootstrap waiting for host deployment startup to finish")
+            await host_deployment_service.wait_for_startup()
+            deployment_summary = host_deployment_service.get_startup_summary()
             logger.info(
-                "Host agent deployment running in background; continuing inventory startup"
+                "Host deployment startup sequence complete (status=%s)",
+                deployment_summary.get("status"),
             )
 
-        self._notify_inventory_status(
-            title="Inventory refresh in progress",
-            message=(
-                "Initial inventory synchronisation is running; host and VM data may be "
-                "incomplete until it finishes."
-            ),
-            level=NotificationLevel.INFO,
-            metadata={"phase": "startup"},
-        )
+            if settings.dummy_data:
+                logger.info("DUMMY_DATA enabled - using development data")
+                await self._initialize_dummy_data()
+                self._refresh_task = asyncio.create_task(self._dummy_refresh_loop())
+                self._initial_refresh_task = None
+                self._initial_refresh_event.set()
+                self._initial_refresh_succeeded = True
+                return
 
-        loop = asyncio.get_running_loop()
-        self._initial_refresh_task = loop.create_task(self._run_initial_refresh())
-        self._refresh_task = loop.create_task(self._staggered_refresh_loop())
+            self._notify_inventory_status(
+                title="Inventory refresh in progress",
+                message=(
+                    "Initial inventory synchronisation is running; host and VM data may be "
+                    "incomplete until it finishes."
+                ),
+                level=NotificationLevel.INFO,
+                metadata={"phase": "startup"},
+            )
+
+            loop = asyncio.get_running_loop()
+            self._initial_refresh_task = loop.create_task(self._run_initial_refresh())
+            self._refresh_task = loop.create_task(self._staggered_refresh_loop())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception("Inventory bootstrap failed: %s", exc)
+            self._notify_inventory_status(
+                title="Inventory refresh failed",
+                message=(
+                    "Inventory service could not start because dependencies were unavailable: %s"
+                )
+                % exc,
+                level=NotificationLevel.ERROR,
+                metadata={"phase": "startup", "error": str(exc)},
+            )
+            self._initial_refresh_event.set()
+        finally:
+            if self._bootstrap_task is current_task:
+                self._bootstrap_task = None
 
     async def _run_initial_refresh(self) -> None:
         try:
@@ -92,7 +144,8 @@ class InventoryService:
                 message=(
                     "Initial inventory synchronisation failed: %s. Background refresh "
                     "will continue attempting to update data."
-                ) % exc,
+                )
+                % exc,
                 level=NotificationLevel.ERROR,
                 metadata={"phase": "startup", "error": str(exc)},
             )
@@ -104,7 +157,9 @@ class InventoryService:
                 level=NotificationLevel.SUCCESS,
                 metadata={
                     "phase": "startup",
-                    "last_refresh": self.last_refresh.isoformat() if self.last_refresh else None,
+                    "last_refresh": (
+                        self.last_refresh.isoformat() if self.last_refresh else None
+                    ),
                 },
             )
         finally:
@@ -113,19 +168,26 @@ class InventoryService:
     async def stop(self):
         """Stop the inventory service."""
         logger.info("Stopping inventory service")
+        if self._bootstrap_task:
+            self._bootstrap_task.cancel()
+            try:
+                await self._bootstrap_task
+            except asyncio.CancelledError:
+                logger.debug("Inventory bootstrap task cancellation acknowledged")
+            self._bootstrap_task = None
         if self._refresh_task:
             self._refresh_task.cancel()
             try:
                 await self._refresh_task
             except asyncio.CancelledError:
-                pass
+                logger.debug("Inventory refresh loop cancelled")
             self._refresh_task = None
         if self._initial_refresh_task:
             self._initial_refresh_task.cancel()
             try:
                 await self._initial_refresh_task
             except asyncio.CancelledError:
-                pass
+                logger.debug("Initial inventory refresh task cancelled")
             self._initial_refresh_task = None
 
         notification_service.clear_system_notification(self._inventory_status_key)
@@ -140,20 +202,17 @@ class InventoryService:
             name="Production",
             hosts=["hyperv01.lab.local", "hyperv02.lab.local"],
             connected_hosts=2,
-            total_hosts=2
+            total_hosts=2,
         )
 
         cluster2 = Cluster(
             name="Development",
             hosts=["hyperv-dev01.lab.local"],
             connected_hosts=1,
-            total_hosts=1
+            total_hosts=1,
         )
 
-        self.clusters = {
-            "Production": cluster1,
-            "Development": cluster2
-        }
+        self.clusters = {"Production": cluster1, "Development": cluster2}
 
         # Create connected hosts with VMs
         now = datetime.utcnow()
@@ -164,7 +223,7 @@ class InventoryService:
             cluster="Production",
             connected=True,
             last_seen=now,
-            error=None
+            error=None,
         )
 
         self.hosts["hyperv02.lab.local"] = Host(
@@ -172,7 +231,7 @@ class InventoryService:
             cluster="Production",
             connected=True,
             last_seen=now,
-            error=None
+            error=None,
         )
 
         # Development cluster host
@@ -181,7 +240,7 @@ class InventoryService:
             cluster="Development",
             connected=True,
             last_seen=now,
-            error=None
+            error=None,
         )
 
         # Add a few disconnected hosts
@@ -190,7 +249,7 @@ class InventoryService:
             cluster=None,  # No cluster assignment
             connected=False,
             last_seen=now - timedelta(hours=2),
-            error="Connection timeout"
+            error="Connection timeout",
         )
 
         self.hosts["hyperv-backup01.lab.local"] = Host(
@@ -198,40 +257,86 @@ class InventoryService:
             cluster=None,
             connected=False,
             last_seen=now - timedelta(minutes=30),
-            error="WinRM authentication failed"
+            error="WinRM authentication failed",
         )
 
         # Create dummy VMs
         dummy_vms = [
             # VMs on hyperv01
-            VM(name="web-server-01", host="hyperv01.lab.local",
-               state=VMState.RUNNING, cpu_cores=4, memory_gb=8.0,
-               os_family=OSFamily.LINUX, created_at=now - timedelta(days=5)),
-            VM(name="db-server-01", host="hyperv01.lab.local",
-               state=VMState.RUNNING, cpu_cores=8, memory_gb=16.0,
-               os_family=OSFamily.LINUX, created_at=now - timedelta(days=10)),
-            VM(name="win-app-01", host="hyperv01.lab.local",
-               state=VMState.OFF, cpu_cores=2, memory_gb=4.0,
-               os_family=OSFamily.WINDOWS, created_at=now - timedelta(days=2)),
-
+            VM(
+                name="web-server-01",
+                host="hyperv01.lab.local",
+                state=VMState.RUNNING,
+                cpu_cores=4,
+                memory_gb=8.0,
+                os_family=OSFamily.LINUX,
+                created_at=now - timedelta(days=5),
+            ),
+            VM(
+                name="db-server-01",
+                host="hyperv01.lab.local",
+                state=VMState.RUNNING,
+                cpu_cores=8,
+                memory_gb=16.0,
+                os_family=OSFamily.LINUX,
+                created_at=now - timedelta(days=10),
+            ),
+            VM(
+                name="win-app-01",
+                host="hyperv01.lab.local",
+                state=VMState.OFF,
+                cpu_cores=2,
+                memory_gb=4.0,
+                os_family=OSFamily.WINDOWS,
+                created_at=now - timedelta(days=2),
+            ),
             # VMs on hyperv02
-            VM(name="load-balancer-01", host="hyperv02.lab.local",
-               state=VMState.RUNNING, cpu_cores=2, memory_gb=4.0,
-               os_family=OSFamily.LINUX, created_at=now - timedelta(days=7)),
-            VM(name="monitoring-01", host="hyperv02.lab.local",
-               state=VMState.RUNNING, cpu_cores=4, memory_gb=8.0,
-               os_family=OSFamily.LINUX, created_at=now - timedelta(days=3)),
-            VM(name="backup-vm", host="hyperv02.lab.local",
-               state=VMState.SAVED, cpu_cores=1, memory_gb=2.0,
-               os_family=OSFamily.WINDOWS, created_at=now - timedelta(days=15)),
-
+            VM(
+                name="load-balancer-01",
+                host="hyperv02.lab.local",
+                state=VMState.RUNNING,
+                cpu_cores=2,
+                memory_gb=4.0,
+                os_family=OSFamily.LINUX,
+                created_at=now - timedelta(days=7),
+            ),
+            VM(
+                name="monitoring-01",
+                host="hyperv02.lab.local",
+                state=VMState.RUNNING,
+                cpu_cores=4,
+                memory_gb=8.0,
+                os_family=OSFamily.LINUX,
+                created_at=now - timedelta(days=3),
+            ),
+            VM(
+                name="backup-vm",
+                host="hyperv02.lab.local",
+                state=VMState.SAVED,
+                cpu_cores=1,
+                memory_gb=2.0,
+                os_family=OSFamily.WINDOWS,
+                created_at=now - timedelta(days=15),
+            ),
             # VMs on dev host
-            VM(name="test-vm-01", host="hyperv-dev01.lab.local",
-               state=VMState.RUNNING, cpu_cores=2, memory_gb=4.0,
-               os_family=OSFamily.LINUX, created_at=now - timedelta(days=1)),
-            VM(name="dev-workstation", host="hyperv-dev01.lab.local",
-               state=VMState.PAUSED, cpu_cores=4, memory_gb=8.0,
-               os_family=OSFamily.WINDOWS, created_at=now - timedelta(hours=8)),
+            VM(
+                name="test-vm-01",
+                host="hyperv-dev01.lab.local",
+                state=VMState.RUNNING,
+                cpu_cores=2,
+                memory_gb=4.0,
+                os_family=OSFamily.LINUX,
+                created_at=now - timedelta(days=1),
+            ),
+            VM(
+                name="dev-workstation",
+                host="hyperv-dev01.lab.local",
+                state=VMState.PAUSED,
+                cpu_cores=4,
+                memory_gb=8.0,
+                os_family=OSFamily.WINDOWS,
+                created_at=now - timedelta(hours=8),
+            ),
         ]
 
         # Add VMs to inventory
@@ -266,11 +371,15 @@ class InventoryService:
         )
 
         if failed > 0:
-            logger.warning(f"Artifact deployment completed with "
-                           f"{failed} failure(s) and {successful} success(es)")
+            logger.warning(
+                f"Artifact deployment completed with "
+                f"{failed} failure(s) and {successful} success(es)"
+            )
         else:
-            logger.info(f"Artifact deployment completed successfully "
-                        f"to all {successful} host(s)")
+            logger.info(
+                f"Artifact deployment completed successfully "
+                f"to all {successful} host(s)"
+            )
 
     async def _dummy_refresh_loop(self):
         """Periodically refresh dummy inventory data for development mode."""
@@ -293,7 +402,9 @@ class InventoryService:
             host_list = [host for host in settings.get_hyperv_hosts_list() if host]
 
             if not host_list:
-                logger.debug("No Hyper-V hosts configured; sleeping until next interval")
+                logger.debug(
+                    "No Hyper-V hosts configured; sleeping until next interval"
+                )
                 await asyncio.sleep(interval)
                 self._finalise_cycle_refresh([], cycle_start, interval)
                 continue
@@ -442,7 +553,9 @@ class InventoryService:
 
         configured_hosts = [host for host in settings.get_hyperv_hosts_list() if host]
         target_hosts = (
-            [host for host in hostnames if host] if hostnames is not None else configured_hosts
+            [host for host in hostnames if host]
+            if hostnames is not None
+            else configured_hosts
         )
 
         if not configured_hosts:
@@ -491,8 +604,7 @@ class InventoryService:
                 elif vm.state == VMState.OFF:
                     vm.state = VMState.RUNNING
 
-                logger.info(
-                    f"Dummy data: Changed {vm.name} state to {vm.state}")
+                logger.info(f"Dummy data: Changed {vm.name} state to {vm.state}")
 
         self.last_refresh = datetime.utcnow()
 
@@ -501,39 +613,21 @@ class InventoryService:
         logger.info(f"Refreshing inventory for host: {hostname}")
 
         try:
-            # Test connection
-            await self._run_winrm_call(
-                self._test_host_connection,
-                hostname,
-                description=f"connection test for {hostname}",
-            )
-
-            # Query VMs
-            vms = await self._run_winrm_call(
-                self._query_host_vms,
-                hostname,
-                description=f"VM query for {hostname}",
-            )
-
-            # Determine cluster assignment
-            cluster_name = await self._run_winrm_call(
-                self._query_host_cluster,
-                hostname,
-                description=f"cluster lookup for {hostname}",
-            )
-            if not cluster_name:
-                cluster_name = "Default"
+            payload = await self._collect_with_recovery(hostname)
+            cluster_name, vms = self._parse_inventory_snapshot(hostname, payload)
 
             # Check if host was previously disconnected and create reconnection notification
             previous_host = self.hosts.get(hostname)
-            was_disconnected = previous_host and not previous_host.connected if previous_host else True
+            was_disconnected = (
+                previous_host and not previous_host.connected if previous_host else True
+            )
 
             # Create notification for host reconnection (only if not dummy data and was previously disconnected)
             if was_disconnected and not settings.dummy_data and previous_host:
                 # Import here to avoid circular import
                 from .notification_service import notification_service
-                notification_service.create_host_reconnected_notification(
-                    hostname)
+
+                notification_service.create_host_reconnected_notification(hostname)
 
             # Update host status
             self.hosts[hostname] = Host(
@@ -541,7 +635,7 @@ class InventoryService:
                 cluster=cluster_name,
                 connected=True,
                 last_seen=datetime.utcnow(),
-                error=None
+                error=None,
             )
 
             self._host_last_refresh[hostname] = datetime.utcnow()
@@ -557,7 +651,8 @@ class InventoryService:
             # Remove VMs that no longer exist on this host, but preserve active placeholders
             active_placeholder_keys = self._active_placeholder_keys()
             keys_to_remove = [
-                key for key in list(self.vms.keys())
+                key
+                for key in list(self.vms.keys())
                 if key.startswith(f"{hostname}:")
                 and key not in expected_keys
                 and key not in active_placeholder_keys
@@ -572,30 +667,78 @@ class InventoryService:
 
             # Check if host was previously connected and create notification
             previous_host = self.hosts.get(hostname)
-            was_connected = previous_host and previous_host.connected if previous_host else False
+            was_connected = (
+                previous_host and previous_host.connected if previous_host else False
+            )
 
             # Create notification for host becoming unreachable (only if not dummy data)
             if was_connected and not settings.dummy_data:
                 # Import here to avoid circular import
                 from .notification_service import notification_service
+
                 notification_service.create_host_unreachable_notification(
-                    hostname, str(e))
+                    hostname, str(e)
+                )
 
             self.hosts[hostname] = Host(
                 hostname=hostname,
                 cluster=previous_host.cluster if previous_host else None,
                 connected=False,
-                last_seen=self.hosts.get(hostname,
-                                         Host(hostname=hostname)).last_seen,
-                error=str(e)
+                last_seen=self.hosts.get(hostname, Host(hostname=hostname)).last_seen,
+                error=str(e),
             )
 
             # Clear non-placeholder VMs for the unreachable host
             self._clear_host_vms(hostname, preserve_placeholders=True)
             self._host_last_refresh.pop(hostname, None)
 
+    async def _collect_with_recovery(self, hostname: str) -> Dict[str, Any]:
+        """Collect inventory from a host, redeploying scripts if they are missing."""
+
+        attempt = 0
+
+        while True:
+            attempt += 1
+            try:
+                return await self._run_winrm_call(
+                    hostname,
+                    self._collect_host_inventory,
+                    description=f"inventory collection for {hostname}",
+                )
+            except InventoryScriptMissingError as exc:
+                logger.warning(
+                    "Inventory script missing on %s; attempting redeployment (attempt %d)",
+                    hostname,
+                    attempt,
+                )
+
+                if not host_deployment_service.is_enabled:
+                    raise RuntimeError(
+                        "Required inventory scripts are missing and host deployment service is disabled"
+                    ) from exc
+
+                redeployed = await host_deployment_service.ensure_host_setup(hostname)
+
+                if not redeployed:
+                    raise RuntimeError(
+                        "Redeployment failed while recovering missing inventory scripts"
+                    ) from exc
+
+                if attempt >= 2:
+                    raise RuntimeError(
+                        "Inventory scripts still missing after redeployment"
+                    ) from exc
+
+                logger.info(
+                    "Redeployment of scripts to %s succeeded; retrying inventory collection",
+                    hostname,
+                )
+                await asyncio.sleep(0)
+                continue
+
     async def _run_winrm_call(
         self,
+        hostname: str,
         func: Callable[..., T],
         *args: Any,
         description: str,
@@ -604,21 +747,27 @@ class InventoryService:
 
         timeout = max(1.0, float(settings.winrm_operation_timeout))
         start = time.perf_counter()
-        logger.debug("Starting inventory WinRM operation (%s) with timeout %.1fs", description, timeout)
+        logger.debug(
+            "Queueing inventory WinRM operation (%s) on %s with timeout %.1fs",
+            description,
+            hostname,
+            timeout,
+        )
         try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(func, *args),
+            result = await remote_task_service.run_blocking(
+                hostname,
+                func,
+                hostname,
+                *args,
+                description=description,
+                category=RemoteTaskCategory.INVENTORY,
                 timeout=timeout,
             )
-            duration = time.perf_counter() - start
-            logger.debug(
-                "Inventory WinRM operation (%s) completed in %.2fs", description, duration
-            )
-            return result
-        except asyncio.TimeoutError as exc:
+        except RemoteTaskTimeoutError as exc:
             logger.error(
-                "Inventory WinRM operation (%s) exceeded timeout of %.1fs",
+                "Inventory WinRM operation (%s) on %s exceeded timeout of %.1fs",
                 description,
+                hostname,
                 timeout,
             )
             raise TimeoutError(
@@ -627,22 +776,37 @@ class InventoryService:
         except Exception:
             duration = time.perf_counter() - start
             logger.debug(
-                "Inventory WinRM operation (%s) raised after %.2fs",
+                "Inventory WinRM operation (%s) on %s raised after %.2fs",
                 description,
+                hostname,
                 duration,
                 exc_info=True,
             )
             raise
+        else:
+            duration = time.perf_counter() - start
+            logger.debug(
+                "Inventory WinRM operation (%s) on %s completed in %.2fs",
+                description,
+                hostname,
+                duration,
+            )
+            return result
 
-    def _test_host_connection(self, hostname: str):
-        """Test WinRM connection to a host."""
-        command = "echo 'connection test'"
-        stdout, stderr, exit_code = winrm_service.execute_ps_command(
-            hostname, command
+    def _collect_host_inventory(self, hostname: str) -> Dict[str, Any]:
+        """Execute the inventory collection script on the target host."""
+
+        script_path = str(
+            PureWindowsPath(settings.host_install_directory) / INVENTORY_SCRIPT_NAME
+        )
+        stdout, stderr, exit_code = winrm_service.execute_ps_script(
+            hostname,
+            script_path,
+            {"ComputerName": hostname},
         )
 
         logger.debug(
-            "Connection test on %s exit=%s stdout_len=%d stderr_len=%d",
+            "Inventory script on %s exit=%s stdout_len=%d stderr_len=%d",
             hostname,
             exit_code,
             len(stdout.encode("utf-8")),
@@ -651,68 +815,94 @@ class InventoryService:
 
         if exit_code != 0:
             preview = stderr.strip() or stdout.strip()
-            raise Exception(f"Connection test failed (exit={exit_code}): {preview}")
+            lowered_preview = preview.lower()
+            normalised_path = script_path.lower()
 
-    def _query_host_vms(self, hostname: str) -> List[VM]:
-        """Query VMs from a host using PowerShell."""
-        # PowerShell command to get VM information
-        command = textwrap.dedent(
-            """
-            $ErrorActionPreference = 'Stop'
-            $vms = Get-VM | Select-Object \
-                Name, \
-                @{N='State';E={$_.State.ToString()}}, \
-                ProcessorCount, \
-                @{N='MemoryGB';E={[math]::Round(($_.MemoryAssigned/1GB), 2)}}, \
-                @{N='CreationTime';E={
-                    if ($_.CreationTime) {
-                        $_.CreationTime.ToUniversalTime().ToString('o')
-                    } else {
-                        $null
-                    }
-                }}, \
-                @{N='Generation';E={$_.Generation}}, \
-                @{N='Version';E={$_.Version}}, \
-                @{N='OperatingSystem';E={
-                    if ($_.OperatingSystem) {
-                        $_.OperatingSystem.ToString()
-                    } else {
-                        $null
-                    }
-                }}
-            $vms | ConvertTo-Json -Depth 3
-            """
-        )
+            missing_tokens = (
+                "not recognized" in lowered_preview
+                or "cannot find" in lowered_preview
+                or "cannot be found" in lowered_preview
+            )
+            mentions_script = normalised_path in lowered_preview
 
-        stdout, stderr, exit_code = winrm_service.execute_ps_command(
-            hostname, command
-        )
+            if missing_tokens and mentions_script:
+                raise InventoryScriptMissingError(
+                    hostname,
+                    script_path,
+                    f"Inventory script missing on {hostname}: {preview}",
+                )
 
-        if exit_code != 0:
-            raise Exception(f"Failed to query VMs: {stderr}")
+            raise RuntimeError(
+                f"Inventory collection failed (exit={exit_code}): {preview}"
+            )
 
         raw_output = stdout.strip().lstrip("\ufeff")
         if not raw_output:
-            logger.info(f"Host {hostname} returned no VM data")
-            return []
+            raise RuntimeError("Inventory script returned no data")
 
         try:
-            data = json.loads(raw_output)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse VM data from {hostname}: {e}")
-            logger.debug(f"Raw VM output from {hostname}: {stdout}")
+            payload = json.loads(raw_output)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Failed to parse inventory payload from %s: %s",
+                hostname,
+                exc,
+            )
+            logger.debug("Raw inventory payload from %s: %s", hostname, stdout)
             raise
 
-        if isinstance(data, dict):
-            data = [data]
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"Unexpected inventory payload type from {hostname}: {type(payload).__name__}"
+            )
 
-        if not isinstance(data, list):
+        return payload
+
+    def _parse_inventory_snapshot(
+        self, hostname: str, payload: Dict[str, Any]
+    ) -> tuple[str, List[VM]]:
+        """Normalise the inventory payload from the host script."""
+
+        host_section = payload.get("Host")
+        if not isinstance(host_section, dict):
+            host_section = {}
+
+        warnings: List[str] = []
+        for source in (payload.get("Warnings"), host_section.get("Warnings")):
+            if isinstance(source, list):
+                warnings.extend(str(item) for item in source if item)
+
+        for warning in warnings:
+            logger.warning("Inventory warning on %s: %s", hostname, warning)
+
+        error_message = host_section.get("Error")
+        if error_message:
+            raise RuntimeError(f"Inventory script reported an error: {error_message}")
+
+        cluster_name = host_section.get("ClusterName") or "Default"
+        vm_payload = payload.get("VirtualMachines")
+
+        vms = self._deserialize_vms(hostname, vm_payload)
+        return cluster_name, vms
+
+    def _deserialize_vms(self, hostname: str, data: Any) -> List[VM]:
+        """Convert raw VM payloads into VM models."""
+
+        if data is None:
+            logger.info("Host %s returned no VM data", hostname)
+            return []
+
+        if isinstance(data, dict):
+            records = [data]
+        elif isinstance(data, list):
+            records = data
+        else:
             raise ValueError(
                 f"Unexpected VM payload type from {hostname}: {type(data).__name__}"
             )
 
         vms: List[VM] = []
-        for vm_data in data:
+        for vm_data in records:
             if not isinstance(vm_data, dict):
                 logger.warning(
                     "Skipping VM entry from %s because it is not a dictionary: %r",
@@ -721,70 +911,28 @@ class InventoryService:
                 )
                 continue
 
-            state_str = vm_data.get('State', 'Unknown')
+            state_str = vm_data.get("State", "Unknown")
             try:
                 state = VMState(state_str)
             except ValueError:
                 state = VMState.UNKNOWN
 
-            memory_value = vm_data.get('MemoryGB', 0.0)
-            memory_gb = self._coerce_float(memory_value, default=0.0)
-
-            cpu_value = vm_data.get('ProcessorCount', 0)
-            cpu_cores = self._coerce_int(cpu_value, default=0)
-
-            os_family = self._infer_os_family(vm_data.get('OperatingSystem'))
+            memory_gb = self._coerce_float(vm_data.get("MemoryGB", 0.0), default=0.0)
+            cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
+            os_family = self._infer_os_family(vm_data.get("OperatingSystem"))
 
             vm = VM(
-                name=vm_data.get('Name', ''),
+                name=vm_data.get("Name", ""),
                 host=hostname,
                 state=state,
                 cpu_cores=cpu_cores,
                 memory_gb=memory_gb,
                 os_family=os_family,
-                created_at=vm_data.get('CreationTime')
+                created_at=vm_data.get("CreationTime"),
             )
             vms.append(vm)
 
-        logger.info("Host %s returned %d VM(s)", hostname, len(vms))
         return vms
-
-    def _query_host_cluster(self, hostname: str) -> Optional[str]:
-        """Discover the cluster name for the given host."""
-        host_literal = self._ps_string_literal(hostname)
-        command = textwrap.dedent(
-            f"""
-            try {{
-                $node = Get-ClusterNode -Name {host_literal} -ErrorAction Stop
-                if ($node -and $node.Cluster) {{
-                    $node.Cluster.Name
-                }}
-            }} catch {{
-                ''
-            }}
-            """
-        )
-
-        stdout, stderr, exit_code = winrm_service.execute_ps_command(
-            hostname, command
-        )
-
-        if exit_code != 0:
-            logger.debug(
-                "Cluster query for host %s failed with exit code %s: %s",
-                hostname,
-                exit_code,
-                stderr,
-            )
-            return None
-
-        cluster_name = stdout.strip()
-        if not cluster_name:
-            logger.debug("Host %s is not part of a cluster", hostname)
-            return None
-
-        logger.debug("Host %s belongs to cluster '%s'", hostname, cluster_name)
-        return cluster_name
 
     def _rebuild_clusters(self, configured_hosts: List[str]) -> None:
         """Recalculate cluster information based on current hosts."""
@@ -810,14 +958,17 @@ class InventoryService:
                 name=cluster_name,
                 hosts=sorted_hosts,
                 connected_hosts=cluster_connected_counts.get(cluster_name, 0),
-                total_hosts=len(sorted_hosts)
+                total_hosts=len(sorted_hosts),
             )
 
         self.clusters = new_clusters
         if new_clusters:
             logger.info(
                 "Rebuilt cluster inventory: %s",
-                {name: cluster.connected_hosts for name, cluster in new_clusters.items()}
+                {
+                    name: cluster.connected_hosts
+                    for name, cluster in new_clusters.items()
+                },
             )
 
     def _active_placeholder_keys(self) -> Set[str]:
@@ -833,10 +984,15 @@ class InventoryService:
         for job_id in empty_jobs:
             self._job_vm_placeholders.pop(job_id, None)
 
-    def _clear_host_vms(self, hostname: str, preserve_placeholders: bool = False) -> None:
-        active_placeholder_keys = self._active_placeholder_keys() if preserve_placeholders else set()
+    def _clear_host_vms(
+        self, hostname: str, preserve_placeholders: bool = False
+    ) -> None:
+        active_placeholder_keys = (
+            self._active_placeholder_keys() if preserve_placeholders else set()
+        )
         keys_to_remove = [
-            key for key in list(self.vms.keys())
+            key
+            for key in list(self.vms.keys())
             if key.startswith(f"{hostname}:") and key not in active_placeholder_keys
         ]
         for key in keys_to_remove:
@@ -848,7 +1004,9 @@ class InventoryService:
                 return default
             return float(value)
         except (TypeError, ValueError):
-            logger.debug("Unable to coerce %r to float; using default %s", value, default)
+            logger.debug(
+                "Unable to coerce %r to float; using default %s", value, default
+            )
             return default
 
     def _coerce_int(self, value: Any, default: int = 0) -> int:
@@ -867,12 +1025,12 @@ class InventoryService:
         lowered = os_name.lower()
         if "windows" in lowered:
             return OSFamily.WINDOWS
-        if any(keyword in lowered for keyword in ("linux", "ubuntu", "debian", "centos", "rhel")):
+        if any(
+            keyword in lowered
+            for keyword in ("linux", "ubuntu", "debian", "centos", "rhel")
+        ):
             return OSFamily.LINUX
         return None
-
-    def _ps_string_literal(self, value: str) -> str:
-        return "'" + value.replace("'", "''") + "'"
 
     def track_job_vm(self, job_id: str, vm_name: str, host: str) -> None:
         """Track a VM being created by an in-progress job."""
@@ -881,11 +1039,7 @@ class InventoryService:
 
         key = f"{host}:{vm_name}"
         placeholder = VM(
-            name=vm_name,
-            host=host,
-            state=VMState.CREATING,
-            cpu_cores=0,
-            memory_gb=0.0
+            name=vm_name, host=host, state=VMState.CREATING, cpu_cores=0, memory_gb=0.0
         )
         self.vms[key] = placeholder
         self._job_vm_placeholders.setdefault(job_id, set()).add(key)
@@ -936,6 +1090,35 @@ class InventoryService:
 
     def initial_refresh_succeeded(self) -> bool:
         return self._initial_refresh_succeeded
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Return diagnostic information about inventory refresh behaviour."""
+
+        bootstrap_running = (
+            self._bootstrap_task is not None and not self._bootstrap_task.done()
+        )
+        refresh_loop_running = (
+            self._refresh_task is not None and not self._refresh_task.done()
+        )
+        initial_refresh_running = (
+            self._initial_refresh_task is not None
+            and not self._initial_refresh_task.done()
+        )
+
+        return {
+            "hosts_tracked": len(self.hosts),
+            "vms_tracked": len(self.vms),
+            "clusters_tracked": len(self.clusters),
+            "last_refresh": self.last_refresh,
+            "refresh_in_progress": self._refresh_lock.locked(),
+            "bootstrap_running": bootstrap_running,
+            "refresh_loop_running": refresh_loop_running,
+            "initial_refresh_running": initial_refresh_running,
+            "initial_refresh_completed": self._initial_refresh_event.is_set(),
+            "initial_refresh_succeeded": self._initial_refresh_succeeded,
+            "refresh_overrun": self._refresh_overrun_active,
+            "host_refresh_timestamps": dict(self._host_last_refresh),
+        }
 
 
 # Global inventory service instance

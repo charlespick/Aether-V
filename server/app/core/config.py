@@ -1,8 +1,18 @@
 """Configuration management using Pydantic settings."""
+
+from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
 from pydantic import AnyHttpUrl
 from pydantic_settings import BaseSettings
+
+
+# Agent artifact locations are baked into the container at build time and do not
+# need to be customised at runtime. They are provided here as module constants so
+# other modules can reference the paths without duplicating literals.
+AGENT_ARTIFACTS_DIR = Path("/app/agent")
+AGENT_HTTP_MOUNT_PATH = "/agent"
+AGENT_VERSION_PATH = AGENT_ARTIFACTS_DIR / "version"
 
 
 class Settings(BaseSettings):
@@ -58,7 +68,23 @@ class Settings(BaseSettings):
     inventory_refresh_interval: int = 60  # seconds
 
     # Job execution settings
-    job_worker_concurrency: int = 3  # Maximum concurrent provisioning jobs
+    job_worker_concurrency: int = 6  # Maximum concurrent provisioning jobs
+    job_long_timeout_seconds: float = 900.0  # 15 minutes for provisioning/deletion
+    job_short_timeout_seconds: float = 60.0  # 1 minute for quick power actions
+
+    # Remote task execution settings
+    remote_task_min_concurrency: int = 6
+    remote_task_max_concurrency: int = 24
+    remote_task_scale_up_backlog: int = 2
+    remote_task_idle_seconds: float = 30.0
+    remote_task_scale_up_duration_threshold: float = 30.0
+    remote_task_job_concurrency: int = 6
+    remote_task_dynamic_ceiling: int = 48
+    remote_task_resource_scale_interval_seconds: float = 15.0
+    remote_task_resource_observation_window_seconds: float = 45.0
+    remote_task_resource_cpu_threshold: float = 60.0
+    remote_task_resource_memory_threshold: float = 70.0
+    remote_task_resource_scale_increment: int = 2
 
     # WebSocket settings
     # WebSocket connection timeout in seconds (30 minutes)
@@ -72,11 +98,12 @@ class Settings(BaseSettings):
 
     # Host deployment settings
     host_install_directory: str = "C:\\Program Files\\Aether-V"
-    agent_startup_concurrency: int = 4  # Parallel host deployments during startup
+    host_deployment_timeout: float = 60.0  # Seconds allowed for host deployment WinRM calls
+    agent_startup_concurrency: int = 3  # Parallel host deployments during startup
+    agent_startup_ingress_timeout: float = 120.0  # Seconds to wait for ingress readiness
+    agent_startup_ingress_poll_interval: float = 3.0  # Seconds between readiness probes
 
-    # Agent artifact settings
-    agent_artifacts_path: str = "/app/agent"
-    agent_http_mount_path: str = "/agent"
+    # Agent artifact download settings
     agent_download_base_url: Optional[AnyHttpUrl] = None
     agent_download_max_attempts: int = 5
     agent_download_retry_interval: float = 2.0  # seconds between retries
@@ -92,7 +119,7 @@ class Settings(BaseSettings):
     @property
     def version_file_path(self) -> str:
         """Get path to version file in container."""
-        return f"{self.agent_artifacts_path}/version"
+        return str(AGENT_VERSION_PATH)
 
     class Config:
         env_file = ".env"

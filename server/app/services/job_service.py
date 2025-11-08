@@ -1,4 +1,5 @@
 """Schema-driven job submission and execution service."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,9 +15,16 @@ from xml.etree import ElementTree
 
 from ..core.config import settings
 from ..core.job_schema import redact_job_parameters
-from ..core.models import Job, JobStatus, JobSubmission, VMDeleteRequest, NotificationLevel
+from ..core.models import (
+    Job,
+    JobStatus,
+    JobSubmission,
+    VMDeleteRequest,
+    NotificationLevel,
+)
 from .host_deployment_service import host_deployment_service
 from .notification_service import notification_service
+from .remote_task_service import remote_task_service, RemoteTaskCategory
 from .websocket_service import websocket_manager
 from .winrm_service import winrm_service
 from .inventory_service import inventory_service
@@ -46,7 +54,9 @@ class _PowerShellStreamDecoder:
         if not chunk:
             return []
 
-        sanitized = chunk.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
+        sanitized = (
+            chunk.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
+        )
         if not sanitized:
             return []
 
@@ -90,7 +100,9 @@ class _PowerShellStreamDecoder:
                 break
 
             if combined_index < len(tail):
-                sentinel_start_in_plain = len(self._plain_buffer) - len(tail) + combined_index
+                sentinel_start_in_plain = (
+                    len(self._plain_buffer) - len(tail) + combined_index
+                )
                 sentinel_plain_part = self._plain_buffer[sentinel_start_in_plain:]
                 self._plain_buffer = self._plain_buffer[:sentinel_start_in_plain]
                 lines.extend(self._drain_plain_lines())
@@ -161,6 +173,22 @@ class JobService:
         self._started = False
         self._stream_decoders: Dict[Tuple[str, str], _PowerShellStreamDecoder] = {}
 
+    def _get_job_runtime_profile(
+        self, job_type: str
+    ) -> Tuple[RemoteTaskCategory, float]:
+        """Return the remote execution category and timeout for a job type."""
+
+        if job_type in {"provision_vm", "delete_vm"}:
+            return (
+                RemoteTaskCategory.JOB,
+                float(settings.job_long_timeout_seconds),
+            )
+
+        return (
+            RemoteTaskCategory.GENERAL,
+            float(settings.job_short_timeout_seconds),
+        )
+
     def _prepare_job_response(self, job: Job) -> Job:
         """Return a deep-copied job with sensitive data redacted."""
 
@@ -180,7 +208,9 @@ class JobService:
 
         self._queue = asyncio.Queue()
         concurrency = max(1, settings.job_worker_concurrency)
-        self._worker_tasks = [asyncio.create_task(self._worker()) for _ in range(concurrency)]
+        self._worker_tasks = [
+            asyncio.create_task(self._worker()) for _ in range(concurrency)
+        ]
         self._started = True
         logger.info(
             "Job service initialised (schema-driven queue, concurrency=%d)", concurrency
@@ -207,7 +237,10 @@ class JobService:
         logger.info("Job service stopped")
 
     async def submit_provisioning_job(
-        self, _submission: JobSubmission, payload: Dict[str, Any], target_host: Optional[str]
+        self,
+        _submission: JobSubmission,
+        payload: Dict[str, Any],
+        target_host: Optional[str],
     ) -> Job:
         """Persist and enqueue a provisioning job."""
 
@@ -233,7 +266,11 @@ class JobService:
         await self._broadcast_job_status(job)
 
         await self._queue.put(job_id)
-        logger.info("Queued provisioning job %s for host %s", job_id, target_host or "<unspecified>")
+        logger.info(
+            "Queued provisioning job %s for host %s",
+            job_id,
+            target_host or "<unspecified>",
+        )
         return self._prepare_job_response(job)
 
     async def submit_delete_job(self, request: VMDeleteRequest) -> Job:
@@ -290,7 +327,9 @@ class JobService:
             logger.warning("Received unknown job id %s", job_id)
             return
 
-        await self._update_job(job_id, status=JobStatus.RUNNING, started_at=datetime.utcnow())
+        await self._update_job(
+            job_id, status=JobStatus.RUNNING, started_at=datetime.utcnow()
+        )
 
         try:
             if job.job_type == "provision_vm":
@@ -340,11 +379,23 @@ class JobService:
 
         def run_command() -> int:
             try:
-                return winrm_service.stream_ps_command(target_host, command, publish_chunk)
+                return winrm_service.stream_ps_command(
+                    target_host, command, publish_chunk
+                )
             finally:
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
-        command_future = loop.run_in_executor(None, run_command)
+        category, timeout = self._get_job_runtime_profile(job.job_type)
+
+        command_task = asyncio.create_task(
+            remote_task_service.run_blocking(
+                target_host,
+                run_command,
+                description=f"provisioning job {job.job_id}",
+                category=category,
+                timeout=timeout,
+            )
+        )
 
         try:
             while True:
@@ -355,11 +406,13 @@ class JobService:
                 await self._handle_stream_chunk(job.job_id, stream_type, payload)
         finally:
             await self._finalize_job_streams(job.job_id)
-        exit_code = await command_future
+        exit_code = await command_task
         if exit_code != 0:
             raise RuntimeError(f"Provisioning script exited with code {exit_code}")
 
-    async def _handle_stream_chunk(self, job_id: str, stream: str, payload: str) -> None:
+    async def _handle_stream_chunk(
+        self, job_id: str, stream: str, payload: str
+    ) -> None:
         if not payload:
             return
 
@@ -471,11 +524,15 @@ class JobService:
         vm_name = self._extract_vm_name(job)
         job_label = self._job_type_label(job)
         target_label = f'"{vm_name}"' if vm_name else job.job_id
-        host_phrase = f"host {job.target_host}" if job.target_host else "an unspecified host"
+        host_phrase = (
+            f"host {job.target_host}" if job.target_host else "an unspecified host"
+        )
 
         if job.status == JobStatus.PENDING:
             title = f"{job_label} queued"
-            message = f"{job_label} request for {target_label} queued for {host_phrase}."
+            message = (
+                f"{job_label} request for {target_label} queued for {host_phrase}."
+            )
             level = NotificationLevel.INFO
         elif job.status == JobStatus.RUNNING:
             title = f"{job_label} running"
@@ -526,7 +583,9 @@ class JobService:
             return
         await self._broadcast_job_event(job_id, "output", {"lines": lines})
 
-    async def _broadcast_job_event(self, job_id: str, action: str, data: Dict[str, Any]) -> None:
+    async def _broadcast_job_event(
+        self, job_id: str, action: str, data: Dict[str, Any]
+    ) -> None:
         message = {"type": "job", "action": action, "job_id": job_id, "data": data}
         try:
             await websocket_manager.broadcast(message, topic=f"jobs:{job_id}")
@@ -558,7 +617,10 @@ class JobService:
     def _build_master_invocation_command(self, payload: str) -> str:
         payload_bytes = payload.encode("utf-8")
         encoded = base64.b64encode(payload_bytes).decode("ascii")
-        script_path = PureWindowsPath(settings.host_install_directory) / "Invoke-ProvisioningJob.ps1"
+        script_path = (
+            PureWindowsPath(settings.host_install_directory)
+            / "Invoke-ProvisioningJob.ps1"
+        )
         script_literal = self._ps_literal(str(script_path))
         return (
             "$ErrorActionPreference = 'Stop'; "
@@ -586,7 +648,9 @@ class JobService:
         await self._after_job_update(prepared, previous_status, changes)
         return prepared
 
-    async def _append_job_output(self, job_id: str, *messages: Optional[str]) -> List[str]:
+    async def _append_job_output(
+        self, job_id: str, *messages: Optional[str]
+    ) -> List[str]:
         lines: List[str] = []
         for message in messages:
             if not message:
@@ -606,6 +670,34 @@ class JobService:
 
         await self._broadcast_job_output(job_id, lines)
         return lines
+
+    async def get_metrics(self) -> Dict[str, Any]:
+        """Return diagnostic information about the job service."""
+
+        queue_depth = self._queue.qsize() if self._queue else 0
+        async with self._lock:
+            jobs_snapshot = list(self.jobs.values())
+
+        status_counts = {
+            JobStatus.PENDING: 0,
+            JobStatus.RUNNING: 0,
+            JobStatus.COMPLETED: 0,
+            JobStatus.FAILED: 0,
+        }
+        for job in jobs_snapshot:
+            status_counts[job.status] = status_counts.get(job.status, 0) + 1
+
+        return {
+            "started": self._started,
+            "queue_depth": queue_depth,
+            "worker_count": len(self._worker_tasks),
+            "configured_concurrency": max(1, settings.job_worker_concurrency),
+            "pending_jobs": status_counts.get(JobStatus.PENDING, 0),
+            "running_jobs": status_counts.get(JobStatus.RUNNING, 0),
+            "completed_jobs": status_counts.get(JobStatus.COMPLETED, 0),
+            "failed_jobs": status_counts.get(JobStatus.FAILED, 0),
+            "total_tracked_jobs": len(jobs_snapshot),
+        }
 
 
 default_job_service = JobService()

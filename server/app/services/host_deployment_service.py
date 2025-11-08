@@ -1,15 +1,23 @@
 """Service for deploying scripts and ISOs to Hyper-V hosts."""
+
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
-from ..core.config import settings
+import httpx
+
+from ..core.config import settings, AGENT_ARTIFACTS_DIR
 from ..core.models import NotificationLevel
 from .notification_service import notification_service
+from .remote_task_service import (
+    remote_task_service,
+    RemoteTaskCategory,
+    RemoteTaskTimeoutError,
+)
 from .winrm_service import (
     WinRMAuthenticationError,
     WinRMTransportError,
@@ -17,6 +25,7 @@ from .winrm_service import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class StartupDeploymentProgress:
@@ -72,6 +81,8 @@ class HostDeploymentService:
         self._startup_progress = StartupDeploymentProgress()
         self._startup_lock = asyncio.Lock()
         self._progress_lock = asyncio.Lock()
+        self._ingress_ready = False
+        self._ingress_lock = asyncio.Lock()
 
     def _initialize_agent_download_base_url(self) -> bool:
         """Resolve and cache the agent download base URL if configured."""
@@ -84,7 +95,10 @@ class HostDeploymentService:
             return False
 
         self._agent_download_base_url = base_url
-        logger.info("Host deployment service configured with agent download endpoint %s", base_url)
+        logger.info(
+            "Host deployment service configured with agent download endpoint %s",
+            base_url,
+        )
         return True
 
     @property
@@ -92,29 +106,29 @@ class HostDeploymentService:
         """Return True when host deployments are permitted."""
 
         return self._deployment_enabled
-    
+
     def _load_container_version(self):
         """Load version from container artifacts."""
         version_file = settings.version_file_path
         try:
-            with open(version_file, 'r') as f:
+            with open(version_file, "r") as f:
                 self._container_version = f.read().strip()
             logger.info(f"Container version: {self._container_version}")
         except Exception as e:
             logger.error(f"Failed to load container version: {e}")
             self._container_version = "0.0.0"
-    
+
     def get_container_version(self) -> str:
         """Get the container version."""
         return self._container_version
-    
+
     async def ensure_host_setup(self, hostname: str) -> bool:
         """
         Ensure host has correct scripts and ISOs deployed.
-        
+
         Args:
             hostname: Target Hyper-V host
-            
+
         Returns:
             True if setup successful, False otherwise
         """
@@ -123,8 +137,8 @@ class HostDeploymentService:
         try:
             # Check host version in a worker thread because it performs network I/O
             host_version = await self._run_winrm_call(
-                self._get_host_version,
                 hostname,
+                self._get_host_version,
                 description=f"version check for {hostname}",
             )
             logger.info(f"Host {hostname} version: {host_version}")
@@ -134,8 +148,8 @@ class HostDeploymentService:
                     f"Host {hostname} needs update from {host_version} to {self._container_version}"
                 )
                 return await self._run_winrm_call(
-                    self._deploy_to_host,
                     hostname,
+                    self._deploy_to_host,
                     description=f"deployment for {hostname}",
                 )
 
@@ -145,29 +159,40 @@ class HostDeploymentService:
         except Exception as e:
             logger.error(f"Failed to ensure host setup for {hostname}: {e}")
             return False
-    
+
     async def _run_winrm_call(
         self,
+        hostname: str,
         func: Callable[..., T],
         *args: Any,
         description: str,
     ) -> T:
         """Execute a potentially blocking WinRM call with a timeout."""
 
-        timeout = max(1.0, float(settings.winrm_operation_timeout))
+        timeout = max(1.0, float(settings.host_deployment_timeout))
         start = time.perf_counter()
-        logger.debug("Starting WinRM operation (%s) with timeout %.1fs", description, timeout)
+        logger.debug(
+            "Queueing WinRM operation (%s) on %s with timeout %.1fs",
+            description,
+            hostname,
+            timeout,
+        )
         try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(func, *args),
+            result = await remote_task_service.run_blocking(
+                hostname,
+                func,
+                hostname,
+                *args,
+                description=description,
+                category=RemoteTaskCategory.DEPLOYMENT,
                 timeout=timeout,
             )
-            duration = time.perf_counter() - start
-            logger.debug("WinRM operation (%s) completed in %.2fs", description, duration)
-            return result
-        except asyncio.TimeoutError as exc:
+        except RemoteTaskTimeoutError as exc:
             logger.error(
-                "WinRM operation (%s) exceeded timeout of %.1fs", description, timeout
+                "WinRM operation (%s) on %s exceeded timeout of %.1fs",
+                description,
+                hostname,
+                timeout,
             )
             raise TimeoutError(
                 f"Timed out after {timeout:.1f}s during {description}"
@@ -175,25 +200,42 @@ class HostDeploymentService:
         except Exception:
             duration = time.perf_counter() - start
             logger.debug(
-                "WinRM operation (%s) raised after %.2fs", description, duration, exc_info=True
+                "WinRM operation (%s) on %s raised after %.2fs",
+                description,
+                hostname,
+                duration,
+                exc_info=True,
             )
             raise
+        else:
+            duration = time.perf_counter() - start
+            logger.debug(
+                "WinRM operation (%s) on %s completed in %.2fs",
+                description,
+                hostname,
+                duration,
+            )
+            return result
 
     def _get_host_version(self, hostname: str) -> str:
         """Get the version currently deployed on a host."""
         version_file_path = f"{settings.host_install_directory}\\version"
-        
-        command = f"Get-Content -Path '{version_file_path}' -ErrorAction SilentlyContinue"
-        
+
+        command = (
+            f"Get-Content -Path '{version_file_path}' -ErrorAction SilentlyContinue"
+        )
+
         try:
-            stdout, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
+            stdout, stderr, exit_code = winrm_service.execute_ps_command(
+                hostname, command
+            )
 
             logger.debug(
                 "Host version command on %s returned exit=%s stdout_len=%d stderr_len=%d",
                 hostname,
                 exit_code,
-                len(stdout.encode('utf-8')),
-                len(stderr.encode('utf-8')),
+                len(stdout.encode("utf-8")),
+                len(stderr.encode("utf-8")),
             )
 
             if exit_code == 0 and stdout.strip():
@@ -225,23 +267,23 @@ class HostDeploymentService:
         except Exception as e:
             logger.warning(f"Failed to get host version for {hostname}: {e}")
             return "0.0.0"
-    
+
     def _needs_update(self, host_version: str) -> bool:
         """Check if host needs to be updated."""
         if host_version == "0.0.0":
             return True
-        
+
         try:
             # Parse versions as semantic version tuples
-            host_parts = [int(x) for x in host_version.split('.')]
-            container_parts = [int(x) for x in self._container_version.split('.')]
-            
+            host_parts = [int(x) for x in host_version.split(".")]
+            container_parts = [int(x) for x in self._container_version.split(".")]
+
             # Compare versions
             return container_parts > host_parts
         except Exception as e:
             logger.warning(f"Version comparison failed: {e}, forcing update")
             return True
-    
+
     def _deploy_to_host(self, hostname: str) -> bool:
         """Deploy scripts and ISOs to a host."""
         logger.info(f"Starting deployment to {hostname}")
@@ -288,7 +330,9 @@ class HostDeploymentService:
             if not self._deploy_version_file(hostname):
                 return False
 
-            if not self._verify_expected_artifacts_present(hostname, expected_artifacts):
+            if not self._verify_expected_artifacts_present(
+                hostname, expected_artifacts
+            ):
                 return False
 
             logger.info(f"Deployment to {hostname} completed successfully")
@@ -297,30 +341,32 @@ class HostDeploymentService:
         except Exception as e:
             logger.error(f"Deployment to {hostname} failed: {e}")
             return False
-    
+
     def _ensure_install_directory(self, hostname: str) -> bool:
         """Ensure the installation directory exists on the host."""
         install_dir = settings.host_install_directory
-        
-        command = f"New-Item -ItemType Directory -Path '{install_dir}' -Force | Out-Null"
-        
+
+        command = (
+            f"New-Item -ItemType Directory -Path '{install_dir}' -Force | Out-Null"
+        )
+
         try:
             _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
-            
+
             if exit_code != 0:
                 logger.error(f"Failed to create directory on {hostname}: {stderr}")
                 return False
-            
+
             return True
         except Exception as e:
             logger.error(f"Failed to ensure install directory on {hostname}: {e}")
             return False
-    
+
     def _deploy_scripts(self, hostname: str, script_files: Sequence[Path]) -> bool:
         """Deploy PowerShell scripts to host."""
         logger.info(f"Deploying scripts to {hostname}")
 
-        script_dir = Path(settings.agent_artifacts_path)
+        script_dir = AGENT_ARTIFACTS_DIR
 
         try:
             if not script_files:
@@ -332,24 +378,28 @@ class HostDeploymentService:
             for script_file in script_files:
                 remote_path = self._build_remote_path(script_file.name)
 
-                if not self._download_file_to_host(hostname, script_file.name, remote_path):
-                    logger.error(f"Failed to deploy script {script_file.name} to {hostname}")
+                if not self._download_file_to_host(
+                    hostname, script_file.name, remote_path
+                ):
+                    logger.error(
+                        f"Failed to deploy script {script_file.name} to {hostname}"
+                    )
                     return False
 
                 logger.debug(f"Deployed {script_file.name} to {hostname}")
 
             logger.info(f"All scripts deployed to {hostname}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to deploy scripts to {hostname}: {e}")
             return False
-    
+
     def _deploy_isos(self, hostname: str, iso_files: Sequence[Path]) -> bool:
         """Deploy ISO files to host."""
         logger.info(f"Deploying ISOs to {hostname}")
 
-        iso_dir = Path(settings.agent_artifacts_path)
+        iso_dir = AGENT_ARTIFACTS_DIR
 
         try:
             if not iso_files:
@@ -361,7 +411,9 @@ class HostDeploymentService:
             for iso_file in iso_files:
                 remote_path = self._build_remote_path(iso_file.name)
 
-                if not self._download_file_to_host(hostname, iso_file.name, remote_path):
+                if not self._download_file_to_host(
+                    hostname, iso_file.name, remote_path
+                ):
                     logger.error(f"Failed to deploy ISO {iso_file.name} to {hostname}")
                     return False
 
@@ -369,11 +421,11 @@ class HostDeploymentService:
 
             logger.info(f"All ISOs deployed to {hostname}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to deploy ISOs to {hostname}: {e}")
             return False
-    
+
     def _deploy_version_file(self, hostname: str) -> bool:
         """Deploy version file to host."""
         logger.info(f"Deploying version file to {hostname}")
@@ -394,24 +446,24 @@ class HostDeploymentService:
     def _collect_script_files(self) -> List[Path]:
         """Return all PowerShell scripts available for deployment."""
 
-        artifact_dir = Path(settings.agent_artifacts_path)
+        artifact_dir = AGENT_ARTIFACTS_DIR
 
         if not artifact_dir.exists():
             logger.error(f"Agent artifacts directory does not exist: {artifact_dir}")
             return []
 
-        return sorted(path for path in artifact_dir.glob('*.ps1') if path.is_file())
+        return sorted(path for path in artifact_dir.glob("*.ps1") if path.is_file())
 
     def _collect_iso_files(self) -> List[Path]:
         """Return all ISO files available for deployment."""
 
-        artifact_dir = Path(settings.agent_artifacts_path)
+        artifact_dir = AGENT_ARTIFACTS_DIR
 
         if not artifact_dir.exists():
             logger.error(f"Agent artifacts directory does not exist: {artifact_dir}")
             return []
 
-        return sorted(path for path in artifact_dir.glob('*.iso') if path.is_file())
+        return sorted(path for path in artifact_dir.glob("*.iso") if path.is_file())
 
     def _clear_host_install_directory(self, hostname: str) -> bool:
         """Remove all files from the host installation directory."""
@@ -452,7 +504,9 @@ class HostDeploymentService:
         _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
 
         if exit_code != 0:
-            logger.error(f"Install directory verification failed on {hostname}: {stderr}")
+            logger.error(
+                f"Install directory verification failed on {hostname}: {stderr}"
+            )
             return False
 
         logger.info(f"Verified {install_dir} is empty on {hostname}")
@@ -511,7 +565,9 @@ class HostDeploymentService:
         """Construct the remote path inside the host install directory."""
         return str(PureWindowsPath(settings.host_install_directory) / filename)
 
-    def _download_file_to_host(self, hostname: str, artifact_name: str, remote_path: str) -> bool:
+    def _download_file_to_host(
+        self, hostname: str, artifact_name: str, remote_path: str
+    ) -> bool:
         """Download an artifact from the web server to the host using HTTP."""
         if not self._deployment_enabled:
             logger.error(
@@ -529,7 +585,9 @@ class HostDeploymentService:
             "Invoke-WebRequest -Uri $downloadUrl -OutFile $destinationPath -UseBasicParsing"
         )
 
-        logger.info(f"Downloading {artifact_name} to {hostname}:{remote_path} from {download_url}")
+        logger.info(
+            f"Downloading {artifact_name} to {hostname}:{remote_path} from {download_url}"
+        )
 
         max_attempts = max(1, settings.agent_download_max_attempts)
         retry_interval = max(0.0, settings.agent_download_retry_interval)
@@ -630,7 +688,9 @@ class HostDeploymentService:
                 return
 
             if not hostnames:
-                logger.info("No Hyper-V hosts configured; skipping startup agent deployment")
+                logger.info(
+                    "No Hyper-V hosts configured; skipping startup agent deployment"
+                )
                 mark_status = "skipped"
                 should_return = True
             elif not self._deployment_enabled:
@@ -691,6 +751,7 @@ class HostDeploymentService:
             await self._startup_event.wait()
 
     async def _run_startup_deployment(self, hostnames: List[str]) -> None:
+        await self._wait_for_agent_endpoint_ready()
         logger.info(
             "Deploying provisioning agents to %d host(s) in background", len(hostnames)
         )
@@ -714,7 +775,9 @@ class HostDeploymentService:
         else:
             async with self._progress_lock:
                 progress = self._startup_progress
-                progress.status = "successful" if progress.failed_hosts == 0 else "failed"
+                progress.status = (
+                    "successful" if progress.failed_hosts == 0 else "failed"
+                )
                 progress.provisioning_available = True
                 snapshot = progress.copy()
         finally:
@@ -736,6 +799,97 @@ class HostDeploymentService:
 
         async with self._startup_lock:
             self._startup_task = None
+
+    async def _wait_for_agent_endpoint_ready(self) -> None:
+        """Block until ingress routes to this service or a timeout elapses."""
+
+        if self._ingress_ready:
+            return
+
+        if not self._agent_download_base_url:
+            self._ingress_ready = True
+            return
+
+        async with self._ingress_lock:
+            if self._ingress_ready:
+                return
+
+            health_url = self._build_health_check_url()
+            if not health_url:
+                self._ingress_ready = True
+                return
+
+            timeout = max(1.0, float(settings.agent_startup_ingress_timeout))
+            interval = max(0.5, float(settings.agent_startup_ingress_poll_interval))
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            attempt = 0
+            last_error: Optional[str] = None
+
+            logger.info(
+                "Waiting up to %.1fs for ingress routing before deploying host scripts",
+                timeout,
+            )
+
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                while True:
+                    attempt += 1
+                    try:
+                        response = await client.get(health_url, timeout=5.0)
+                    except httpx.HTTPError as exc:
+                        last_error = str(exc)
+                        logger.debug(
+                            "Ingress probe attempt %d failed for %s: %s",
+                            attempt,
+                            health_url,
+                            exc,
+                        )
+                    else:
+                        status = response.status_code
+                        if status != 503 and status < 500:
+                            self._ingress_ready = True
+                            logger.info(
+                                "Ingress readiness confirmed after %d attempt(s) via %s (status=%d)",
+                                attempt,
+                                health_url,
+                                status,
+                            )
+                            return
+
+                        last_error = f"status {status}"
+                        logger.debug(
+                            "Ingress probe attempt %d received HTTP %d from %s",
+                            attempt,
+                            status,
+                            health_url,
+                        )
+
+                    if loop.time() >= deadline:
+                        logger.warning(
+                            "Timed out after %.1fs waiting for ingress readiness; proceeding with host deployment (last error: %s)",
+                            timeout,
+                            last_error or "unknown",
+                        )
+                        self._ingress_ready = True
+                        return
+
+                    await asyncio.sleep(interval)
+
+    def _build_health_check_url(self) -> Optional[str]:
+        """Derive the service health check URL from the agent download base."""
+
+        if not self._agent_download_base_url:
+            return None
+
+        parts = urlsplit(self._agent_download_base_url)
+        if not parts.scheme or not parts.netloc:
+            logger.warning(
+                "Cannot derive health check URL from agent download base %s", self._agent_download_base_url
+            )
+            return None
+
+        root = urlunsplit((parts.scheme, parts.netloc, "/", "", ""))
+        return f"{root.rstrip('/')}/healthz"
 
     async def _deploy_host_startup(
         self, hostname: str, semaphore: asyncio.Semaphore
@@ -768,7 +922,9 @@ class HostDeploymentService:
 
         self._publish_startup_notification(snapshot)
 
-    def _publish_startup_notification(self, progress: StartupDeploymentProgress) -> None:
+    def _publish_startup_notification(
+        self, progress: StartupDeploymentProgress
+    ) -> None:
         status = progress.status
 
         if status == "running":
@@ -816,6 +972,26 @@ class HostDeploymentService:
             provisioning_available=provisioning_available,
             metadata=metadata,
         )
+
+    async def get_metrics(self) -> Dict[str, Any]:
+        """Return diagnostic information about host deployment tasks."""
+
+        async with self._progress_lock:
+            progress_snapshot = self._startup_progress.copy()
+
+        async with self._ingress_lock:
+            ingress_ready = self._ingress_ready
+
+        startup_task_running = (
+            self._startup_task is not None and not self._startup_task.done()
+        )
+
+        return {
+            "enabled": self._deployment_enabled,
+            "ingress_ready": ingress_ready,
+            "startup_task_running": startup_task_running,
+            "startup": progress_snapshot.as_dict(),
+        }
 
 
 # Global host deployment service instance

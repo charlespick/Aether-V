@@ -138,12 +138,22 @@ class BaseOverlay {
 
 // Settings Overlay
 class SettingsOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.refreshDiagnosticsHandler = null;
+        this.diagnosticsData = null;
+    }
+
     getTitle() {
         return 'Settings';
     }
 
     async render() {
-        const aboutData = await this.fetchAboutInfo();
+        const [aboutData, diagnostics] = await Promise.all([
+            this.fetchAboutInfo(),
+            this.fetchDiagnostics(),
+        ]);
+        this.diagnosticsData = diagnostics;
         const build = aboutData?.build || {};
         const productName = this.escapeHtml(aboutData?.name || 'Aether-V');
         const description = this.escapeHtml(
@@ -221,6 +231,18 @@ class SettingsOverlay extends BaseOverlay {
             </div>
 
             <div class="settings-section">
+                <div class="settings-section-header">
+                    <h3>Service Diagnostics</h3>
+                    <button class="btn btn-tertiary" id="refresh-diagnostics" type="button">
+                        Refresh
+                    </button>
+                </div>
+                <div class="diagnostics-content" id="diagnostics-content">
+                    ${this.renderDiagnosticsMarkup(diagnostics)}
+                </div>
+            </div>
+
+            <div class="settings-section">
                 <h3>About</h3>
                 <div class="about-info">
                     <p><strong>${productName}</strong></p>
@@ -245,9 +267,15 @@ class SettingsOverlay extends BaseOverlay {
 
         const refreshInterval = localStorage.getItem('setting.refreshInterval') || '30';
         document.getElementById('refresh-interval').value = refreshInterval;
-        
+
         const themeMode = localStorage.getItem('setting.themeMode') || 'system';
         document.getElementById('theme-mode').value = themeMode;
+
+        const refreshButton = document.getElementById('refresh-diagnostics');
+        if (refreshButton) {
+            this.refreshDiagnosticsHandler = () => this.refreshDiagnostics();
+            refreshButton.addEventListener('click', this.refreshDiagnosticsHandler);
+        }
     }
 
     save() {
@@ -272,6 +300,16 @@ class SettingsOverlay extends BaseOverlay {
         loadInventory();
     }
 
+    cleanup() {
+        if (this.refreshDiagnosticsHandler) {
+            const refreshButton = document.getElementById('refresh-diagnostics');
+            if (refreshButton) {
+                refreshButton.removeEventListener('click', this.refreshDiagnosticsHandler);
+            }
+            this.refreshDiagnosticsHandler = null;
+        }
+    }
+
     async fetchAboutInfo() {
         const fallbackBuild = window?.appConfig?.build;
         try {
@@ -291,6 +329,20 @@ class SettingsOverlay extends BaseOverlay {
         return null;
     }
 
+    async fetchDiagnostics() {
+        try {
+            const response = await fetch('/api/v1/diagnostics/services', {
+                credentials: 'same-origin',
+            });
+            if (response.ok) {
+                return await response.json();
+            }
+        } catch (error) {
+            console.error('Failed to load diagnostics information', error);
+        }
+        return null;
+    }
+
     formatBuildTime(value) {
         if (!value) return null;
         const parsed = new Date(value);
@@ -298,6 +350,34 @@ class SettingsOverlay extends BaseOverlay {
             return value;
         }
         return parsed.toUTCString();
+    }
+
+    formatDuration(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number < 0) {
+            return 'n/a';
+        }
+        if (number >= 3600) {
+            const hours = number / 3600;
+            return `${hours.toFixed(1)} hr`;
+        }
+        if (number >= 60) {
+            const minutes = number / 60;
+            return `${minutes.toFixed(1)} min`;
+        }
+        return `${number.toFixed(2)} s`;
+    }
+
+    formatBoolean(value) {
+        return value ? 'Yes' : 'No';
+    }
+
+    formatPercent(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) {
+            return 'n/a';
+        }
+        return `${number.toFixed(1)}%`;
     }
 
     formatCommit(commit) {
@@ -313,6 +393,196 @@ class SettingsOverlay extends BaseOverlay {
             return `${build.git_ref} (${build.git_state})`;
         }
         return build.git_ref;
+    }
+
+    formatTimestamp(value) {
+        if (!value) {
+            return 'n/a';
+        }
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) {
+            return String(value);
+        }
+        return parsed.toLocaleString();
+    }
+
+    renderDiagnosticsMarkup(data) {
+        if (!data) {
+            return '<p class="empty">Diagnostics unavailable.</p>';
+        }
+
+        const remote = data.remote_tasks || {};
+        const fast = remote.fast_pool || {};
+        const jobPool = remote.job_pool || {};
+        const jobs = data.jobs || {};
+        const inventory = data.inventory || {};
+        const hostDeployment = data.host_deployment || {};
+        const cpuPercent = this.formatPercent(remote.cpu_percent);
+        const memoryPercent = this.formatPercent(remote.memory_percent);
+        const maxedOutFor = this.formatDuration(remote.maxed_out_for_seconds);
+        const currentMaxWorkers = remote.current_max_workers ?? fast.max_workers ?? 'n/a';
+        const configuredFastLimit = remote.configured_max_workers ?? 'n/a';
+        const dynamicCeiling = remote.dynamic_ceiling ?? 'n/a';
+        const fastWorkerDisplay =
+            `${this.escapeHtml(String(fast.current_workers ?? 'n/a'))} / ` +
+            `${this.escapeHtml(String(currentMaxWorkers))}`;
+        const fastLimitDisplay =
+            `${this.escapeHtml(String(configuredFastLimit))} / ` +
+            `${this.escapeHtml(String(dynamicCeiling))}`;
+
+        return `
+            <div class="diagnostics-grid">
+                <div class="diagnostic-card">
+                    <div class="diagnostic-title">Remote Task Pools</div>
+                    <div class="diagnostic-metrics">
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Fast queue depth</span>
+                            <span class="metric-value">${this.escapeHtml(String(fast.queue_depth ?? 'n/a'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Fast workers</span>
+                            <span class="metric-value">${fastWorkerDisplay}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Configured fast limit</span>
+                            <span class="metric-value">${fastLimitDisplay}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">CPU utilisation</span>
+                            <span class="metric-value">${this.escapeHtml(cpuPercent)}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Memory utilisation</span>
+                            <span class="metric-value">${this.escapeHtml(memoryPercent)}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">At capacity</span>
+                            <span class="metric-value">${this.escapeHtml(maxedOutFor)}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Job queue depth</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobPool.queue_depth ?? 'n/a'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Job workers</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobPool.current_workers ?? 'n/a'))} / ${this.escapeHtml(String(jobPool.configured_workers ?? 'n/a'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Average duration</span>
+                            <span class="metric-value">${this.escapeHtml(this.formatDuration(remote.average_duration_seconds))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Dynamic adjustments</span>
+                            <span class="metric-value">${this.escapeHtml(String(remote.dynamic_adjustments ?? '0'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Completed tasks</span>
+                            <span class="metric-value">${this.escapeHtml(String(remote.completed_tasks ?? '0'))}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="diagnostic-card">
+                    <div class="diagnostic-title">Job Service</div>
+                    <div class="diagnostic-metrics">
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Queue depth</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobs.queue_depth ?? 'n/a'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Workers</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobs.worker_count ?? 'n/a'))} / ${this.escapeHtml(String(jobs.configured_concurrency ?? 'n/a'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Running jobs</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobs.running_jobs ?? '0'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Pending jobs</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobs.pending_jobs ?? '0'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Failed jobs</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobs.failed_jobs ?? '0'))}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="diagnostic-card">
+                    <div class="diagnostic-title">Inventory Service</div>
+                    <div class="diagnostic-metrics">
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Last refresh</span>
+                            <span class="metric-value">${this.escapeHtml(this.formatTimestamp(inventory.last_refresh))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Hosts tracked</span>
+                            <span class="metric-value">${this.escapeHtml(String(inventory.hosts_tracked ?? '0'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">VMs tracked</span>
+                            <span class="metric-value">${this.escapeHtml(String(inventory.vms_tracked ?? '0'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Refresh in progress</span>
+                            <span class="metric-value">${this.escapeHtml(this.formatBoolean(inventory.refresh_in_progress ?? false))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Initial sync</span>
+                            <span class="metric-value">${this.escapeHtml(this.formatBoolean(inventory.initial_refresh_succeeded ?? false))}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="diagnostic-card">
+                    <div class="diagnostic-title">Host Deployment</div>
+                    <div class="diagnostic-metrics">
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Enabled</span>
+                            <span class="metric-value">${this.escapeHtml(this.formatBoolean(hostDeployment.enabled ?? false))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Ingress ready</span>
+                            <span class="metric-value">${this.escapeHtml(this.formatBoolean(hostDeployment.ingress_ready ?? false))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Startup status</span>
+                            <span class="metric-value">${this.escapeHtml(String(hostDeployment.startup?.status ?? 'unknown'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Hosts completed</span>
+                            <span class="metric-value">${this.escapeHtml(String(hostDeployment.startup?.completed_hosts ?? '0'))} / ${this.escapeHtml(String(hostDeployment.startup?.total_hosts ?? '0'))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Failures</span>
+                            <span class="metric-value">${this.escapeHtml(String(hostDeployment.startup?.failed_hosts ?? '0'))}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    async refreshDiagnostics() {
+        const refreshButton = document.getElementById('refresh-diagnostics');
+        const container = document.getElementById('diagnostics-content');
+        if (refreshButton) {
+            refreshButton.disabled = true;
+            refreshButton.textContent = 'Refreshing…';
+        }
+        if (container) {
+            container.innerHTML = '<div class="diagnostics-loading">Loading diagnostics…</div>';
+        }
+
+        try {
+            const diagnostics = await this.fetchDiagnostics();
+            this.diagnosticsData = diagnostics;
+            if (container) {
+                container.innerHTML = this.renderDiagnosticsMarkup(diagnostics);
+            }
+        } finally {
+            if (refreshButton) {
+                refreshButton.disabled = false;
+                refreshButton.textContent = 'Refresh';
+            }
+        }
     }
 }
 
