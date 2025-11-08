@@ -10,7 +10,8 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import PureWindowsPath
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from xml.etree import ElementTree
 
 from ..core.config import settings
@@ -172,6 +173,8 @@ class JobService:
         self._worker_tasks: List[asyncio.Task[None]] = []
         self._started = False
         self._stream_decoders: Dict[Tuple[str, str], _PowerShellStreamDecoder] = {}
+        self._host_running: Dict[str, str] = {}
+        self._host_waiters: Dict[str, Deque[Tuple[str, asyncio.Event]]] = {}
 
     def _get_job_runtime_profile(
         self, job_type: str
@@ -327,31 +330,127 @@ class JobService:
             logger.warning("Received unknown job id %s", job_id)
             return
 
-        await self._update_job(
-            job_id, status=JobStatus.RUNNING, started_at=datetime.utcnow()
-        )
+        host_key = self._normalise_host(job.target_host)
+        acquired_host = False
 
         try:
-            if job.job_type == "provision_vm":
-                await self._execute_provisioning_job(job)
-            else:
-                raise NotImplementedError(f"Job type '{job.job_type}' is not supported")
-        except Exception as exc:
-            logger.error("Job %s failed: %s", job_id, exc)
-            await self._append_job_output(job_id, f"ERROR: {exc}")
+            if job.job_type == "provision_vm" and host_key:
+                await self._acquire_host_slot(host_key, job.job_id)
+                acquired_host = True
+
             await self._update_job(
-                job_id,
-                status=JobStatus.FAILED,
-                completed_at=datetime.utcnow(),
-                error=str(exc),
+                job_id, status=JobStatus.RUNNING, started_at=datetime.utcnow()
             )
-            return
+
+            try:
+                if job.job_type == "provision_vm":
+                    await self._execute_provisioning_job(job)
+                else:
+                    raise NotImplementedError(
+                        f"Job type '{job.job_type}' is not supported"
+                    )
+            except Exception as exc:
+                logger.error("Job %s failed: %s", job_id, exc)
+                await self._append_job_output(job_id, f"ERROR: {exc}")
+                await self._update_job(
+                    job_id,
+                    status=JobStatus.FAILED,
+                    completed_at=datetime.utcnow(),
+                    error=str(exc),
+                )
+                return
 
         await self._update_job(
             job_id,
             status=JobStatus.COMPLETED,
             completed_at=datetime.utcnow(),
         )
+    finally:
+        if acquired_host:
+            await self._release_host_slot(host_key, job.job_id)
+
+    @staticmethod
+    def _normalise_host(value: Optional[str]) -> str:
+        if not value:
+            return ""
+        return value.strip().lower()
+
+    async def _acquire_host_slot(self, host: str, job_id: str) -> None:
+        """Serialise provisioning jobs so only one runs per host."""
+
+        waiter: Optional[asyncio.Event] = None
+        enqueued = False
+
+        try:
+            while True:
+                async with self._lock:
+                    current_owner = self._host_running.get(host)
+                    if current_owner is None:
+                        self._host_running[host] = job_id
+                        return
+                    if current_owner == job_id:
+                        return
+
+                    if not enqueued:
+                        waiter = asyncio.Event()
+                        queue = self._host_waiters.setdefault(host, deque())
+                        queue.append((job_id, waiter))
+                        enqueued = True
+                        logger.info(
+                            "Provisioning job %s waiting for host slot on %s",
+                            job_id,
+                            host,
+                        )
+
+                assert waiter is not None
+                await waiter.wait()
+                waiter = None
+                enqueued = False
+        except Exception:
+            if enqueued and waiter is not None:
+                async with self._lock:
+                    pending = self._host_waiters.get(host)
+                    if pending:
+                        try:
+                            pending.remove((job_id, waiter))
+                        except ValueError:
+                            pass
+                        if not pending:
+                            self._host_waiters.pop(host, None)
+            raise
+
+    async def _release_host_slot(self, host: str, job_id: str) -> None:
+        if not host:
+            return
+
+        next_waiter: Optional[asyncio.Event] = None
+        async with self._lock:
+            owner = self._host_running.get(host)
+            if owner != job_id:
+                return
+
+            queue = self._host_waiters.get(host)
+            if queue:
+                next_job_id, next_waiter = queue.popleft()
+                if not queue:
+                    self._host_waiters.pop(host, None)
+                else:
+                    self._host_waiters[host] = queue
+                self._host_running[host] = next_job_id
+                logger.info(
+                    "Provisioning job %s released host slot on %s; waking job %s",
+                    job_id,
+                    host,
+                    next_job_id,
+                )
+            else:
+                self._host_running.pop(host, None)
+                logger.info(
+                    "Provisioning job %s released host slot on %s", job_id, host
+                )
+
+        if next_waiter is not None:
+            next_waiter.set()
 
     async def _execute_provisioning_job(self, job: Job) -> None:
         definition = job.parameters.get("definition", {})

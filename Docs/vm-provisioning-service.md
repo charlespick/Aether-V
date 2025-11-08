@@ -54,6 +54,53 @@ operators while keeping inventory and notifications in sync.
   that understands CLI XML payloads and hexadecimal escapes, ensuring operators
   receive clean, incremental log lines over websockets and notifications.
 
+## Host-side provisioning flow
+- Each job serialises the schema identifier, version, and cleaned field map into
+  a compact JSON envelope that mirrors the payload consumed by the original
+  Ansible playbook. The JSON is base64-encoded and piped into
+  `Invoke-ProvisioningJob.ps1` so the PowerShell agent can evolve independently
+  from the API as long as both sides honour the schema contract.
+- `Invoke-ProvisioningJob.ps1` orchestrates the following sequence, matching the
+  historical tooling step-for-step:
+  1. **Pre-provisioning checks** – derives the operating system family when not
+     supplied, ignoring Windows-only fields for Linux images and vice versa.
+  2. **`Provisioning.CopyImage.ps1`** – clones the requested golden image into a
+     host working directory and returns the path for subsequent steps.
+  3. **`Provisioning.CopyProvisioningISO.ps1`** – places the Windows or Linux
+     provisioning ISO beside the VM so Hyper-V can attach it during
+     registration.
+  4. **`Provisioning.RegisterVM.ps1`** – creates and starts the VM with the
+     requested CPU, memory, storage, VLAN, and ISO attachments.
+  5. **`Provisioning.WaitForProvisioningKey.ps1`** – watches Hyper-V key-value
+     pairs until the guest posts the `ProvisioningReady` signal.
+  6. **`Provisioning.PublishProvisioningData.ps1`** – encrypts sensitive
+     configuration data and injects it into the guest through KVP for
+     autonomous completion.
+- Optional clustering is invoked from the same master script after provisioning
+  data is published so that Failover Cluster integration mirrors the legacy
+  workflow.
+
+### Sample job envelope
+```json
+{
+  "schema": {"id": "vm-provisioning", "version": 1},
+  "fields": {
+    "vm_name": "web-server-01",
+    "image_name": "Windows Server 2022",
+    "gb_ram": 8,
+    "cpu_cores": 4
+  }
+}
+```
+
+### Pre-provisioning logic
+- OS family inference treats prefixes such as `Windows*`, `Microsoft Windows*`,
+  `Ubuntu*`, `RHEL*`, `CentOS*`, `Rocky Linux*`, `AlmaLinux*`, `Oracle Linux*`,
+  `Debian*`, `SUSE*`, `openSUSE*`, and `Fedora*` as hints so the UI can omit
+  redundant fields.
+- Linux requests ignore Windows domain join values; Windows requests ignore
+  Linux SSH configuration to reduce accidental misconfiguration.
+
 ## Cross-service coordination and observability
 - Job updates drive persistent notifications, websocket broadcasts (per-job and
   aggregate), and inventory placeholders that mark in-progress VMs so UI views
@@ -79,6 +126,89 @@ operators while keeping inventory and notifications in sync.
   changes. Backwards compatibility is enforced by the version check at
   submission time, preventing mismatched deployments from queuing incompatible
   jobs.
+
+## Configuration parameters
+- **Required** – `vm_name`, `image_name`, `gb_ram`, `cpu_cores`, `guest_la_uid`,
+  and `guest_la_pw` define the VM identity and baseline resources. Host
+  selection occurs separately via the `target_host` submission field.
+- **Networking (optional)** – `guest_v4_ipaddr`, `guest_v4_cidrprefix`,
+  `guest_v4_defaultgw`, `guest_v4_dns1`, `guest_v4_dns2`, and `guest_net_dnssuffix`
+  request static IPv4 configuration. VLAN tagging is controlled with `vlan_id`
+  (0 for untagged networks).
+- **Domain join (Windows)** – `guest_domain_jointarget`,
+  `guest_domain_joinuid`, `guest_domain_joinpw`, and `guest_domain_joinou`
+  provide optional Active Directory integration.
+- **Linux automation** – `cnf_ansible_ssh_user` and `cnf_ansible_ssh_key`
+  deliver post-provisioning SSH configuration for downstream tooling.
+- **Clustering** – `vm_clustered` toggles optional Failover Cluster
+  registration once the VM finishes provisioning.
+
+## Security considerations
+- Secrets such as `guest_la_pw` and `guest_domain_joinpw` are supplied via
+  environment variables rather than command-line arguments so they never appear
+  in process listings. The agent encrypts payloads before publishing them into
+  the guest through Hyper-V KVP.
+- KVP data is transient and removed once the guest reads it, keeping
+  credentials off the host.
+- Job responses redact sensitive fields with `redact_job_parameters`, and
+  notifications avoid echoing secrets.
+
+## Operational guidance
+- **Golden images** – Sysprep Windows templates, install Hyper-V integration
+  services, and bake common updates. Linux templates should ship with
+  cloud-init configured for NoCloud and have Hyper-V KVP daemons enabled on
+  boot.
+- **Networking** – Validate static IP assignments, ensure VLANs exist on the
+  Hyper-V virtual switch, and confirm DNS servers are reachable.
+- **Domain join** – Use service accounts with rights to create computer
+  objects, verify DNS resolution for domain controllers, and consider
+  pre-staging objects when policy demands it.
+
+## Monitoring, validation, and troubleshooting
+- Successful jobs leave the VM powered on, reachable on the network, and
+  publishing provisioning keys via KVP. Inventory placeholders clear when jobs
+  complete so dashboards stay accurate.
+- Common issues and mitigations:
+  - **VM fails to start** – inspect Hyper-V event logs and confirm sufficient
+    CPU and RAM availability.
+  - **Provisioning timeout** – ensure the provisioning ISO copied correctly and
+    the guest OS can mount it.
+  - **Static networking missing** – double-check submitted IP, CIDR, gateway,
+    and DNS values and look for conflicts on the network.
+  - **Domain join failures** – verify credentials, DNS reachability, and domain
+    controller access from the new VM.
+
+## API integration
+- The REST API exposes `POST /api/v1/jobs/provision` for submissions and
+  `GET /api/v1/jobs/{id}` for status checks. Clients include the schema version
+  to guard against mismatches during rolling upgrades.
+- Example request:
+  ```bash
+  curl -X POST "https://aetherv.example.com/api/v1/jobs/provision" \
+    -H "Authorization: Bearer <token>" \
+    -H "Content-Type: application/json" \
+    -d '{
+          "schema_version": 1,
+          "target_host": "hyperv01.local",
+          "values": {
+            "vm_name": "web-server-01",
+            "image_name": "Windows Server 2022",
+            "gb_ram": 8,
+            "cpu_cores": 4,
+            "guest_la_uid": "Administrator",
+            "guest_la_pw": "SecurePassword123!",
+            "guest_v4_ipaddr": "192.168.1.100",
+            "guest_v4_cidrprefix": 24,
+            "guest_v4_defaultgw": "192.168.1.1",
+            "guest_v4_dns1": "192.168.1.10",
+            "guest_domain_jointarget": "example.com",
+            "guest_domain_joinuid": "svc-domainjoin",
+            "guest_domain_joinpw": "DomainPassword123!",
+            "vlan_id": 10
+          }
+        }'
+  ```
+
 
 ## Mermaid overview
 ```mermaid
