@@ -173,6 +173,22 @@ class JobService:
         self._started = False
         self._stream_decoders: Dict[Tuple[str, str], _PowerShellStreamDecoder] = {}
 
+    def _get_job_runtime_profile(
+        self, job_type: str
+    ) -> Tuple[RemoteTaskCategory, float]:
+        """Return the remote execution category and timeout for a job type."""
+
+        if job_type in {"provision_vm", "delete_vm"}:
+            return (
+                RemoteTaskCategory.JOB,
+                float(settings.job_long_timeout_seconds),
+            )
+
+        return (
+            RemoteTaskCategory.GENERAL,
+            float(settings.job_short_timeout_seconds),
+        )
+
     def _prepare_job_response(self, job: Job) -> Job:
         """Return a deep-copied job with sensitive data redacted."""
 
@@ -369,13 +385,15 @@ class JobService:
             finally:
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
+        category, timeout = self._get_job_runtime_profile(job.job_type)
+
         command_task = asyncio.create_task(
             remote_task_service.run_blocking(
                 target_host,
                 run_command,
                 description=f"provisioning job {job.job_id}",
-                category=RemoteTaskCategory.JOB,
-                timeout=None,
+                category=category,
+                timeout=timeout,
             )
         )
 

@@ -68,13 +68,17 @@ class Settings(BaseSettings):
     inventory_refresh_interval: int = 60  # seconds
 
     # Job execution settings
-    job_worker_concurrency: int = 3  # Maximum concurrent provisioning jobs
+    job_worker_concurrency: int = 6  # Maximum concurrent provisioning jobs
+    job_long_timeout_seconds: float = 900.0  # 15 minutes for provisioning/deletion
+    job_short_timeout_seconds: float = 60.0  # 1 minute for quick power actions
 
     # Remote task execution settings
-    remote_task_min_concurrency: int = 3
-    remote_task_max_concurrency: int = 8
+    remote_task_min_concurrency: int = 6
+    remote_task_max_concurrency: int = 24
     remote_task_scale_up_backlog: int = 2
     remote_task_idle_seconds: float = 30.0
+    remote_task_scale_up_duration_threshold: float = 30.0
+    remote_task_job_concurrency: int = 6
 
     # WebSocket settings
     # WebSocket connection timeout in seconds (30 minutes)

@@ -41,6 +41,8 @@ class _RemoteTask:
     description: str
     category: RemoteTaskCategory
     timeout: Optional[float]
+    queue_name: str
+    track_duration: bool
     submitted_at: float = field(default_factory=monotonic)
 
 
@@ -48,8 +50,10 @@ class RemoteTaskService:
     """Central queue with adaptive concurrency for remote host operations."""
 
     def __init__(self) -> None:
-        self._queue: Optional[asyncio.Queue[Optional[_RemoteTask]]] = None
-        self._workers: set[asyncio.Task[None]] = set()
+        self._fast_queue: Optional[asyncio.Queue[Optional[_RemoteTask]]] = None
+        self._job_queue: Optional[asyncio.Queue[Optional[_RemoteTask]]] = None
+        self._fast_workers: set[asyncio.Task[None]] = set()
+        self._job_workers: set[asyncio.Task[None]] = set()
         self._started = False
         self._start_lock = asyncio.Lock()
         self._min_concurrency = 1
@@ -57,10 +61,12 @@ class RemoteTaskService:
         self._scale_up_backlog = 1
         self._scale_up_duration_threshold = 5.0
         self._idle_seconds = 30.0
+        self._job_concurrency = 1
         self._avg_duration = 0.0
         self._completed = 0
-        self._inflight = 0
-        self._current_workers = 0
+        self._fast_inflight = 0
+        self._fast_current_workers = 0
+        self._job_current_workers = 0
 
     async def start(self) -> None:
         """Initialise the worker pool if it is not already running."""
@@ -69,7 +75,8 @@ class RemoteTaskService:
             if self._started:
                 return
 
-            self._queue = asyncio.Queue()
+            self._fast_queue = asyncio.Queue()
+            self._job_queue = asyncio.Queue()
             self._started = True
 
             self._min_concurrency = max(1, settings.remote_task_min_concurrency)
@@ -79,20 +86,29 @@ class RemoteTaskService:
             self._scale_up_backlog = max(1, settings.remote_task_scale_up_backlog)
             self._idle_seconds = max(1.0, float(settings.remote_task_idle_seconds))
             self._scale_up_duration_threshold = max(
-                1.0, float(settings.winrm_operation_timeout) / 2.0
+                1.0, float(settings.remote_task_scale_up_duration_threshold)
             )
+            self._job_concurrency = max(1, settings.remote_task_job_concurrency)
             self._avg_duration = 0.0
             self._completed = 0
-            self._inflight = 0
-            self._current_workers = 0
+            self._fast_inflight = 0
+            self._fast_current_workers = 0
+            self._job_current_workers = 0
 
             for _ in range(self._min_concurrency):
-                self._spawn_worker()
+                self._spawn_worker("fast")
+
+            for _ in range(self._job_concurrency):
+                self._spawn_worker("job")
 
             logger.info(
-                "Remote task service started (min=%d, max=%d, idle_timeout=%.1fs)",
+                (
+                    "Remote task service started "
+                    "(fast_min=%d, fast_max=%d, job=%d, idle_timeout=%.1fs)"
+                ),
                 self._min_concurrency,
                 self._max_concurrency,
+                self._job_concurrency,
                 self._idle_seconds,
             )
 
@@ -103,16 +119,30 @@ class RemoteTaskService:
             if not self._started:
                 return
 
-            assert self._queue is not None
+            assert self._fast_queue is not None
+            assert self._job_queue is not None
             self._started = False
 
-            worker_count = self._current_workers
-            for _ in range(worker_count):
-                await self._queue.put(None)
+            fast_workers = self._fast_current_workers
+            for _ in range(fast_workers):
+                await self._fast_queue.put(None)
 
-        await asyncio.gather(*self._workers, return_exceptions=True)
-        self._workers.clear()
-        self._queue = None
+            job_workers = self._job_current_workers
+            for _ in range(job_workers):
+                await self._job_queue.put(None)
+
+        await asyncio.gather(
+            *self._fast_workers,
+            *self._job_workers,
+            return_exceptions=True,
+        )
+        self._fast_workers.clear()
+        self._job_workers.clear()
+        self._fast_current_workers = 0
+        self._job_current_workers = 0
+        self._fast_inflight = 0
+        self._fast_queue = None
+        self._job_queue = None
         logger.info("Remote task service stopped")
 
     async def run_blocking(
@@ -133,9 +163,11 @@ class RemoteTaskService:
         if timeout is not None:
             timeout = max(0.1, float(timeout))
 
-        assert self._queue is not None
+        assert self._fast_queue is not None
+        assert self._job_queue is not None
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
+        queue_name = "job" if category is RemoteTaskCategory.JOB else "fast"
         task = _RemoteTask(
             hostname=hostname,
             func=func,
@@ -145,10 +177,14 @@ class RemoteTaskService:
             description=description,
             category=category,
             timeout=timeout,
+            queue_name=queue_name,
+            track_duration=category is not RemoteTaskCategory.JOB,
         )
 
-        await self._queue.put(task)
-        self._maybe_scale_up()
+        target_queue = self._job_queue if queue_name == "job" else self._fast_queue
+        await target_queue.put(task)
+        if queue_name == "fast":
+            self._maybe_scale_up()
 
         try:
             return await future
@@ -160,37 +196,52 @@ class RemoteTaskService:
                     description,
                 )
 
-    def _spawn_worker(self) -> None:
-        assert self._queue is not None
+    def _spawn_worker(self, queue_name: str) -> None:
+        if queue_name == "fast":
+            assert self._fast_queue is not None
+            worker_set = self._fast_workers
+        else:
+            assert self._job_queue is not None
+            worker_set = self._job_workers
 
-        worker = asyncio.create_task(self._worker(), name="remote-task-worker")
-        self._workers.add(worker)
-        self._current_workers += 1
+        worker = asyncio.create_task(
+            self._worker(queue_name), name=f"remote-task-worker-{queue_name}"
+        )
+        worker_set.add(worker)
+        if queue_name == "fast":
+            self._fast_current_workers += 1
+        else:
+            self._job_current_workers += 1
 
         def _cleanup(task: asyncio.Task[None]) -> None:
-            self._workers.discard(task)
+            worker_set.discard(task)
 
         worker.add_done_callback(_cleanup)
 
-    async def _worker(self) -> None:
-        assert self._queue is not None
+    async def _worker(self, queue_name: str) -> None:
+        queue = self._fast_queue if queue_name == "fast" else self._job_queue
+        assert queue is not None
+        metrics_enabled = queue_name == "fast"
         try:
             while True:
-                try:
-                    item = await asyncio.wait_for(
-                        self._queue.get(), timeout=self._idle_seconds
-                    )
-                except asyncio.TimeoutError:
-                    if self._current_workers > self._min_concurrency:
-                        logger.debug(
-                            "Remote task worker idle for %.1fs; scaling down",
-                            self._idle_seconds,
+                if queue_name == "fast":
+                    try:
+                        item = await asyncio.wait_for(
+                            queue.get(), timeout=self._idle_seconds
                         )
-                        break
-                    continue
+                    except asyncio.TimeoutError:
+                        if self._fast_current_workers > self._min_concurrency:
+                            logger.debug(
+                                "Remote task worker idle for %.1fs; scaling down",
+                                self._idle_seconds,
+                            )
+                            break
+                        continue
+                else:
+                    item = await queue.get()
 
                 if item is None:
-                    self._queue.task_done()
+                    queue.task_done()
                     break
 
                 task = item
@@ -201,11 +252,12 @@ class RemoteTaskService:
                         task.description,
                         task.hostname,
                     )
-                    self._queue.task_done()
+                    queue.task_done()
                     continue
 
                 start = monotonic()
-                self._inflight += 1
+                if queue_name == "fast":
+                    self._fast_inflight += 1
                 try:
                     result = await self._execute_task(task)
                 except Exception as exc:  # pragma: no cover - defensive logging
@@ -215,12 +267,17 @@ class RemoteTaskService:
                     if not task.future.done():
                         task.future.set_result(result)
                 finally:
-                    self._inflight -= 1
+                    if queue_name == "fast":
+                        self._fast_inflight -= 1
                     duration = monotonic() - start
-                    self._update_metrics(duration)
-                    self._queue.task_done()
+                    if metrics_enabled and task.track_duration:
+                        self._update_metrics(duration)
+                    queue.task_done()
         finally:
-            self._current_workers -= 1
+            if queue_name == "fast":
+                self._fast_current_workers -= 1
+            else:
+                self._job_current_workers -= 1
 
     async def _execute_task(self, task: _RemoteTask) -> Any:
         logger.debug(
@@ -267,14 +324,14 @@ class RemoteTaskService:
             self._avg_duration = (self._avg_duration * 0.8) + (duration * 0.2)
 
     def _maybe_scale_up(self) -> None:
-        if not self._started or self._queue is None:
+        if not self._started or self._fast_queue is None:
             return
 
-        backlog = self._queue.qsize()
+        backlog = self._fast_queue.qsize()
         if backlog < self._scale_up_backlog:
             return
 
-        if self._current_workers >= self._max_concurrency:
+        if self._fast_current_workers >= self._max_concurrency:
             return
 
         if (
@@ -283,10 +340,10 @@ class RemoteTaskService:
         ):
             return
 
-        self._spawn_worker()
+        self._spawn_worker("fast")
         logger.debug(
             "Scaled remote task workers to %d (backlog=%d, avg_duration=%.2fs)",
-            self._current_workers,
+            self._fast_current_workers,
             backlog,
             self._avg_duration,
         )
