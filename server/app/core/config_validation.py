@@ -116,6 +116,13 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
                 "OIDC_FORCE_HTTPS is disabled while authentication is enabled.",
                 "Only disable HTTPS enforcement for controlled local development.",
             )
+
+        if not settings.cookie_secure:
+            _warn(
+                result,
+                "COOKIE_SECURE is disabled while authentication is enabled.",
+                "Session cookies should be marked Secure in production deployments.",
+            )
     else:
         # Auth disabled requires explicit allow_dev_auth True.
         if not settings.allow_dev_auth:
@@ -131,6 +138,21 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             result,
             "SESSION_SECRET_KEY is not configured; sessions will reset on restart.",
             "Provide SESSION_SECRET_KEY to persist authenticated sessions across restarts.",
+        )
+
+    valid_same_site = {"lax", "strict", "none"}
+    same_site_value = (settings.cookie_samesite or "").strip().lower()
+    if same_site_value and same_site_value not in valid_same_site:
+        _warn(
+            result,
+            "COOKIE_SAMESITE is set to an unsupported value.",
+            "Use one of: lax, strict, none.",
+        )
+    if same_site_value == "none" and not settings.cookie_secure:
+        _warn(
+            result,
+            "COOKIE_SAMESITE is 'none' but COOKIE_SECURE is disabled.",
+            "Browsers require SameSite=None cookies to also be Secure.",
         )
 
     if not settings.get_agent_download_base_url():

@@ -258,14 +258,38 @@ if not session_secret:
 # Store the session secret in the config module so it can be accessed elsewhere
 set_session_secret(session_secret)
 
+allowed_same_site_values = {"lax", "strict", "none"}
+configured_same_site = (settings.cookie_samesite or "lax").lower()
+if configured_same_site not in allowed_same_site_values:
+    logger.warning(
+        "Invalid cookie_samesite value '%s' - defaulting to 'lax'",
+        settings.cookie_samesite,
+    )
+    configured_same_site = "lax"
+
+cookie_secure_flag = settings.cookie_secure
+session_https_only = bool(cookie_secure_flag)
+if settings.auth_enabled and not session_https_only:
+    logger.warning(
+        "Authentication is enabled but COOKIE_SECURE is false - forcing secure session cookies."
+    )
+    session_https_only = True
+
+# Ensure SameSite=None is only used with Secure cookies per browser requirements
+if configured_same_site == "none" and not session_https_only:
+    logger.warning(
+        "SameSite=None requires secure cookies - forcing secure session cookies."
+    )
+    session_https_only = True
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret,
     max_age=settings.session_max_age,
-    same_site="lax",  # CSRF protection
-    https_only=False,  # Disable for debugging - ingress may terminate HTTPS
-    domain=None,  # Don't restrict domain for debugging
-    path="/",  # Ensure cookies work for all paths
+    same_site=configured_same_site,
+    https_only=session_https_only,
+    domain=None,
+    path="/",
     # Note: httponly is always True by default in SessionMiddleware for security
 )
 
