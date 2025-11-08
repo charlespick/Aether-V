@@ -372,6 +372,14 @@ class SettingsOverlay extends BaseOverlay {
         return value ? 'Yes' : 'No';
     }
 
+    formatPercent(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) {
+            return 'n/a';
+        }
+        return `${number.toFixed(1)}%`;
+    }
+
     formatCommit(commit) {
         if (!commit) return null;
         return commit.length > 12 ? `${commit.slice(0, 12)}…` : commit;
@@ -409,6 +417,18 @@ class SettingsOverlay extends BaseOverlay {
         const jobs = data.jobs || {};
         const inventory = data.inventory || {};
         const hostDeployment = data.host_deployment || {};
+        const cpuPercent = this.formatPercent(remote.cpu_percent);
+        const memoryPercent = this.formatPercent(remote.memory_percent);
+        const maxedOutFor = this.formatDuration(remote.maxed_out_for_seconds);
+        const currentMaxWorkers = remote.current_max_workers ?? fast.max_workers ?? 'n/a';
+        const configuredFastLimit = remote.configured_max_workers ?? 'n/a';
+        const dynamicCeiling = remote.dynamic_ceiling ?? 'n/a';
+        const fastWorkerDisplay =
+            `${this.escapeHtml(String(fast.current_workers ?? 'n/a'))} / ` +
+            `${this.escapeHtml(String(currentMaxWorkers))}`;
+        const fastLimitDisplay =
+            `${this.escapeHtml(String(configuredFastLimit))} / ` +
+            `${this.escapeHtml(String(dynamicCeiling))}`;
 
         return `
             <div class="diagnostics-grid">
@@ -421,7 +441,23 @@ class SettingsOverlay extends BaseOverlay {
                         </div>
                         <div class="diagnostic-metric">
                             <span class="metric-label">Fast workers</span>
-                            <span class="metric-value">${this.escapeHtml(String(fast.current_workers ?? 'n/a'))} / ${this.escapeHtml(String(fast.max_workers ?? 'n/a'))}</span>
+                            <span class="metric-value">${fastWorkerDisplay}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Configured fast limit</span>
+                            <span class="metric-value">${fastLimitDisplay}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">CPU utilisation</span>
+                            <span class="metric-value">${this.escapeHtml(cpuPercent)}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Memory utilisation</span>
+                            <span class="metric-value">${this.escapeHtml(memoryPercent)}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">At capacity</span>
+                            <span class="metric-value">${this.escapeHtml(maxedOutFor)}</span>
                         </div>
                         <div class="diagnostic-metric">
                             <span class="metric-label">Job queue depth</span>
@@ -434,6 +470,10 @@ class SettingsOverlay extends BaseOverlay {
                         <div class="diagnostic-metric">
                             <span class="metric-label">Average duration</span>
                             <span class="metric-value">${this.escapeHtml(this.formatDuration(remote.average_duration_seconds))}</span>
+                        </div>
+                        <div class="diagnostic-metric">
+                            <span class="metric-label">Dynamic adjustments</span>
+                            <span class="metric-value">${this.escapeHtml(String(remote.dynamic_adjustments ?? '0'))}</span>
                         </div>
                         <div class="diagnostic-metric">
                             <span class="metric-label">Completed tasks</span>

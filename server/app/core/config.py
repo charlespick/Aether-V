@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     remote_task_idle_seconds: float = 30.0
     remote_task_scale_up_duration_threshold: float = 30.0
     remote_task_job_concurrency: int = 6
+    remote_task_dynamic_ceiling: int = 48
+    remote_task_resource_scale_interval_seconds: float = 15.0
+    remote_task_resource_observation_window_seconds: float = 45.0
+    remote_task_resource_cpu_threshold: float = 60.0
+    remote_task_resource_memory_threshold: float = 70.0
+    remote_task_resource_scale_increment: int = 2
 
     # WebSocket settings
     # WebSocket connection timeout in seconds (30 minutes)

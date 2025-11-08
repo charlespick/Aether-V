@@ -195,6 +195,18 @@ class RemoteTaskMetrics(BaseModel):
     scale_up_backlog_threshold: int
     scale_up_duration_threshold_seconds: float
     idle_timeout_seconds: float
+    cpu_percent: float
+    memory_percent: float
+    configured_max_workers: int
+    current_max_workers: int
+    dynamic_ceiling: int
+    dynamic_scale_increment: int
+    resource_scale_interval_seconds: float
+    resource_observation_window_seconds: float
+    resource_cpu_threshold_percent: float
+    resource_memory_threshold_percent: float
+    dynamic_adjustments: int
+    maxed_out_for_seconds: float
     fast_pool: RemoteTaskPoolMetrics
     job_pool: RemoteTaskPoolMetrics
 
