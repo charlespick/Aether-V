@@ -75,8 +75,8 @@ class HostDeploymentService:
         self._container_version: str = ""
         self._agent_download_base_url: Optional[str] = None
         self._deployment_enabled = self._initialize_agent_download_base_url()
-        self._load_container_version()
         self._verified_host_versions: Dict[str, str] = {}
+        self._load_container_version()
         self._startup_task: Optional[asyncio.Task[None]] = None
         self._startup_event: Optional[asyncio.Event] = None
         self._startup_progress = StartupDeploymentProgress()
