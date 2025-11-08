@@ -53,13 +53,21 @@ def test_stringify_information_prefers_message_data_text():
     assert rendered == "Copy complete"
 
 
-def test_stringify_information_falls_back_to_complex_data():
+def test_stringify_information_prefers_message_property_from_complex_data():
     payload = GenericComplexObject()
     payload.to_string = "System.Object"
-    payload.adapted_properties = {"Message": "Transferring"}
+    payload.adapted_properties = {"Message": "Transferring", "NoNewLine": False}
 
     record = InformationRecord(message_data=payload)
 
     rendered = _PSRPStreamCursor._stringify_information(record)
 
-    assert rendered == "Message: Transferring"
+    assert rendered == "Transferring"
+
+
+def test_stringify_information_handles_dict_payload():
+    record = InformationRecord(message_data={"Message": "Provisioning complete", "NoNewLine": False})
+
+    rendered = _PSRPStreamCursor._stringify_information(record)
+
+    assert rendered == "Provisioning complete"

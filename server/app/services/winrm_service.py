@@ -162,16 +162,9 @@ class _PSRPStreamCursor:
         """Convert an information stream record into printable text."""
 
         message_data = getattr(record, "message_data", None)
-        if isinstance(message_data, bytes):
-            try:
-                return message_data.decode("utf-8")
-            except UnicodeDecodeError:
-                return message_data.decode("utf-8", errors="ignore")
-
-        if message_data is not None:
-            text = _PSRPStreamCursor._stringify(message_data)
-            if text:
-                return text
+        extracted = _PSRPStreamCursor._extract_information_message(message_data)
+        if extracted:
+            return extracted
 
         formatter = getattr(record, "to_string", None)
         if callable(formatter):
@@ -184,9 +177,66 @@ class _PSRPStreamCursor:
 
         textual = getattr(record, "message", None)
         if isinstance(textual, str) and textual.strip():
-            return textual
+            return textual.strip()
 
         return str(record)
+
+    @staticmethod
+    def _extract_information_message(message_data: Any) -> str:
+        """Return friendly text from Write-Information/Write-Host payloads."""
+
+        def _clean(value: str) -> str:
+            return value.rstrip("\r\n")
+
+        if message_data is None:
+            return ""
+
+        if isinstance(message_data, bytes):
+            try:
+                decoded = message_data.decode("utf-8")
+            except UnicodeDecodeError:
+                decoded = message_data.decode("utf-8", errors="ignore")
+            if decoded.strip():
+                return _clean(decoded)
+            return ""
+
+        if isinstance(message_data, str):
+            if message_data.strip():
+                return _clean(message_data)
+            return ""
+
+        if isinstance(message_data, dict):
+            for key in ("message", "Message"):
+                value = message_data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return _clean(value)
+            return ""
+
+        message_attr = getattr(message_data, "message", None)
+        if isinstance(message_attr, str) and message_attr.strip():
+            return _clean(message_attr)
+
+        for attr in ("Message", "Value"):
+            value = getattr(message_data, attr, None)
+            if isinstance(value, str) and value.strip():
+                return _clean(value)
+
+        adapted = getattr(message_data, "adapted_properties", None)
+        if isinstance(adapted, dict):
+            for key, value in adapted.items():
+                if key.lower() == "message" and isinstance(value, str) and value.strip():
+                    return _clean(value)
+
+        property_sets = getattr(message_data, "property_sets", None)
+        if isinstance(property_sets, list):
+            for entry in property_sets:
+                if not isinstance(entry, dict):
+                    continue
+                for key, value in entry.items():
+                    if key.lower() == "message" and isinstance(value, str) and value.strip():
+                        return _clean(value)
+
+        return _PSRPStreamCursor._stringify(message_data)
 
     @staticmethod
     def _stringify_complex(item: Any, seen: Set[int]) -> str:
