@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import types
 import uuid
@@ -19,6 +20,7 @@ try:
         Notification,
         NotificationCategory,
         NotificationLevel,
+        JobSubmission,
     )
     from server.app.services.job_service import JobService
     IMPORT_ERROR = None
@@ -66,16 +68,36 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         self.job_service = JobService()
         self.notification_stub = StubNotificationService()
         self.websocket_stub = StubWebSocketManager()
+        self.inventory_stub = self._build_inventory_stub()
 
         self.original_notification_service = job_service_module.notification_service
         self.original_websocket_manager = job_service_module.websocket_manager
+        self.original_inventory_service = job_service_module.inventory_service
 
         job_service_module.notification_service = self.notification_stub
         job_service_module.websocket_manager = self.websocket_stub
+        job_service_module.inventory_service = self.inventory_stub
 
     async def asyncTearDown(self):
+        await self.job_service.stop()
         job_service_module.notification_service = self.original_notification_service
         job_service_module.websocket_manager = self.original_websocket_manager
+        job_service_module.inventory_service = self.original_inventory_service
+
+    @staticmethod
+    def _build_inventory_stub():
+        class _InventoryStub:
+            def __init__(self):
+                self.tracked: List[Tuple[str, str, str]] = []
+                self.cleared: List[str] = []
+
+            def track_job_vm(self, job_id: str, vm_name: str, host: str) -> None:
+                self.tracked.append((job_id, vm_name, host))
+
+            def clear_job_vm(self, job_id: str) -> None:
+                self.cleared.append(job_id)
+
+        return _InventoryStub()
 
     async def test_sync_job_notification_tracks_metadata(self):
         job = Job(
@@ -300,4 +322,57 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job.parameters["definition"]["fields"]["guest_la_pw"],
             "super-secret",
         )
+
+    async def test_only_one_provisioning_job_runs_per_host(self):
+        await self.job_service.start()
+
+        original_execute = self.job_service._execute_provisioning_job
+
+        first_job_started = asyncio.Event()
+        second_job_started = asyncio.Event()
+        release_first_job = asyncio.Event()
+        start_order: List[str] = []
+
+        async def fake_execute(job):
+            start_order.append(job.job_id)
+            if not first_job_started.is_set():
+                first_job_started.set()
+                await release_first_job.wait()
+            else:
+                second_job_started.set()
+
+        self.job_service._execute_provisioning_job = fake_execute  # type: ignore[assignment]
+
+        submission = JobSubmission(schema_version=1, values={})
+        payload = {
+            "schema": {"id": "vm-provisioning", "version": 1},
+            "fields": {"vm_name": "vm-a"},
+        }
+
+        job1 = await self.job_service.submit_provisioning_job(
+            submission, payload, "hyperv01"
+        )
+
+        payload2 = {
+            "schema": {"id": "vm-provisioning", "version": 1},
+            "fields": {"vm_name": "vm-b"},
+        }
+
+        job2 = await self.job_service.submit_provisioning_job(
+            submission, payload2, "HYPERV01"
+        )
+
+        try:
+            await asyncio.wait_for(first_job_started.wait(), timeout=1)
+            self.assertEqual(start_order, [job1.job_id])
+
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(second_job_started.wait(), timeout=0.2)
+
+            release_first_job.set()
+
+            await asyncio.wait_for(second_job_started.wait(), timeout=1)
+            self.assertEqual(start_order, [job1.job_id, job2.job_id])
+        finally:
+            self.job_service._execute_provisioning_job = original_execute
 
