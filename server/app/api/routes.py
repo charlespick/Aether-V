@@ -71,7 +71,7 @@ def _encode_logout_token(id_token: str) -> str:
     encoded = base64.urlsafe_b64encode(compressed).decode("ascii")
 
     # Only use the encoded representation when it is smaller than the original
-    if len(encoded) < len(id_token):
+    if len(encoded) + len(_LOGOUT_TOKEN_PREFIX) < len(id_token):
         return f"{_LOGOUT_TOKEN_PREFIX}{encoded}"
 
     return id_token
@@ -88,7 +88,7 @@ def _decode_logout_token(packed_token: Optional[str]) -> Optional[str]:
         try:
             compressed = base64.urlsafe_b64decode(payload.encode("ascii"))
             return zlib.decompress(compressed).decode("utf-8")
-        except Exception:  # pragma: no cover - defensive
+        except (ValueError, zlib.error, UnicodeDecodeError):
             logger.warning("Failed to decode stored logout token")
             return None
 
