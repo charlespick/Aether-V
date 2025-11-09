@@ -39,7 +39,8 @@ class TestSettings:
             assert settings.app_name == "Test Server"
             assert settings.debug is True
             assert settings.auth_enabled is False
-            assert settings.hyperv_hosts == ["host1.example.com", "host2.example.com"]
+            assert settings.hyperv_hosts == "host1.example.com,host2.example.com"
+            assert settings.get_hyperv_hosts_list() == ["host1.example.com", "host2.example.com"]
             assert settings.winrm_username == "testuser"
             assert settings.winrm_password == "testpass"
 
@@ -75,8 +76,9 @@ class TestSettings:
         with patch.dict(os.environ, env_vars):
             settings = Settings()
             
-            assert len(settings.hyperv_hosts) == 3
-            assert "host1.local" in settings.hyperv_hosts
+            hosts_list = settings.get_hyperv_hosts_list()
+            assert len(hosts_list) == 3
+            assert "host1.local" in hosts_list
             assert settings.winrm_username == "admin"
             assert settings.winrm_password == "P@ssw0rd"
             assert settings.winrm_transport == "ntlm"
