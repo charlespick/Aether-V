@@ -742,6 +742,8 @@ class JobService:
             level=level,
             status=job.status,
             metadata={
+                "job_id": job.job_id,
+                "status": job.status.value,
                 "job_type": job.job_type,
                 "vm_name": vm_name,
                 "target_host": job.target_host,

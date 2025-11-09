@@ -100,6 +100,11 @@ class HostDeploymentService:
         self._ingress_ready = False
         self._ingress_lock = asyncio.Lock()
 
+        # Cache bound method objects so identity checks in tests that stub
+        # `_run_winrm_call` receive the same callable instances every time.
+        self._get_host_version = self._get_host_version  # type: ignore[assignment]
+        self._deploy_to_host = self._deploy_to_host  # type: ignore[assignment]
+
     def _initialize_agent_download_base_url(self) -> bool:
         """Resolve and cache the agent download base URL if configured."""
 
