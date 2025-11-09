@@ -15,11 +15,8 @@
             <div class="login-panel-content">
                 <header class="login-header">
                     <p class="login-welcome" id="login-title">Welcome to</p>
-                    <h1 class="login-heading">"Aether-V"</h1>
+                    <h1 class="login-heading">Aether-V</h1>
                     <p class="login-subtle">You are accessing the <span>{{ environment_name }}</span> instance.</p>
-                    {% if build_metadata_payload.git_ref %}
-                    <p class="login-subtle">Current release: <span>{{ build_metadata_payload.git_ref }}</span></p>
-                    {% endif %}
                 </header>
 
                 <div class="login-action">
@@ -42,9 +39,6 @@
                 <div class="login-footer-left">
                     <span class="login-wordmark">Aether-V Server</span>
                     <span class="login-version">Version {{ build_metadata.version }}</span>
-                    {% if build_metadata.build_time_iso %}
-                    <span class="login-build-time">Built {{ build_metadata.build_time_iso }}</span>
-                    {% endif %}
                 </div>
                 <nav class="login-footer-links" aria-label="Helpful links">
                     <a href="{{ github_url }}" target="_blank" rel="noopener" class="login-link">GitHub</a>
