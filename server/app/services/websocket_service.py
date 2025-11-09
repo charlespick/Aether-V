@@ -84,20 +84,21 @@ class ConnectionManager:
                 # Send only to clients subscribed to this topic
                 for client_id, topics in self.subscriptions.items():
                     if topic in topics or "all" in topics:
-                        clients_to_send.append(client_id)
+                        websocket = self.active_connections.get(client_id)
+                        if websocket:
+                            clients_to_send.append((client_id, websocket))
             else:
                 # Send to all clients
-                clients_to_send = list(self.active_connections.keys())
+                clients_to_send = list(self.active_connections.items())
 
-            # Send messages outside the lock to avoid blocking
-            for client_id in clients_to_send:
-                websocket = self.active_connections.get(client_id)
-                if websocket:
-                    try:
-                        await websocket.send_json(message)
-                    except Exception as e:
-                        logger.error(f"Error broadcasting to {client_id}: {e}")
-                        disconnected_clients.append(client_id)
+        if clients_to_send:
+            send_tasks = [ws.send_json(message) for _, ws in clients_to_send]
+            results = await asyncio.gather(*send_tasks, return_exceptions=True)
+
+            for (client_id, _), result in zip(clients_to_send, results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error broadcasting to {client_id}: {result}")
+                    disconnected_clients.append(client_id)
 
         # Clean up disconnected clients
         for client_id in disconnected_clients:
