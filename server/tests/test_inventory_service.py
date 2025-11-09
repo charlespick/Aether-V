@@ -83,3 +83,74 @@ async def test_refresh_inventory_allows_concurrent_mutation(monkeypatch):
 
     assert slow_result["refreshed_hosts"] == ["slow"]
     assert fast_result["refreshed_hosts"] == ["fast"]
+
+
+@pytest.mark.anyio("asyncio")
+async def test_refresh_inventory_discards_stale_snapshots(monkeypatch):
+    if (
+        InventoryService is None
+        or settings is None
+        or host_deployment_service is None
+    ):  # pragma: no cover - environment guard
+        pytest.skip("server package unavailable")
+
+    service = InventoryService()
+
+    monkeypatch.setattr(settings, "hyperv_hosts", "dup")
+    monkeypatch.setattr(
+        host_deployment_service, "_deployment_enabled", False, raising=False
+    )
+
+    first_collection_started = asyncio.Event()
+    allow_first_collection = asyncio.Event()
+    second_collection_done = asyncio.Event()
+
+    async def fake_collect(self, hostname: str):
+        payload = {
+            "Host": {"ClusterName": "Default"},
+            "VirtualMachines": [
+                {"Name": f"{hostname}-vm", "State": "Running"},
+            ],
+        }
+
+        if not first_collection_started.is_set():
+            first_collection_started.set()
+            await allow_first_collection.wait()
+            payload["Host"]["ClusterName"] = "OldCluster"
+            payload["VirtualMachines"][0]["Name"] = f"{hostname}-old"
+        else:
+            payload["Host"]["ClusterName"] = "NewCluster"
+            payload["VirtualMachines"][0]["Name"] = f"{hostname}-new"
+            second_collection_done.set()
+        return payload
+
+    monkeypatch.setattr(
+        service,
+        "_collect_with_recovery",
+        fake_collect.__get__(service, InventoryService),
+    )
+
+    first_refresh = asyncio.create_task(
+        service.refresh_inventory(hostnames=["dup"], rebuild_clusters=False)
+    )
+
+    await asyncio.wait_for(first_collection_started.wait(), timeout=1)
+
+    second_refresh = asyncio.create_task(
+        service.refresh_inventory(hostnames=["dup"], rebuild_clusters=False)
+    )
+
+    await asyncio.wait_for(second_collection_done.wait(), timeout=1)
+
+    second_result = await asyncio.wait_for(second_refresh, timeout=1)
+    assert second_result["refreshed_hosts"] == ["dup"]
+
+    allow_first_collection.set()
+    first_result = await asyncio.wait_for(first_refresh, timeout=1)
+    assert first_result["refreshed_hosts"] == ["dup"]
+
+    host = service.hosts["dup"]
+    assert host.cluster == "NewCluster"
+    vm_key = "dup:dup-new"
+    assert vm_key in service.vms
+    assert "dup:dup-old" not in service.vms

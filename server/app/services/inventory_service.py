@@ -2,11 +2,12 @@
 
 import asyncio
 import hashlib
+import itertools
 import json
 import logging
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, TypeVar
@@ -49,13 +50,14 @@ class InventoryScriptMissingError(RuntimeError):
         self.detail = message
 
 
-@dataclass
+@dataclass(frozen=True)
 class HostRefreshSnapshot:
-    """Immutable instructions describing how to apply a host refresh."""
+    """Instructions describing how to apply a host refresh."""
 
     hostname: str
     refreshed: bool
     skipped: bool
+    sequence: int
     host: Optional[Host] = None
     vms: List[VM] = field(default_factory=list)
     expected_vm_keys: Optional[Set[str]] = None
@@ -98,6 +100,8 @@ class InventoryService:
         self._total_host_refresh_duration = 0.0
         self._host_refresh_samples = 0
         self._average_host_refresh_seconds = 0.0
+        self._snapshot_sequence_counter = itertools.count()
+        self._host_last_applied_sequence: Dict[str, int] = {}
 
     async def start(self):
         """Start the inventory service and begin periodic refresh."""
@@ -652,6 +656,7 @@ class InventoryService:
                 self.hosts.clear()
                 self.vms.clear()
                 self._host_last_refresh.clear()
+                self._host_last_applied_sequence.clear()
                 self.last_refresh = datetime.utcnow()
             return {"refreshed_hosts": [], "skipped_hosts": []}
 
@@ -721,8 +726,19 @@ class InventoryService:
         """Apply a host refresh snapshot while holding the refresh lock."""
 
         async with self._refresh_lock:
+            last_sequence = self._host_last_applied_sequence.get(snapshot.hostname, -1)
+            if snapshot.sequence < last_sequence:
+                logger.debug(
+                    "Discarding stale refresh snapshot for host %s (sequence %d < %d)",
+                    snapshot.hostname,
+                    snapshot.sequence,
+                    last_sequence,
+                )
+                return
+
             previous_host = self.hosts.get(snapshot.hostname)
             self._apply_host_snapshot_locked(snapshot, previous_host)
+            self._host_last_applied_sequence[snapshot.hostname] = snapshot.sequence
 
     def _apply_host_snapshot_locked(
         self,
@@ -801,6 +817,7 @@ class InventoryService:
 
         logger.info("Refreshing inventory for host: %s", hostname)
 
+        sequence = next(self._snapshot_sequence_counter)
         previous_host = self.hosts.get(hostname)
         readiness = await self._ensure_host_ready(hostname)
 
@@ -813,6 +830,7 @@ class InventoryService:
                 hostname=hostname,
                 refreshed=False,
                 skipped=True,
+                sequence=sequence,
                 mark_preparing=True,
             )
 
@@ -839,6 +857,7 @@ class InventoryService:
                 hostname=hostname,
                 refreshed=True,
                 skipped=False,
+                sequence=sequence,
                 host=Host(
                     hostname=hostname,
                     cluster=cluster_name,
@@ -863,6 +882,7 @@ class InventoryService:
                 hostname=hostname,
                 refreshed=False,
                 skipped=False,
+                sequence=sequence,
                 host=Host(
                     hostname=hostname,
                     cluster=cluster,
@@ -878,9 +898,12 @@ class InventoryService:
 
         finally:
             if attempt_started and expected_interval is not None and reason == "background":
-                snapshot.record_duration = True
-                snapshot.duration = time.perf_counter() - start_time
-                snapshot.expected_interval = expected_interval
+                snapshot = replace(
+                    snapshot,
+                    record_duration=True,
+                    duration=time.perf_counter() - start_time,
+                    expected_interval=expected_interval,
+                )
 
         return snapshot
 
