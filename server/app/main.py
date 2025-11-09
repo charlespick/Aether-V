@@ -40,6 +40,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+PROJECT_GITHUB_URL = "https://github.com/aether-v/Aether-V"
+API_REFERENCE_URL = "/docs"
+
 
 def _build_metadata_payload() -> dict:
     """Serialize build metadata for template consumption."""
@@ -333,30 +336,47 @@ async def root(request: Request):
                     "Startup configuration warnings detected, but proceeding with standard UI."
                 )
 
-            # Check authentication status for logging purposes only
+            # Check authentication status to determine which view to render
             session_user = request.session.get("user_info")
+            is_authenticated = bool(session_user and session_user.get("authenticated"))
 
-            if session_user and session_user.get("authenticated"):
+            if not is_authenticated:
+                logger.info("Unauthenticated request for UI; rendering login page")
+                response = templates.TemplateResponse(
+                    "login.html",
+                    {
+                        "request": request,
+                        "auth_enabled": settings.auth_enabled,
+                        "environment_name": environment_name,
+                        "app_name": settings.app_name,
+                        "build_metadata": build_metadata,
+                        "build_metadata_payload": _build_metadata_payload(),
+                        "github_url": PROJECT_GITHUB_URL,
+                        "api_reference_url": API_REFERENCE_URL,
+                    },
+                    status_code=status.HTTP_200_OK,
+                )
+            else:
                 username = session_user.get("preferred_username", "unknown")
                 logger.info(f"Authenticated request from user: {username}")
 
-            response = templates.TemplateResponse(
-                "index.html",
-                {
-                    "request": request,
-                    "auth_enabled": settings.auth_enabled,
-                    "environment_name": environment_name,
-                    # Convert to milliseconds
-                    "websocket_refresh_time": settings.websocket_refresh_time * 1000,
-                    # Convert to milliseconds
-                    "websocket_ping_interval": settings.websocket_ping_interval * 1000,
-                    "job_schema": get_job_schema(),
-                    "agent_deployment": host_deployment_service.get_startup_summary(),
-                    "build_metadata": build_metadata,
-                    "build_metadata_payload": _build_metadata_payload(),
-                    "app_name": settings.app_name,
-                },
-            )
+                response = templates.TemplateResponse(
+                    "index.html",
+                    {
+                        "request": request,
+                        "auth_enabled": settings.auth_enabled,
+                        "environment_name": environment_name,
+                        # Convert to milliseconds
+                        "websocket_refresh_time": settings.websocket_refresh_time * 1000,
+                        # Convert to milliseconds
+                        "websocket_ping_interval": settings.websocket_ping_interval * 1000,
+                        "job_schema": get_job_schema(),
+                        "agent_deployment": host_deployment_service.get_startup_summary(),
+                        "build_metadata": build_metadata,
+                        "build_metadata_payload": _build_metadata_payload(),
+                        "app_name": settings.app_name,
+                    },
+                )
 
         # Add cache headers to prevent caching issues
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
