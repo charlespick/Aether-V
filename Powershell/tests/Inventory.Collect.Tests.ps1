@@ -3,6 +3,30 @@ $scriptRoot = Split-Path -Parent $here
 $scriptPath = Join-Path $scriptRoot 'Inventory.Collect.ps1'
 
 Describe 'Inventory.Collect.ps1' {
+    BeforeAll {
+        $script:removeClusterNodeStub = $false
+        if (-not (Get-Command -Name Get-ClusterNode -ErrorAction SilentlyContinue)) {
+            function global:Get-ClusterNode { throw 'Get-ClusterNode should be mocked in tests.' }
+            $script:removeClusterNodeStub = $true
+        }
+
+        $script:removeGetVmStub = $false
+        if (-not (Get-Command -Name Get-VM -ErrorAction SilentlyContinue)) {
+            function global:Get-VM { throw 'Get-VM should be mocked in tests.' }
+            $script:removeGetVmStub = $true
+        }
+    }
+
+    AfterAll {
+        if ($script:removeClusterNodeStub) {
+            Remove-Item Function:\Get-ClusterNode -ErrorAction SilentlyContinue
+        }
+
+        if ($script:removeGetVmStub) {
+            Remove-Item Function:\Get-VM -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'captures cluster name and VM statistics when commands succeed' {
         Mock Get-ClusterNode -ParameterFilter { $Name -eq 'HOST1' } {
             [pscustomobject]@{ Cluster = [pscustomobject]@{ Name = 'ClusterA' } }

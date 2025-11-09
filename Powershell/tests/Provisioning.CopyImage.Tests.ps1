@@ -3,6 +3,19 @@ $scriptRoot = Split-Path -Parent $here
 . (Join-Path $scriptRoot 'Provisioning.CopyImage.ps1')
 
 Describe 'Invoke-ProvisioningCopyImage' {
+    BeforeAll {
+        $script:removeClusterVolumeStub = $false
+        if (-not (Get-Command -Name Get-ClusterSharedVolume -ErrorAction SilentlyContinue)) {
+            function global:Get-ClusterSharedVolume { throw 'Get-ClusterSharedVolume should be mocked in tests.' }
+            $script:removeClusterVolumeStub = $true
+        }
+    }
+
+    AfterAll {
+        if ($script:removeClusterVolumeStub) {
+            Remove-Item Function:\Get-ClusterSharedVolume -ErrorAction SilentlyContinue
+        }
+    }
 
     It 'copies the image to the destination volume when prerequisites are met' {
         $diskImages = @(

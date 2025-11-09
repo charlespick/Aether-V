@@ -23,6 +23,10 @@ function Invoke-ProvisioningCopyImage {
         throw "Unable to locate a DiskImages directory on any cluster shared volume."
     }
 
+    if (-not (Get-Command -Name Get-ClusterSharedVolume -ErrorAction SilentlyContinue)) {
+        throw 'Get-ClusterSharedVolume command is not available. Install the FailoverClusters module.'
+    }
+
     $targetVolume = Get-ClusterSharedVolume |
         Sort-Object { $_.SharedVolumeInfo.Partition.FreeSpace } -Descending |
         Select-Object -First 1

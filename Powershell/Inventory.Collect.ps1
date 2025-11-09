@@ -17,38 +17,46 @@ $result = @{
 }
 
 try {
-    try {
-        $clusterNode = Get-ClusterNode -Name $ComputerName -ErrorAction Stop
-        if ($clusterNode -and $clusterNode.Cluster) {
-            $result.Host.ClusterName = $clusterNode.Cluster.Name
+    if (Get-Command -Name Get-ClusterNode -ErrorAction SilentlyContinue) {
+        try {
+            $clusterNode = Get-ClusterNode -Name $ComputerName -ErrorAction Stop
+            if ($clusterNode -and $clusterNode.Cluster) {
+                $result.Host.ClusterName = $clusterNode.Cluster.Name
+            }
+        } catch {
+            $result.Host.Warnings += "Cluster lookup failed: $($_.Exception.Message)"
         }
-    } catch {
-        $result.Host.Warnings += "Cluster lookup failed: $($_.Exception.Message)"
+    } else {
+        $result.Host.Warnings += 'Cluster lookup skipped: Get-ClusterNode command not available.'
     }
 
-    $vmProjection = Get-VM | Select-Object `
-        Name, `
-        @{Name='State';Expression={$_.State.ToString()}}, `
-        ProcessorCount, `
-        @{Name='MemoryGB';Expression={[math]::Round(($_.MemoryAssigned/1GB), 2)}}, `
-        @{Name='CreationTime';Expression={
-            if ($_.CreationTime) {
-                $_.CreationTime.ToUniversalTime().ToString('o')
-            } else {
-                $null
-            }
-        }}, `
-        @{Name='Generation';Expression={$_.Generation}}, `
-        @{Name='Version';Expression={$_.Version}}, `
-        @{Name='OperatingSystem';Expression={
-            if ($_.OperatingSystem) {
-                $_.OperatingSystem.ToString()
-            } else {
-                $null
-            }
-        }}
+    if (Get-Command -Name Get-VM -ErrorAction SilentlyContinue) {
+        $vmProjection = Get-VM | Select-Object `
+            Name, `
+            @{Name='State';Expression={$_.State.ToString()}}, `
+            ProcessorCount, `
+            @{Name='MemoryGB';Expression={[math]::Round(($_.MemoryAssigned/1GB), 2)}}, `
+            @{Name='CreationTime';Expression={
+                if ($_.CreationTime) {
+                    $_.CreationTime.ToUniversalTime().ToString('o')
+                } else {
+                    $null
+                }
+            }}, `
+            @{Name='Generation';Expression={$_.Generation}}, `
+            @{Name='Version';Expression={$_.Version}}, `
+            @{Name='OperatingSystem';Expression={
+                if ($_.OperatingSystem) {
+                    $_.OperatingSystem.ToString()
+                } else {
+                    $null
+                }
+            }}
 
-    $result.VirtualMachines = $vmProjection
+        $result.VirtualMachines = $vmProjection
+    } else {
+        $result.Host.Warnings += 'Hyper-V lookup skipped: Get-VM command not available.'
+    }
 } catch {
     $result.Host.Error = $_.Exception.Message
     $result.Host.ExceptionType = $_.Exception.GetType().FullName
