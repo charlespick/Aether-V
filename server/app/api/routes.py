@@ -6,12 +6,10 @@ import uuid
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
-from typing import Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional
 from datetime import datetime
 import secrets
-import time
 from dataclasses import dataclass
-from threading import Lock
 
 from ..core.models import (
     Host,
@@ -60,50 +58,6 @@ from ..services.websocket_service import websocket_manager
 from ..services.remote_task_service import remote_task_service
 
 logger = logging.getLogger(__name__)
-
-_LOGOUT_TOKEN_TTL_SECONDS = 600
-_logout_token_store: Dict[str, Tuple[str, float]] = {}
-_logout_token_lock = Lock()
-
-
-def _purge_expired_logout_tokens(now: Optional[float] = None) -> None:
-    """Remove expired logout tokens to keep the in-memory store bounded."""
-
-    current_time = now or time.time()
-    expired = [
-        reference
-        for reference, (_, stored_at) in _logout_token_store.items()
-        if current_time - stored_at > _LOGOUT_TOKEN_TTL_SECONDS
-    ]
-    for reference in expired:
-        _logout_token_store.pop(reference, None)
-
-
-def _store_logout_token(id_token: str) -> str:
-    """Persist an ID token in-memory and return a reference suitable for sessions."""
-
-    reference = secrets.token_urlsafe(16)
-    now = time.time()
-    with _logout_token_lock:
-        _purge_expired_logout_tokens(now)
-        _logout_token_store[reference] = (id_token, now)
-    return reference
-
-
-def _pop_logout_token(reference: str) -> Optional[str]:
-    """Retrieve and remove a stored logout token if it has not expired."""
-
-    now = time.time()
-    with _logout_token_lock:
-        token_entry = _logout_token_store.pop(reference, None)
-    if not token_entry:
-        return None
-
-    token, stored_at = token_entry
-    if now - stored_at > _LOGOUT_TOKEN_TTL_SECONDS:
-        return None
-
-    return token
 router = APIRouter()
 
 
@@ -279,10 +233,6 @@ def _build_idp_logout_url(
 
     params: Dict[str, str] = {}
     id_token_hint = context.get("id_token")
-    if not id_token_hint:
-        reference = context.get("id_token_ref")
-        if reference:
-            id_token_hint = _pop_logout_token(reference)
     if id_token_hint:
         params["id_token_hint"] = id_token_hint
 
@@ -873,7 +823,7 @@ async def auth_callback(request: Request):
         if end_session_endpoint:
             logout_context["end_session_endpoint"] = end_session_endpoint
         if id_token:
-            logout_context["id_token_ref"] = _store_logout_token(id_token)
+            logout_context["id_token"] = id_token
 
         session_state = token.get("session_state")
         if session_state:

@@ -246,7 +246,7 @@ async def test_logout_returns_idp_redirect(monkeypatch):
         "app": SimpleNamespace(),
         "session": {
             "oidc_logout": {
-                "id_token_ref": routes._store_logout_token("test-token"),
+                "id_token": "test-token",
                 "end_session_endpoint": "https://idp/logout",
                 "session_state": "state-token",
             }
