@@ -91,6 +91,13 @@ class BaseView {
     }
 }
 
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        ViewManager,
+        BaseView,
+    };
+}
+
 // Overview View (Aether root)
 class OverviewView extends BaseView {
     async render() {

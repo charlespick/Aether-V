@@ -10,6 +10,14 @@ from unittest.mock import patch
 
 yaml_stub = types.ModuleType("yaml")
 yaml_stub.safe_dump = lambda data, sort_keys=False: ""
+yaml_stub.safe_load = lambda stream: {
+    "version": 1,
+    "fields": [
+        {"id": "vm_name", "type": "string"},
+        {"id": "admin_password", "type": "secret"},
+        {"id": "guest_la_pw", "secret": True},
+    ],
+}
 sys.modules.setdefault("yaml", yaml_stub)
 
 try:

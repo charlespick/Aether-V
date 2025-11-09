@@ -9,3 +9,9 @@ docker-compose.override.yml
 ModuleAnalysisCache-*
 StartupProfileData-NonInteractive
 .vscode/
+
+# Local development artifacts
+.venv/
+node_modules/
+__pycache__/
+*.py[cod]

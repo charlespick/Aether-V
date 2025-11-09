@@ -201,9 +201,9 @@ class HostDeploymentServiceIngressTests(IsolatedAsyncioTestCase):
         self.service._wait_for_agent_endpoint_ready = wait_mock
 
         async def run_call_side_effect(hostname, func, *args, **kwargs):
-            if func is self.service._get_host_version:
+            if getattr(func, "__name__", None) == "_get_host_version":
                 return "1.0.0"
-            if func is self.service._deploy_to_host:
+            if getattr(func, "__name__", None) == "_deploy_to_host":
                 self.assertEqual(wait_mock.await_count, 1)
                 return True
             raise AssertionError(f"Unexpected function {func}")
@@ -222,7 +222,7 @@ class HostDeploymentServiceIngressTests(IsolatedAsyncioTestCase):
         self.service._wait_for_agent_endpoint_ready = wait_mock
 
         async def run_call_side_effect(hostname, func, *args, **kwargs):
-            if func is self.service._get_host_version:
+            if getattr(func, "__name__", None) == "_get_host_version":
                 return "2.0.0"
             raise AssertionError(f"Unexpected function {func}")
 
