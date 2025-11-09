@@ -3,8 +3,9 @@ import asyncio
 import json
 import logging
 import uuid
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
 from datetime import datetime
 import secrets
@@ -35,6 +36,7 @@ from ..core.auth import (
     require_permission,
     validate_oidc_token,
     validate_session_data,
+    get_end_session_endpoint,
 )
 from ..core.config import settings, get_config_validation_result
 from ..core.build_info import build_metadata
@@ -173,6 +175,80 @@ def _current_build_info() -> BuildInfo:
         build_time=build_metadata.build_time,
         build_host=build_metadata.build_host,
     )
+
+
+def _application_base_url(request: Request) -> str:
+    """Construct the base application URL respecting HTTPS enforcement settings."""
+
+    scheme = "https" if settings.oidc_force_https else request.url.scheme
+    host_header = request.headers.get("host")
+    if host_header:
+        return f"{scheme}://{host_header.rstrip('/')}"
+
+    base_url = str(request.base_url).rstrip("/")
+    if settings.oidc_force_https and base_url.startswith("http://"):
+        parts = urlsplit(base_url)
+        return urlunsplit(("https", parts.netloc, "", "", ""))
+    return base_url
+
+
+def _ensure_absolute_url(request: Request, target: Optional[str]) -> str:
+    """Ensure the provided URL is absolute by using the current request context."""
+
+    if not target:
+        return f"{_application_base_url(request)}/"
+
+    parsed = urlsplit(target)
+    if parsed.scheme and parsed.netloc:
+        return target
+
+    base_url = _application_base_url(request)
+    if target.startswith("/"):
+        return f"{base_url}{target}"
+
+    return f"{base_url}/{target}"
+
+
+def _build_post_logout_redirect_url(request: Request) -> str:
+    """Determine where users should be sent after a logout completes."""
+
+    configured = settings.oidc_post_logout_redirect_uri
+    if configured:
+        return _ensure_absolute_url(request, configured)
+
+    return f"{_application_base_url(request)}/"
+
+
+def _build_idp_logout_url(
+    request: Request,
+    logout_context: Optional[Dict[str, str]],
+    post_logout_redirect: str,
+) -> Optional[str]:
+    """Construct an IdP logout URL when single logout is supported."""
+
+    context = logout_context or {}
+    endpoint = context.get("end_session_endpoint") or get_end_session_endpoint()
+    if not endpoint:
+        return None
+
+    params: Dict[str, str] = {}
+    id_token_hint = context.get("id_token")
+    if id_token_hint:
+        params["id_token_hint"] = id_token_hint
+
+    if post_logout_redirect:
+        params["post_logout_redirect_uri"] = post_logout_redirect
+
+    # Reuse any stored logout state where available to appease strict providers
+    state = context.get("state") or context.get("session_state")
+    if state:
+        params["state"] = state
+
+    if not params:
+        return endpoint
+
+    separator = "&" if "?" in endpoint else "?"
+    return f"{endpoint}{separator}{urlencode(params)}"
 
 
 @router.get("/healthz", response_model=HealthResponse, tags=["Health"])
@@ -742,6 +818,22 @@ async def auth_callback(request: Request):
             "auth_timestamp": datetime.now().isoformat()
         }
 
+        logout_context: Dict[str, str] = {}
+        end_session_endpoint = get_end_session_endpoint()
+        if end_session_endpoint:
+            logout_context["end_session_endpoint"] = end_session_endpoint
+        if id_token:
+            logout_context["id_token"] = id_token
+
+        session_state = token.get("session_state")
+        if session_state:
+            logout_context["session_state"] = session_state
+
+        if logout_context:
+            request.session["oidc_logout"] = logout_context
+        else:
+            request.session.pop("oidc_logout", None)
+
         username = user_info.get("preferred_username",
                                  user_info.get("sub", "unknown"))
         logger.info(f"Authentication successful for user: {username}")
@@ -832,13 +924,28 @@ async def get_auth_token(request: Request):
     return response
 
 
-@router.post("/auth/logout", tags=["Authentication"])
+@router.api_route("/auth/logout", methods=["POST", "GET"], tags=["Authentication"])
 async def logout(request: Request):
-    """Logout and clear session."""
-    # Clear session data
+    """Logout the current session and optionally initiate IdP single logout."""
+
+    logout_context = request.session.get("oidc_logout")
+    post_logout_redirect = _build_post_logout_redirect_url(request)
+    idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+
+    # Clear session data regardless of logout method
     request.session.clear()
 
-    return {"message": "Logged out successfully"}
+    if request.method == "GET":
+        target = idp_logout_url or post_logout_redirect
+        return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
+
+    payload = {"message": "Logged out successfully"}
+    if post_logout_redirect:
+        payload["redirect_url"] = post_logout_redirect
+    if idp_logout_url:
+        payload["idp_logout_url"] = idp_logout_url
+
+    return JSONResponse(payload)
 
 
 @router.websocket("/ws")

@@ -139,11 +139,28 @@ def discover_oidc_metadata(issuer: str) -> Dict[str, str]:
         logger.error(f"Failed to discover OIDC metadata: {e}")
         raise
 
+# Cache of discovered OIDC metadata so other modules can reuse logout endpoints
+OIDC_METADATA: Optional[Dict[str, Any]] = None
+_DISCOVERED_END_SESSION_ENDPOINT: Optional[str] = None
+
+
+def get_end_session_endpoint() -> Optional[str]:
+    """Return the configured or discovered OIDC end session endpoint if available."""
+
+    if settings.oidc_end_session_endpoint:
+        return settings.oidc_end_session_endpoint
+    return _DISCOVERED_END_SESSION_ENDPOINT
+
+
 # Initialize JWKS cache when authentication is enabled and OIDC is configured
 jwks_cache: Optional[JWKSCache] = None
 if settings.auth_enabled and settings.oidc_issuer_url:
     try:
         metadata = discover_oidc_metadata(settings.oidc_issuer_url)
+        OIDC_METADATA = metadata
+        end_session_endpoint = metadata.get("end_session_endpoint")
+        if end_session_endpoint:
+            _DISCOVERED_END_SESSION_ENDPOINT = end_session_endpoint
         jwks_uri = metadata.get("jwks_uri")
         if jwks_uri:
             jwks_cache = JWKSCache(jwks_uri, ttl=settings.jwks_cache_ttl)

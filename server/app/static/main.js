@@ -779,17 +779,29 @@ async function initializeAuth() {
 // Secure logout function
 async function logout() {
     setProfileOverlayVisibility(false);
-    if (!authEnabled) {
-        console.log('OIDC not enabled, no logout needed');
-        return;
-    }
+
+    let redirectTarget = '/';
 
     try {
         // Call the logout endpoint (no auth header needed - uses session)
-        await fetch('/auth/logout', {
+        const response = await fetch('/auth/logout', {
             method: 'POST',
             credentials: 'same-origin'
         });
+
+        if (response.ok) {
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                try {
+                    const payload = await response.json();
+                    redirectTarget = payload?.idp_logout_url || payload?.redirect_url || redirectTarget;
+                } catch (parseError) {
+                    console.warn('Unexpected logout response payload', parseError);
+                }
+            }
+        } else {
+            console.warn('Logout request returned status', response.status);
+        }
     } catch (error) {
         console.error('Logout error:', error);
     }
@@ -799,8 +811,7 @@ async function logout() {
 
     updateProfileOverlayContent(userInfo);
 
-    // Redirect to login
-    window.location.href = '/auth/login';
+    window.location.href = redirectTarget;
 }
 
 async function loadInventory() {
