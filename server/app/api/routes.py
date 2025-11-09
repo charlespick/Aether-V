@@ -559,6 +559,43 @@ async def delete_notification(
 
 
 # OIDC Authentication routes
+@router.post("/auth/direct-login", tags=["Authentication"])
+async def direct_login(request: Request):
+    """Create a local session when authentication is disabled."""
+
+    if settings.auth_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Authentication is enabled; use the identity provider",
+        )
+
+    if not settings.allow_dev_auth:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Development authentication is not permitted",
+        )
+
+    dev_user = get_dev_user()
+    now_iso = datetime.now().isoformat()
+
+    request.session["user_info"] = {
+        "preferred_username": dev_user.get("preferred_username", "dev-user"),
+        "sub": dev_user.get("sub", "dev-user"),
+        "name": dev_user.get("preferred_username", "dev-user"),
+        "email": dev_user.get("email"),
+        "roles": dev_user.get("roles", []),
+        "permissions": dev_user.get("permissions", []),
+        "identity_type": dev_user.get("identity_type", "user"),
+        "auth_type": dev_user.get("auth_type", "dev"),
+        "authenticated": True,
+        "auth_timestamp": now_iso,
+    }
+
+    logger.info("Direct login session established for development access")
+
+    return {"authenticated": True}
+
+
 @router.get("/auth/login", tags=["Authentication"])
 async def login(request: Request):
     """Initiate OIDC login flow."""
