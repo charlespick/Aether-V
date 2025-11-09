@@ -1,8 +1,9 @@
 from datetime import datetime
+import json
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 
 from app.api import routes
 from app.core.models import BuildInfo, VMState
@@ -226,3 +227,70 @@ async def test_handle_vm_action_wraps_vm_control_error(monkeypatch):
 
     assert exc.value.status_code == status.HTTP_502_BAD_GATEWAY
     assert "Failed to start VM" in exc.value.detail["message"]
+
+
+@pytest.mark.anyio("asyncio")
+async def test_logout_returns_idp_redirect(monkeypatch):
+    monkeypatch.setattr(routes.settings, "oidc_force_https", False)
+    monkeypatch.setattr(routes.settings, "oidc_post_logout_redirect_uri", None)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/auth/logout",
+        "headers": [(b"host", b"example.com")],
+        "client": ("127.0.0.1", 1234),
+        "scheme": "http",
+        "server": ("example.com", 80),
+        "query_string": b"",
+        "app": SimpleNamespace(),
+        "session": {
+            "oidc_logout": {
+                "id_token": "test-token",
+                "end_session_endpoint": "https://idp/logout",
+                "session_state": "state-token",
+            }
+        },
+    }
+
+    request = Request(scope)
+    response = await routes.logout(request)
+
+    assert isinstance(response, routes.JSONResponse)
+
+    payload = json.loads(response.body.decode())
+    assert payload["redirect_url"] == "http://example.com/"
+    assert "id_token_hint=test-token" in payload["idp_logout_url"]
+    assert "post_logout_redirect_uri=http%3A%2F%2Fexample.com%2F" in payload["idp_logout_url"]
+    assert request.session == {}
+
+
+@pytest.mark.anyio("asyncio")
+async def test_logout_get_prefers_idp_redirect(monkeypatch):
+    monkeypatch.setattr(routes.settings, "oidc_force_https", True)
+    monkeypatch.setattr(routes.settings, "oidc_post_logout_redirect_uri", "/after")
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/auth/logout",
+        "headers": [(b"host", b"app.example" + b":8443")],
+        "client": ("127.0.0.1", 4321),
+        "scheme": "http",
+        "server": ("app.example", 8443),
+        "query_string": b"",
+        "app": SimpleNamespace(),
+        "session": {
+            "oidc_logout": {
+                "end_session_endpoint": "https://issuer/logout",
+            }
+        },
+    }
+
+    request = Request(scope)
+    response = await routes.logout(request)
+
+    assert isinstance(response, routes.RedirectResponse)
+    location = response.headers["location"]
+    assert location.startswith("https://issuer/logout")
+    assert "post_logout_redirect_uri=https%3A%2F%2Fapp.example%3A8443%2Fafter" in location

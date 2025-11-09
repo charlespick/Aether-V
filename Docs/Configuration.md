@@ -28,6 +28,8 @@ for the UI banner.
 | `OIDC_REDIRECT_URI`             | _(unset)_                    | Yes (when auth enabled) | Callback URL registered with the IdP; must match the deployment hostname.                                            |
 | `OIDC_ROLE_NAME`                | _(unset)_                    | Legacy                  | Optional single-role fallback for backwards compatibility with older deployments.                                   |
 | `OIDC_FORCE_HTTPS`              | `true`                       | No                      | Enforce HTTPS redirects during login. Set `false` only for local HTTP testing.                                       |
+| `OIDC_END_SESSION_ENDPOINT`     | _(unset)_                    | No                      | Optional override for the IdP single logout endpoint discovered from metadata.                                       |
+| `OIDC_POST_LOGOUT_REDIRECT_URI` | _(unset)_                    | No                      | Absolute or relative path the IdP should redirect to after logout completes.                                         |
 | `JWKS_CACHE_TTL`                | `300`                        | No                      | Seconds to cache the OIDC signing keys. Increase if rate-limited by the IdP.                                         |
 | `MAX_TOKEN_AGE`                 | `3600`                       | No                      | Maximum accepted token age in seconds. Align with the IdP token lifetime.                                            |
 | `SESSION_MAX_AGE`               | `3600`                       | No                      | Session cookie lifetime in seconds. Longer values keep sessions alive when idle.                                     |

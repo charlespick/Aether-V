@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     oidc_role_name: Optional[str] = None  # Legacy fallback
     oidc_redirect_uri: Optional[str] = None
     oidc_force_https: bool = True  # Always use HTTPS for OIDC callbacks
+    oidc_end_session_endpoint: Optional[str] = None  # Optional override for OIDC single logout
+    oidc_post_logout_redirect_uri: Optional[str] = None  # Where IdPs should return users after logout
 
     # Session management settings
     session_secret_key: Optional[str] = None  # Session middleware secret key
