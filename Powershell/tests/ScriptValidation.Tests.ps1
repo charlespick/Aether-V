@@ -3,7 +3,9 @@ $ErrorActionPreference = 'Stop'
 
 $script:scripts = @()
 
-function Get-RepositoryRoot {
+BeforeAll {
+    $repositoryRoot = $null
+
     $scriptRootCandidates = @(
         $PSScriptRoot,
         $(if ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { $null }),
@@ -15,29 +17,29 @@ function Get-RepositoryRoot {
             $resolvedCandidate = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).ProviderPath
             $parent = Split-Path -Parent $resolvedCandidate
             $repositoryCandidate = Split-Path -Parent $parent
-            return (Resolve-Path -LiteralPath $repositoryCandidate -ErrorAction Stop).ProviderPath
+            $repositoryRoot = (Resolve-Path -LiteralPath $repositoryCandidate -ErrorAction Stop).ProviderPath
+            break
         } catch {
             continue
         }
     }
 
-    if ($env:GITHUB_WORKSPACE) {
+    if (-not $repositoryRoot -and $env:GITHUB_WORKSPACE) {
         try {
-            return (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE -ErrorAction Stop).ProviderPath
+            $repositoryRoot = (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE -ErrorAction Stop).ProviderPath
         } catch {
             # fall through to final failure
         }
     }
 
-    try {
-        return (Resolve-Path -LiteralPath (Get-Location).ProviderPath -ErrorAction Stop).ProviderPath
-    } catch {
-        throw 'Unable to determine repository root for script validation.'
+    if (-not $repositoryRoot) {
+        try {
+            $repositoryRoot = (Resolve-Path -LiteralPath (Get-Location).ProviderPath -ErrorAction Stop).ProviderPath
+        } catch {
+            throw 'Unable to determine repository root for script validation.'
+        }
     }
-}
 
-BeforeAll {
-    $repositoryRoot = Get-RepositoryRoot
     $script:scripts = Get-ChildItem -Path $repositoryRoot -Filter '*.ps1' -Recurse -File
 }
 
