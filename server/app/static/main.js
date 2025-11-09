@@ -4,6 +4,13 @@ window.appConfig = configData;
 window.jobSchema = configData.job_schema || null;
 const authEnabled = configData.auth_enabled;
 
+const { DEFAULT_STYLE, applyIcon, renderDefaultIcon } = window.iconUtils;
+const ICON_STYLE = DEFAULT_STYLE;
+
+function icon(name, options = {}) {
+    return renderDefaultIcon(name, options);
+}
+
 const defaultAgentDeploymentState = {
     status: 'idle',
     provisioning_available: true,
@@ -327,22 +334,69 @@ window.subscribeToJobUpdates = subscribeToJobUpdates;
 window.unsubscribeFromJobUpdates = unsubscribeFromJobUpdates;
 
 const VM_STATE_META = {
-    Running: { emoji: '🟢', badgeClass: 'running', dotClass: 'running' },
-    Creating: { emoji: '🟡', badgeClass: 'creating', dotClass: 'creating' },
-    Starting: { emoji: '🟡', badgeClass: 'creating', dotClass: 'creating' },
-    Deleting: { emoji: '🗑️', badgeClass: 'deleting', dotClass: 'off' },
-    Off: { emoji: '⚫', badgeClass: 'off', dotClass: 'off' },
-    Paused: { emoji: '⏸️', badgeClass: 'off', dotClass: 'off' },
-    Saved: { emoji: '💾', badgeClass: 'off', dotClass: 'off' },
-    Stopping: { emoji: '🟠', badgeClass: 'off', dotClass: 'off' },
-    Unknown: { emoji: '❔', badgeClass: 'off', dotClass: 'off' }
+    Running: {
+        iconName: 'play_circle',
+        iconOptions: { className: 'vm-status-icon status-success', size: 18 },
+        badgeClass: 'running',
+        dotClass: 'running',
+    },
+    Creating: {
+        iconName: 'hourglass_top',
+        iconOptions: { className: 'vm-status-icon status-warning', size: 18 },
+        badgeClass: 'creating',
+        dotClass: 'creating',
+    },
+    Starting: {
+        iconName: 'hourglass_top',
+        iconOptions: { className: 'vm-status-icon status-warning', size: 18 },
+        badgeClass: 'creating',
+        dotClass: 'creating',
+    },
+    Deleting: {
+        iconName: 'delete',
+        iconOptions: { className: 'vm-status-icon status-warning', size: 18 },
+        badgeClass: 'deleting',
+        dotClass: 'deleting',
+    },
+    Off: {
+        iconName: 'power_settings_new',
+        iconOptions: { className: 'vm-status-icon status-muted', size: 18 },
+        badgeClass: 'off',
+        dotClass: 'off',
+    },
+    Paused: {
+        iconName: 'pause_circle',
+        iconOptions: { className: 'vm-status-icon status-muted', size: 18 },
+        badgeClass: 'off',
+        dotClass: 'off',
+    },
+    Saved: {
+        iconName: 'save',
+        iconOptions: { className: 'vm-status-icon status-muted', size: 18 },
+        badgeClass: 'off',
+        dotClass: 'off',
+    },
+    Stopping: {
+        iconName: 'stop_circle',
+        iconOptions: { className: 'vm-status-icon status-warning', size: 18 },
+        badgeClass: 'off',
+        dotClass: 'off',
+    },
+    Unknown: {
+        iconName: 'help',
+        iconOptions: { className: 'vm-status-icon status-muted', size: 18 },
+        badgeClass: 'off',
+        dotClass: 'off',
+    },
 };
 
 function getVmStateMeta(state) {
     const normalized = typeof state === 'string' && state.trim() ? state.trim() : 'Unknown';
     const meta = VM_STATE_META[normalized] || VM_STATE_META.Unknown;
     return {
-        emoji: meta.emoji,
+        icon: icon(meta.iconName, { ...meta.iconOptions }),
+        iconName: meta.iconName,
+        iconOptions: { ...meta.iconOptions },
         badgeClass: meta.badgeClass,
         dotClass: meta.dotClass,
         label: normalized
@@ -903,8 +957,8 @@ function updateNotificationPanel(notificationsData) {
 
     if (notificationsData.notifications.length === 0) {
         notificationsList.innerHTML = `
-            <div class="notification-item">
-                <div class="notification-icon">📭</div>
+            <div class="notification-item empty">
+                <div class="notification-icon">${icon('inbox', { className: 'icon--lg', size: 24 })}</div>
                 <div class="notification-content">
                     <div class="notification-title">No notifications</div>
                     <div class="notification-message">You're all caught up!</div>
@@ -1008,7 +1062,9 @@ function applyNotificationDataToElement(element, notification) {
 
     const iconEl = element.querySelector('.notification-icon');
     if (iconEl) {
-        iconEl.textContent = getNotificationIcon(merged);
+        const iconConfig = getNotificationIcon(merged);
+        const className = ['icon--lg', iconConfig?.className || ''].filter(Boolean).join(' ');
+        applyIcon(iconEl, ICON_STYLE, iconConfig?.name || 'info', { className, size: 24 });
     }
 
     const titleEl = element.querySelector('.notification-title');
@@ -1056,28 +1112,28 @@ function getNotificationIcon(notification) {
         const status = notification.metadata?.status;
         switch (status) {
             case 'running':
-                return '⏳';
+                return { name: 'hourglass_top' };
             case 'completed':
-                return '✅';
+                return { name: 'check_circle', className: 'status-success' };
             case 'failed':
-                return '❌';
+                return { name: 'error', className: 'status-error' };
             case 'pending':
-                return '🗂️';
+                return { name: 'pending', className: 'status-warning' };
             default:
-                return '⚙️';
+                return { name: 'settings' };
         }
     }
 
     switch (notification.level) {
         case 'error':
-            return '⚠️';
+            return { name: 'error', className: 'status-error' };
         case 'warning':
-            return '🔶';
+            return { name: 'warning_amber', className: 'status-warning' };
         case 'success':
-            return '✅';
+            return { name: 'check_circle', className: 'status-success' };
         case 'info':
         default:
-            return '📋';
+            return { name: 'assignment' };
     }
 }
 
@@ -1252,7 +1308,7 @@ function updateSidebarNavigation(inventory) {
             clustersHtml += `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-cluster="${cluster.name}">
                     <div class="nav-item group-header" data-nav-type="cluster" data-cluster-name="${cluster.name}">
-                        <span class="nav-icon">📦</span>
+                        ${icon('inventory_2', { className: 'nav-icon' })}
                         <span class="nav-label">${cluster.name}</span>
                         <span class="expand-icon"></span>
                     </div>
@@ -1291,7 +1347,7 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
             return `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-host="${host.hostname}">
                     <div class="sub-item group-header" data-nav-type="host" data-hostname="${host.hostname}">
-                        <span class="sub-icon">🖥️</span>
+                        ${icon('computer', { className: 'sub-icon' })}
                         <span class="sub-label">${shortName}</span>
                         ${hostVMs.length > 0 ? '<span class="expand-icon"></span>' : ''}
                     </div>
@@ -1301,7 +1357,7 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
                                 const meta = getVmStateMeta(vm.state);
                                 return `
                                     <li class="vm-item" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
-                                        <span class="vm-status">${meta.emoji}</span>
+                                        <span class="vm-status">${meta.icon}</span>
                                         <span class="vm-name">${vm.name}</span>
                                     </li>
                                 `;
@@ -1324,7 +1380,7 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
             const hostShort = vm.host.split('.')[0];
             return `
                 <li class="vm-item direct" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
-                    <span class="vm-status">${meta.emoji}</span>
+                    <span class="vm-status">${meta.icon}</span>
                     <span class="vm-name">${vm.name}</span>
                     <span class="vm-host">(${hostShort})</span>
                 </li>
@@ -1843,11 +1899,19 @@ class SearchOverlay {
         if (vms.length > 0) {
             html += '<ul class="search-results-list">';
             vms.forEach(vm => {
-                const statusEmoji = vm.state === 'Running' ? '🟢' : '⚫';
                 const hostShort = vm.host.split('.')[0];
+                const meta = getVmStateMeta(vm.state);
+                const iconOptions = {
+                    ...meta.iconOptions,
+                    className: ['search-result-icon', meta.iconOptions?.className || ''].filter(Boolean).join(' '),
+                };
+                if (typeof iconOptions.size !== 'number') {
+                    iconOptions.size = 20;
+                }
+                const vmIcon = icon(meta.iconName, iconOptions);
                 html += `
                     <li class="search-result-item" onclick="searchOverlay.close(); viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
-                        <span class="search-result-icon">${statusEmoji}</span>
+                        ${vmIcon}
                         <div class="search-result-details">
                             <div class="search-result-title">${vm.name}</div>
                             <div class="search-result-subtitle">on ${hostShort} • ${vm.state}</div>
@@ -1868,10 +1932,13 @@ class SearchOverlay {
             html += '<ul class="search-results-list">';
             hosts.forEach(host => {
                 const shortName = host.hostname.split('.')[0];
-                const statusEmoji = host.status === 'connected' ? '🟢' : '🔴';
+                const iconClass = host.status === 'connected' ? 'status-icon--online' : 'status-icon--offline';
+                const hostIcon = icon('computer', {
+                    className: ['search-result-icon', iconClass].join(' '),
+                });
                 html += `
                     <li class="search-result-item" onclick="searchOverlay.close(); viewManager.switchView('host', { hostname: '${host.hostname}' })">
-                        <span class="search-result-icon">🖥️</span>
+                        ${hostIcon}
                         <div class="search-result-details">
                             <div class="search-result-title">${shortName}</div>
                             <div class="search-result-subtitle">${host.cluster || 'Default'} • ${host.status}</div>
@@ -1891,9 +1958,12 @@ class SearchOverlay {
         if (clusters.length > 0) {
             html += '<ul class="search-results-list">';
             clusters.forEach(cluster => {
+                const clusterIcon = icon('inventory_2', {
+                    className: 'search-result-icon status-muted',
+                });
                 html += `
                     <li class="search-result-item" onclick="searchOverlay.close(); viewManager.switchView('cluster', { name: '${cluster.name}' })">
-                        <span class="search-result-icon">📦</span>
+                        ${clusterIcon}
                         <div class="search-result-details">
                             <div class="search-result-title">${cluster.name}</div>
                             <div class="search-result-subtitle">Cluster</div>
