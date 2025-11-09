@@ -6,6 +6,7 @@ import json
 import logging
 import random
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, TypeVar
@@ -46,6 +47,28 @@ class InventoryScriptMissingError(RuntimeError):
         self.hostname = hostname
         self.script_path = script_path
         self.detail = message
+
+
+@dataclass
+class HostRefreshSnapshot:
+    """Immutable instructions describing how to apply a host refresh."""
+
+    hostname: str
+    refreshed: bool
+    skipped: bool
+    host: Optional[Host] = None
+    vms: List[VM] = field(default_factory=list)
+    expected_vm_keys: Optional[Set[str]] = None
+    mark_preparing: bool = False
+    clear_preparing: bool = False
+    error: Optional[str] = None
+    host_last_refresh: Optional[datetime] = None
+    clear_host_last_refresh: bool = False
+    clear_host_vms: bool = False
+    preserve_placeholders: bool = True
+    record_duration: bool = False
+    duration: Optional[float] = None
+    expected_interval: Optional[float] = None
 
 
 class InventoryService:
@@ -639,39 +662,42 @@ class InventoryService:
         refreshed_hosts: List[str] = []
         skipped_hosts: List[str] = []
 
-        async with self._refresh_lock:
-            logger.info(
-                "Refreshing inventory (%s) for %d host(s)",
-                reason,
-                len(target_hosts),
+        logger.info(
+            "Refreshing inventory (%s) for %d host(s)",
+            reason,
+            len(target_hosts),
+        )
+
+        for hostname in target_hosts:
+            snapshot = await self._refresh_host(
+                hostname,
+                reason=reason,
+                expected_interval=expected_interval if reason == "background" else None,
             )
+            await self._apply_host_snapshot(snapshot)
+            if snapshot.refreshed:
+                refreshed_hosts.append(hostname)
+            if snapshot.skipped:
+                skipped_hosts.append(hostname)
 
-            for hostname in target_hosts:
-                refreshed, skipped = await self._refresh_host(
-                    hostname,
-                    reason=reason,
-                    expected_interval=expected_interval if reason == "background" else None,
-                )
-                if refreshed:
-                    refreshed_hosts.append(hostname)
-                if skipped:
-                    skipped_hosts.append(hostname)
-
-            if rebuild_clusters and refreshed_hosts:
+        if rebuild_clusters and refreshed_hosts:
+            async with self._refresh_lock:
                 self._rebuild_clusters(configured_hosts)
                 self.last_refresh = datetime.utcnow()
-                logger.info(
-                    "Inventory refresh (%s) completed. Connected hosts: %d, Total VMs: %d",
-                    reason,
-                    len([host for host in self.hosts.values() if host.connected]),
-                    len(self.vms),
-                )
-            elif rebuild_clusters and not refreshed_hosts:
-                logger.info(
-                    "Inventory refresh (%s) deferred; %d host(s) pending preparation",
-                    reason,
-                    len(skipped_hosts),
-                )
+                connected_hosts = len([host for host in self.hosts.values() if host.connected])
+                total_vms = len(self.vms)
+            logger.info(
+                "Inventory refresh (%s) completed. Connected hosts: %d, Total VMs: %d",
+                reason,
+                connected_hosts,
+                total_vms,
+            )
+        elif rebuild_clusters and not refreshed_hosts:
+            logger.info(
+                "Inventory refresh (%s) deferred; %d host(s) pending preparation",
+                reason,
+                len(skipped_hosts),
+            )
 
         return {"refreshed_hosts": refreshed_hosts, "skipped_hosts": skipped_hosts}
 
@@ -691,31 +717,115 @@ class InventoryService:
 
         self.last_refresh = datetime.utcnow()
 
+    async def _apply_host_snapshot(self, snapshot: HostRefreshSnapshot) -> None:
+        """Apply a host refresh snapshot while holding the refresh lock."""
+
+        async with self._refresh_lock:
+            previous_host = self.hosts.get(snapshot.hostname)
+            self._apply_host_snapshot_locked(snapshot, previous_host)
+
+    def _apply_host_snapshot_locked(
+        self,
+        snapshot: HostRefreshSnapshot,
+        previous_host: Optional[Host],
+    ) -> None:
+        """Apply host refresh mutations. Caller must hold ``_refresh_lock``."""
+
+        if snapshot.mark_preparing:
+            self._mark_host_preparing(snapshot.hostname)
+            return
+
+        if snapshot.clear_preparing:
+            self._clear_preparing_host(snapshot.hostname)
+
+        if snapshot.host is not None:
+            self.hosts[snapshot.hostname] = snapshot.host
+
+        if snapshot.clear_host_vms:
+            self._clear_host_vms(
+                snapshot.hostname, preserve_placeholders=snapshot.preserve_placeholders
+            )
+
+        for vm in snapshot.vms:
+            key = f"{snapshot.hostname}:{vm.name}"
+            self._detach_placeholder_key(key)
+            self.vms[key] = vm
+
+        if snapshot.expected_vm_keys is not None:
+            active_placeholder_keys = self._active_placeholder_keys()
+            keys_to_remove = [
+                key
+                for key in list(self.vms.keys())
+                if key.startswith(f"{snapshot.hostname}:")
+                and key not in snapshot.expected_vm_keys
+                and key not in active_placeholder_keys
+            ]
+            for key in keys_to_remove:
+                del self.vms[key]
+
+        if snapshot.host_last_refresh is not None:
+            self._host_last_refresh[snapshot.hostname] = snapshot.host_last_refresh
+
+        if snapshot.clear_host_last_refresh:
+            self._host_last_refresh.pop(snapshot.hostname, None)
+
+        if snapshot.refreshed and not settings.dummy_data:
+            if previous_host and not previous_host.connected:
+                notification_service.create_host_reconnected_notification(snapshot.hostname)
+        elif snapshot.error and not settings.dummy_data:
+            if previous_host and previous_host.connected:
+                notification_service.create_host_unreachable_notification(
+                    snapshot.hostname, snapshot.error
+                )
+
+        if (
+            snapshot.record_duration
+            and snapshot.duration is not None
+            and snapshot.expected_interval is not None
+        ):
+            self._record_host_refresh_duration(
+                snapshot.hostname,
+                snapshot.duration,
+                snapshot.expected_interval,
+                snapshot.refreshed,
+            )
+
     async def _refresh_host(
         self,
         hostname: str,
         *,
         reason: str,
         expected_interval: Optional[float],
-    ) -> tuple[bool, bool]:
-        """Refresh inventory for a single host.
-
-        Returns a tuple of (refreshed, skipped) where skipped indicates the host was
-        deferred because it is still preparing deployment artifacts.
-        """
+    ) -> HostRefreshSnapshot:
+        """Refresh inventory for a single host and return a mutation snapshot."""
 
         logger.info("Refreshing inventory for host: %s", hostname)
 
-        if not await self._ensure_host_ready(hostname):
+        previous_host = self.hosts.get(hostname)
+        readiness = await self._ensure_host_ready(hostname)
+
+        if readiness.preparing:
             logger.info(
                 "Host %s is still preparing required artifacts; deferring inventory refresh",
                 hostname,
             )
-            return False, True
+            return HostRefreshSnapshot(
+                hostname=hostname,
+                refreshed=False,
+                skipped=True,
+                mark_preparing=True,
+            )
+
+        if readiness.error:
+            logger.debug(
+                "Host %s not ready for inventory due to deployment error: %s",
+                hostname,
+                readiness.error,
+            )
 
         attempt_started = False
-        refreshed = False
         start_time = 0.0
+        snapshot: HostRefreshSnapshot
 
         try:
             attempt_started = True
@@ -723,97 +833,63 @@ class InventoryService:
             payload = await self._collect_with_recovery(hostname)
             cluster_name, vms = self._parse_inventory_snapshot(hostname, payload)
 
-            # Check if host was previously disconnected and create reconnection notification
-            previous_host = self.hosts.get(hostname)
-            was_disconnected = (
-                previous_host and not previous_host.connected if previous_host else True
-            )
-
-            # Create notification for host reconnection (only if not dummy data and was previously disconnected)
-            if was_disconnected and not settings.dummy_data and previous_host:
-                # Import here to avoid circular import
-                from .notification_service import notification_service
-
-                notification_service.create_host_reconnected_notification(hostname)
-
-            # Update host status
-            self.hosts[hostname] = Host(
-                hostname=hostname,
-                cluster=cluster_name,
-                connected=True,
-                last_seen=datetime.utcnow(),
-                error=None,
-            )
-
-            self._host_last_refresh[hostname] = datetime.utcnow()
-
+            now = datetime.utcnow()
             expected_keys = {f"{hostname}:{vm.name}" for vm in vms}
-
-            # Update VM inventory
-            for vm in vms:
-                key = f"{hostname}:{vm.name}"
-                self._detach_placeholder_key(key)
-                self.vms[key] = vm
-
-            # Remove VMs that no longer exist on this host, but preserve active placeholders
-            active_placeholder_keys = self._active_placeholder_keys()
-            keys_to_remove = [
-                key
-                for key in list(self.vms.keys())
-                if key.startswith(f"{hostname}:")
-                and key not in expected_keys
-                and key not in active_placeholder_keys
-            ]
-            for key in keys_to_remove:
-                del self.vms[key]
+            snapshot = HostRefreshSnapshot(
+                hostname=hostname,
+                refreshed=True,
+                skipped=False,
+                host=Host(
+                    hostname=hostname,
+                    cluster=cluster_name,
+                    connected=True,
+                    last_seen=now,
+                    error=None,
+                ),
+                vms=vms,
+                expected_vm_keys=expected_keys,
+                clear_preparing=True,
+                host_last_refresh=now,
+            )
 
             logger.info("Host %s: %d VMs", hostname, len(vms))
-            refreshed = True
-            return True, False
 
-        except Exception as e:
-            logger.error("Failed to refresh host %s: %s", hostname, e)
+        except Exception as exc:
+            logger.error("Failed to refresh host %s: %s", hostname, exc)
 
-            # Check if host was previously connected and create notification
-            previous_host = self.hosts.get(hostname)
-            was_connected = (
-                previous_host and previous_host.connected if previous_host else False
-            )
-
-            # Create notification for host becoming unreachable (only if not dummy data)
-            if was_connected and not settings.dummy_data:
-                # Import here to avoid circular import
-                from .notification_service import notification_service
-
-                notification_service.create_host_unreachable_notification(
-                    hostname, str(e)
-                )
-
-            self.hosts[hostname] = Host(
+            cluster = previous_host.cluster if previous_host else None
+            last_seen = previous_host.last_seen if previous_host else None
+            snapshot = HostRefreshSnapshot(
                 hostname=hostname,
-                cluster=previous_host.cluster if previous_host else None,
-                connected=False,
-                last_seen=self.hosts.get(hostname, Host(hostname=hostname)).last_seen,
-                error=str(e),
+                refreshed=False,
+                skipped=False,
+                host=Host(
+                    hostname=hostname,
+                    cluster=cluster,
+                    connected=False,
+                    last_seen=last_seen,
+                    error=str(exc),
+                ),
+                error=str(exc),
+                clear_preparing=True,
+                clear_host_vms=True,
+                clear_host_last_refresh=True,
             )
-
-            # Clear non-placeholder VMs for the unreachable host
-            self._clear_host_vms(hostname, preserve_placeholders=True)
-            self._host_last_refresh.pop(hostname, None)
-            return False, False
 
         finally:
             if attempt_started and expected_interval is not None and reason == "background":
-                duration = time.perf_counter() - start_time
-                self._record_host_refresh_duration(hostname, duration, expected_interval, refreshed)
+                snapshot.record_duration = True
+                snapshot.duration = time.perf_counter() - start_time
+                snapshot.expected_interval = expected_interval
 
-    async def _ensure_host_ready(self, hostname: str) -> bool:
+        return snapshot
+
+    async def _ensure_host_ready(self, hostname: str) -> InventoryReadiness:
         """Check whether a host is ready for inventory collection."""
 
         if settings.dummy_data or not host_deployment_service.is_enabled:
-            return True
+            return InventoryReadiness(ready=True, preparing=False, error=None)
 
-        readiness: Optional[InventoryReadiness]
         try:
             readiness = await host_deployment_service.ensure_inventory_ready(hostname)
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -822,18 +898,10 @@ class InventoryService:
             )
             readiness = InventoryReadiness(ready=False, preparing=False, error=str(exc))
 
-        if readiness.ready:
-            self._clear_preparing_host(hostname)
-            return True
+        if readiness is None:
+            readiness = InventoryReadiness(ready=True, preparing=False, error=None)
 
-        if readiness.preparing:
-            self._mark_host_preparing(hostname)
-            return False
-
-        self._clear_preparing_host(hostname)
-        if readiness.error:
-            logger.debug("Host %s not ready for inventory due to deployment error: %s", hostname, readiness.error)
-        return True
+        return readiness
 
     def _mark_host_preparing(self, hostname: str) -> None:
         """Record that a host is still preparing deployment artifacts."""
