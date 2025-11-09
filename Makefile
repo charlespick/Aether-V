@@ -1,4 +1,4 @@
-.PHONY: help dev build run test clean deploy isos config-validate all
+.PHONY: help dev build run test test-python test-powershell test-js test-all clean deploy isos config-validate all
 
 POWERSHELL ?= pwsh
 
@@ -7,7 +7,10 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make dev           - Start development server with hot reload"
-	@echo "  make test          - Run tests (when implemented)"
+	@echo "  make test          - Run all tests (Python, PowerShell, JavaScript)"
+	@echo "  make test-python   - Run Python tests only"
+	@echo "  make test-powershell - Run PowerShell tests only"
+	@echo "  make test-js       - Run JavaScript tests only"
 	@echo "  make all           - Build everything (ISOs + container)"
 	@echo ""
 	@echo "Build & Deploy:"
@@ -38,9 +41,23 @@ isos:
 run:
 	docker run -p 8000:8000 --env-file server/.env aetherv:latest
 
-test:
-	@echo "Tests not yet implemented"
-# pytest server/tests/
+test: test-python test-powershell test-js
+	@echo "✅ All test suites completed"
+
+test-python:
+	@echo "Running Python tests..."
+	@cd server && ./test.sh
+
+test-powershell:
+	@echo "Running PowerShell tests..."
+	@$(POWERSHELL) -NoLogo -NoProfile -File tests/powershell/run-tests.ps1 -Coverage
+
+test-js:
+	@echo "Running JavaScript tests..."
+	@cd server && npm test
+
+test-all: test
+	@echo "✅ All tests completed successfully"
 
 all: isos build
 	@echo "✅ All components built successfully"
@@ -68,6 +85,9 @@ clean:
 	find . -type f -name "*.pyo" -delete
 	find . -type f -name "*.log" -delete
 	rm -rf server/.pytest_cache server/htmlcov server/.coverage
+	rm -rf server/coverage.xml server/coverage-js
+	rm -rf server/node_modules 2>/dev/null || true
 	rm -rf build/ 2>/dev/null || true
 	rm -rf ISOs/ 2>/dev/null || true
+	rm -rf coverage-ps.xml 2>/dev/null || true
 	@echo "✅ Cleanup complete"

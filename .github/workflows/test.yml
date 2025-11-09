@@ -1,0 +1,188 @@
+name: Run Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+      - devel
+  push:
+    branches:
+      - main
+      - devel
+  workflow_dispatch:
+
+jobs:
+  test-python:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        cd server
+        pip install -r requirements-dev.txt
+    
+    - name: Run Python tests
+      run: |
+        cd server
+        python -m pytest --cov=app --cov-report=xml --cov-report=term
+    
+    - name: Upload Python coverage to Codecov
+      uses: codecov/codecov-action@v3
+      if: always()
+      with:
+        files: ./server/coverage.xml
+        flags: python
+        name: python-coverage
+    
+    - name: Upload Python test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: python-test-results
+        path: |
+          server/coverage.xml
+          server/htmlcov/
+
+  test-powershell:
+    name: PowerShell Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Install Pester
+      shell: pwsh
+      run: |
+        Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -Scope CurrentUser -SkipPublisherCheck
+    
+    - name: Run PowerShell tests
+      shell: pwsh
+      run: |
+        ./tests/powershell/run-tests.ps1 -CI -Coverage
+    
+    - name: Upload PowerShell coverage
+      uses: codecov/codecov-action@v3
+      if: always()
+      with:
+        files: ./coverage-ps.xml
+        flags: powershell
+        name: powershell-coverage
+    
+    - name: Upload PowerShell test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: powershell-test-results
+        path: coverage-ps.xml
+
+  test-javascript:
+    name: JavaScript Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: server/package.json
+    
+    - name: Install dependencies
+      run: |
+        cd server
+        npm ci
+    
+    - name: Run JavaScript tests
+      run: |
+        cd server
+        npm test -- --coverage
+    
+    - name: Upload JavaScript coverage
+      uses: codecov/codecov-action@v3
+      if: always()
+      with:
+        files: ./server/coverage-js/lcov.info
+        flags: javascript
+        name: javascript-coverage
+    
+    - name: Upload JavaScript test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: javascript-test-results
+        path: server/coverage-js/
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-python, test-powershell, test-javascript]
+    if: always()
+    
+    permissions:
+      pull-requests: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Download all test results
+      uses: actions/download-artifact@v4
+      with:
+        path: test-results
+    
+    - name: Comment test summary on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const prNumber = context.issue.number;
+          
+          const comment = `## Test Results Summary 🧪
+          
+          Test suite execution completed for commit ${context.sha.substring(0, 7)}.
+          
+          ### Test Suites
+          
+          | Suite | Status |
+          |-------|--------|
+          | Python | ${{ needs.test-python.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+          | PowerShell | ${{ needs.test-powershell.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+          | JavaScript | ${{ needs.test-javascript.result == 'success' && '✅ Passed' || '❌ Failed' }} |
+          
+          ### Coverage Reports
+          
+          Coverage reports have been uploaded to artifacts and Codecov.
+          
+          **View detailed results:**
+          - Check the Actions tab for detailed test output
+          - Coverage reports are available in the artifacts
+          - Codecov will comment with detailed coverage analysis
+          
+          ${
+            '${{ needs.test-python.result }}' === 'success' && 
+            '${{ needs.test-powershell.result }}' === 'success' && 
+            '${{ needs.test-javascript.result }}' === 'success'
+              ? '✅ **All tests passed!** Ready for review.'
+              : '❌ **Some tests failed.** Please review the failures above.'
+          }`;
+          
+          github.rest.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });

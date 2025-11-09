@@ -124,7 +124,7 @@ RUN set -eux; \
     fi; \
     find ./ISOs -maxdepth 1 -type f -name '*.iso' -exec cp {} /artifacts/ \;
 
-# Stage 4: Application
+# Stage 5: Application
 FROM base AS application
 
 # Copy Python dependencies from previous stage

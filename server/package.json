@@ -1,0 +1,37 @@
+{
+  "name": "aetherv-server-frontend",
+  "version": "1.0.0",
+  "description": "Frontend JavaScript for Aether-V Server",
+  "private": true,
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint app/static/*.js",
+    "lint:fix": "eslint app/static/*.js --fix"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.6",
+    "@babel/preset-env": "^7.23.6",
+    "babel-jest": "^29.7.0",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "collectCoverageFrom": [
+      "app/static/*.js",
+      "!app/static/*.test.js"
+    ],
+    "coverageDirectory": "coverage-js",
+    "coverageReporters": [
+      "text",
+      "lcov",
+      "html"
+    ],
+    "testMatch": [
+      "**/tests/js/**/*.test.js"
+    ]
+  }
+}

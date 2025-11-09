@@ -31,9 +31,14 @@ ENV/
 # Testing
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
 .hypothesis/
+coverage-js/
+coverage-ps.xml
+node_modules/
+package-lock.json
 
 # Logs
 *.log

@@ -74,15 +74,18 @@
 	// Use 'onCreateCommand' to run commands when creating the container
 	"onCreateCommand": {
 		"install-iso-tools": "sudo apt-get update && sudo apt-get install -y xorriso genisoimage mkisofs",
-		"install-dev-deps": "pip install --user flake8 black pytest pytest-asyncio httpx",
+		"install-node": "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs",
+		"install-dev-deps": "pip install --user -r server/requirements-dev.txt",
+		"install-pester": "pwsh -Command 'Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -Scope CurrentUser -SkipPublisherCheck'",
 		"create-artifacts-dirs": "mkdir -p /workspaces/Aether-V/server/artifacts/{isos,scripts}",
 		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V"
 	},
 	
 	// Use 'postCreateCommand' to run commands after the container is created
 	"postCreateCommand": {
+		"install-js-deps": "cd /workspaces/Aether-V/server && npm install",
 		"build-isos": "cd /workspaces/Aether-V && pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs || echo 'ISO build failed - continuing without ISOs'",
-		"build-docker-image": "cd /workspaces/Aether-V && docker build -f server/Dockerfile -t aetherv .",
+		"build-docker-image": "cd /workspaces/Aether-V && docker build -f server/Dockerfile -t aetherv . || echo 'Docker build skipped'",
 		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V",
 		"create-env": "cd /workspaces/Aether-V/server && [ ! -f .env ] && cp .env.example .env || echo '.env already exists'"
 	},
