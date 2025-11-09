@@ -1,14 +1,16 @@
 """API route handlers."""
 import asyncio
+import base64
 import json
 import logging
+import secrets
 import uuid
+import zlib
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
 from datetime import datetime
-import secrets
 from dataclasses import dataclass
 
 from ..core.models import (
@@ -58,6 +60,42 @@ from ..services.websocket_service import websocket_manager
 from ..services.remote_task_service import remote_task_service
 
 logger = logging.getLogger(__name__)
+
+_LOGOUT_TOKEN_PREFIX = "enc:"
+
+
+def _encode_logout_token(id_token: str) -> str:
+    """Compress and encode an ID token for compact session storage.
+
+    Returns the compressed and base64-encoded token with a prefix if it's smaller
+    than the original, otherwise returns the original token unmodified.
+    """
+    compressed = zlib.compress(id_token.encode("utf-8"))
+    encoded = base64.urlsafe_b64encode(compressed).decode("ascii")
+
+    # Only use the encoded representation when it is smaller than the original
+    if len(encoded) + len(_LOGOUT_TOKEN_PREFIX) < len(id_token):
+        return f"{_LOGOUT_TOKEN_PREFIX}{encoded}"
+
+    return id_token
+
+
+def _decode_logout_token(packed_token: Optional[str]) -> Optional[str]:
+    """Decode a previously encoded logout token, handling legacy formats."""
+
+    if not packed_token:
+        return None
+
+    if packed_token.startswith(_LOGOUT_TOKEN_PREFIX):
+        payload = packed_token[len(_LOGOUT_TOKEN_PREFIX) :]
+        try:
+            compressed = base64.urlsafe_b64decode(payload.encode("ascii"))
+            return zlib.decompress(compressed).decode("utf-8")
+        except (ValueError, zlib.error, UnicodeDecodeError):
+            logger.warning("Failed to decode stored logout token")
+            return None
+
+    return packed_token
 router = APIRouter()
 
 
@@ -232,7 +270,11 @@ def _build_idp_logout_url(
         return None
 
     params: Dict[str, str] = {}
-    id_token_hint = context.get("id_token")
+    id_token_hint = _decode_logout_token(context.get("id_token"))
+    if not id_token_hint:
+        legacy_value = context.get("id_token_ref")
+        if legacy_value:
+            id_token_hint = _decode_logout_token(legacy_value)
     if id_token_hint:
         params["id_token_hint"] = id_token_hint
 
@@ -823,7 +865,7 @@ async def auth_callback(request: Request):
         if end_session_endpoint:
             logout_context["end_session_endpoint"] = end_session_endpoint
         if id_token:
-            logout_context["id_token"] = id_token
+            logout_context["id_token"] = _encode_logout_token(id_token)
 
         session_state = token.get("session_state")
         if session_state:
