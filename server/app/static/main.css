@@ -2605,8 +2605,8 @@ tbody tr:last-child td {
 
 .vm-overview-panel {
     border-radius: var(--surface-radius);
-    padding: 16px 20px;
     margin-bottom: 24px;
+    overflow: hidden;
 }
 
 [data-theme="dark"] .vm-overview-panel {
@@ -2617,6 +2617,10 @@ tbody tr:last-child td {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 12px 24px;
+}
+
+.vm-overview-panel .vm-overview-grid {
+    padding: 16px 20px;
 }
 
 .host-info-grid {

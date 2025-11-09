@@ -4,7 +4,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_ICONS_DIR = ROOT / "app" / "static" / "icons"
-NODE_ICONS_DIR = ROOT / "node_modules" / "@material-design-icons" / "svg"
+ICON_SOURCES = [
+    (ROOT / "node_modules" / "@material-design-icons" / "svg", {
+        "round": "round",
+    }),
+    (ROOT / "node_modules" / "@material-symbols" / "svg-400", {
+        "round": "rounded",
+    }),
+]
 
 
 def clean_static_icons():
@@ -17,17 +24,22 @@ def clean_static_icons():
 
 
 def copy_icon(style: str, icon_name: str) -> bool:
-    source = NODE_ICONS_DIR / style / f"{icon_name}.svg"
     destination = STATIC_ICONS_DIR / style / f"{icon_name}.svg"
 
-    if not source.exists():
-        print(f"[warn] missing icon: {style}/{icon_name}.svg")
-        return False
+    for base_dir, style_map in ICON_SOURCES:
+        mapped_style = style_map.get(style, style)
+        source = base_dir / mapped_style / f"{icon_name}.svg"
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, destination)
-    print(f"[copy] {style}/{icon_name}.svg")
-    return True
+        if not source.exists():
+            continue
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        print(f"[copy] {style}/{icon_name}.svg")
+        return True
+
+    print(f"[warn] missing icon: {style}/{icon_name}.svg")
+    return False
 
 
 def main():
