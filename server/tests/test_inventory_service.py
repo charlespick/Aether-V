@@ -1,16 +1,24 @@
 import asyncio
 
+from datetime import datetime
+
 import pytest
 
 try:  # pragma: no cover - environment guard for optional server package
     from app.core.config import settings
+    from app.core.models import Notification, NotificationCategory, NotificationLevel
     from app.services.inventory_service import InventoryService
     from app.services.host_deployment_service import host_deployment_service
+    from app.services.notification_service import notification_service
 except ModuleNotFoundError as exc:  # pragma: no cover - environment guard
     pytestmark = pytest.mark.skip(reason=f"server package unavailable: {exc}")
     settings = None  # type: ignore[assignment]
+    Notification = None  # type: ignore[assignment]
+    NotificationCategory = None  # type: ignore[assignment]
+    NotificationLevel = None  # type: ignore[assignment]
     InventoryService = None  # type: ignore[assignment]
     host_deployment_service = None  # type: ignore[assignment]
+    notification_service = None  # type: ignore[assignment]
 
 
 @pytest.fixture
@@ -154,3 +162,100 @@ async def test_refresh_inventory_discards_stale_snapshots(monkeypatch):
     vm_key = "dup:dup-new"
     assert vm_key in service.vms
     assert "dup:dup-old" not in service.vms
+
+
+@pytest.mark.anyio("asyncio")
+async def test_refresh_inventory_prunes_unconfigured_hosts(monkeypatch):
+    if (
+        InventoryService is None
+        or settings is None
+        or host_deployment_service is None
+        or notification_service is None
+        or Notification is None
+        or NotificationLevel is None
+        or NotificationCategory is None
+    ):  # pragma: no cover - environment guard
+        pytest.skip("server package unavailable")
+
+    service = InventoryService()
+
+    monkeypatch.setattr(settings, "hyperv_hosts", "keep,drop")
+    monkeypatch.setattr(
+        host_deployment_service, "_deployment_enabled", False, raising=False
+    )
+
+    async def fake_collect(self, hostname: str):
+        return {
+            "Host": {"ClusterName": "Default"},
+            "VirtualMachines": [
+                {"Name": f"{hostname}-vm", "State": "Running"},
+            ],
+        }
+
+    monkeypatch.setattr(
+        service,
+        "_collect_with_recovery",
+        fake_collect.__get__(service, InventoryService),
+    )
+
+    monkeypatch.setattr(notification_service, "_initialized", True, raising=False)
+    monkeypatch.setattr(notification_service, "notifications", {}, raising=False)
+    monkeypatch.setattr(notification_service, "_system_notification_ids", {}, raising=False)
+
+    await service.refresh_inventory(rebuild_clusters=False)
+
+    assert set(service.hosts) == {"keep", "drop"}
+    drop_vm_key = "drop:drop-vm"
+    assert drop_vm_key in service.vms
+
+    service._host_last_refresh.setdefault("drop", datetime.utcnow())
+    service._host_last_applied_sequence["drop"] = 42
+
+    service._job_vm_placeholders["job-1"] = {drop_vm_key}
+    service._job_vm_originals["job-1"] = {drop_vm_key: None}
+    service._preparing_hosts.add("drop")
+    service._slow_hosts.add("drop")
+
+    now = datetime.utcnow()
+    preparing_key = service._preparing_notification_key("drop")
+    preparing_id = "prep-id"
+    notification_service.notifications[preparing_id] = Notification(
+        id=preparing_id,
+        title="Preparing",
+        message="",
+        level=NotificationLevel.INFO,
+        category=NotificationCategory.SYSTEM,
+        created_at=now,
+        related_entity=f"system:{preparing_key}",
+    )
+    notification_service._system_notification_ids[preparing_key] = preparing_id
+
+    slow_key = service._slow_host_notification_key("drop")
+    slow_id = "slow-id"
+    notification_service.notifications[slow_id] = Notification(
+        id=slow_id,
+        title="Slow host",
+        message="",
+        level=NotificationLevel.WARNING,
+        category=NotificationCategory.SYSTEM,
+        created_at=now,
+        related_entity=f"system:{slow_key}",
+    )
+    notification_service._system_notification_ids[slow_key] = slow_id
+
+    monkeypatch.setattr(settings, "hyperv_hosts", "keep")
+
+    await service.refresh_inventory(rebuild_clusters=False)
+
+    assert set(service.hosts) == {"keep"}
+    assert all(not key.startswith("drop:") for key in service.vms)
+    assert "drop" not in service._host_last_refresh
+    assert "drop" not in service._host_last_applied_sequence
+    assert service._job_vm_placeholders == {}
+    assert service._job_vm_originals == {}
+    assert "drop" not in service._preparing_hosts
+    assert "drop" not in service._slow_hosts
+    assert preparing_key not in notification_service._system_notification_ids
+    assert slow_key not in notification_service._system_notification_ids
+    assert preparing_id not in notification_service.notifications
+    assert slow_id not in notification_service.notifications

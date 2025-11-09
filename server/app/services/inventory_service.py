@@ -685,6 +685,14 @@ class InventoryService:
             if snapshot.skipped:
                 skipped_hosts.append(hostname)
 
+        removed_hosts = await self._prune_unconfigured_hosts(configured_hosts)
+        if removed_hosts:
+            logger.info(
+                "Pruned %d host(s) no longer configured: %s",
+                len(removed_hosts),
+                removed_hosts,
+            )
+
         if rebuild_clusters and refreshed_hosts:
             async with self._refresh_lock:
                 self._rebuild_clusters(configured_hosts)
@@ -906,6 +914,63 @@ class InventoryService:
                 )
 
         return snapshot
+
+    async def _prune_unconfigured_hosts(
+        self, configured_hosts: Sequence[str]
+    ) -> List[str]:
+        """Remove state for hosts that are no longer configured."""
+
+        async with self._refresh_lock:
+            configured_set = {host for host in configured_hosts if host}
+            stale_hosts = [
+                hostname for hostname in list(self.hosts.keys()) if hostname not in configured_set
+            ]
+
+            if not stale_hosts:
+                return []
+
+            for hostname in stale_hosts:
+                prefix = f"{hostname}:"
+
+                # Clear preparing state and notifications.
+                self._clear_preparing_host(hostname)
+
+                # Clear slow host tracking and notification if active.
+                if hostname in self._slow_hosts:
+                    notification_service.clear_system_notification(
+                        self._slow_host_notification_key(hostname)
+                    )
+                    self._slow_hosts.discard(hostname)
+
+                # Remove VM entries and associated placeholder bookkeeping.
+                host_vm_keys = [
+                    key for key in list(self.vms.keys()) if key.startswith(prefix)
+                ]
+                for key in host_vm_keys:
+                    self._detach_placeholder_key(key)
+                    self.vms.pop(key, None)
+
+                for job_id, keys in list(self._job_vm_placeholders.items()):
+                    filtered_keys = {key for key in keys if not key.startswith(prefix)}
+                    if filtered_keys:
+                        self._job_vm_placeholders[job_id] = filtered_keys
+                    else:
+                        self._job_vm_placeholders.pop(job_id, None)
+
+                for job_id, originals in list(self._job_vm_originals.items()):
+                    keys_to_remove = [
+                        key for key in list(originals.keys()) if key.startswith(prefix)
+                    ]
+                    for key in keys_to_remove:
+                        originals.pop(key, None)
+                    if not originals:
+                        self._job_vm_originals.pop(job_id, None)
+
+                self.hosts.pop(hostname, None)
+                self._host_last_refresh.pop(hostname, None)
+                self._host_last_applied_sequence.pop(hostname, None)
+
+            return stale_hosts
 
     async def _ensure_host_ready(self, hostname: str) -> InventoryReadiness:
         """Check whether a host is ready for inventory collection."""
