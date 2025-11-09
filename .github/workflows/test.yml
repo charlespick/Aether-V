@@ -32,13 +32,15 @@ jobs:
         pip install -r requirements-dev.txt
     
     - name: Run Python tests
+      env:
+        AGENT_DOWNLOAD_BASE_URL: "http://localhost:8000"
       run: |
         cd server
         python -m pytest --cov=app --cov-report=xml --cov-report=term
     
     - name: Upload Python coverage to Codecov
       uses: codecov/codecov-action@v3
-      if: always()
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devel')
       with:
         files: ./server/coverage.xml
         flags: python
@@ -73,7 +75,7 @@ jobs:
     
     - name: Upload PowerShell coverage
       uses: codecov/codecov-action@v3
-      if: always()
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devel')
       with:
         files: ./coverage-ps.xml
         flags: powershell
@@ -113,7 +115,7 @@ jobs:
     
     - name: Upload JavaScript coverage
       uses: codecov/codecov-action@v3
-      if: always()
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devel')
       with:
         files: ./server/coverage-js/lcov.info
         flags: javascript

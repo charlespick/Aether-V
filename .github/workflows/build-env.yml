@@ -66,10 +66,9 @@ jobs:
     - name: Test build environment
       if: github.event_name == 'pull_request'
       run: |
-        # For PRs, test the locally built image
-        docker run --rm \
-          $(echo "${{ steps.meta.outputs.tags }}" | head -n1) \
-          bash -c "xorriso --version && genisoimage --version && pwsh --version"
+        # For PRs, test the locally built image using the image ID
+        image_id=$(docker images --format "{{.ID}}" | head -n1)
+        docker run --rm $image_id bash -c "xorriso --version && genisoimage --version && pwsh --version"
     
     - name: Comment on PR with build-env info
       if: github.event_name == 'pull_request'
