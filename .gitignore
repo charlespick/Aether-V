@@ -5,6 +5,16 @@ build/
 .env.local
 docker-compose.override.yml
 
+# Testing artifacts
+coverage-ps.xml
+htmlcov/
+.coverage
+coverage.xml
+
+# Node.js
+node_modules/
+package-lock.json
+
 # Codespaces generated files
 ModuleAnalysisCache-*
 StartupProfileData-NonInteractive

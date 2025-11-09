@@ -41,20 +41,17 @@ isos:
 run:
 	docker run -p 8000:8000 --env-file server/.env aetherv:latest
 
-test: test-python test-powershell test-js
-	@echo "✅ All test suites completed"
+test: 
+	@./run-all-tests.sh
 
 test-python:
-	@echo "Running Python tests..."
-	@cd server && ./test.sh
+	@./run-all-tests.sh --python-only
 
 test-powershell:
-	@echo "Running PowerShell tests..."
-	@$(POWERSHELL) -NoLogo -NoProfile -File tests/powershell/run-tests.ps1 -Coverage
+	@./run-all-tests.sh --powershell-only
 
 test-js:
-	@echo "Running JavaScript tests..."
-	@cd server && npm test
+	@./run-all-tests.sh --js-only
 
 test-all: test
 	@echo "✅ All tests completed successfully"

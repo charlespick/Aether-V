@@ -102,6 +102,26 @@ Interactive API docs: `/docs` (Swagger UI), `/redoc`
 - Review logs via `kubectl logs`.
 - Use health endpoints for readiness checks.
 
+## Testing
+
+Aether-V includes comprehensive testing for Python, PowerShell, and JavaScript:
+
+```bash
+# Run all tests
+make test
+
+# Run specific test suites
+make test-python
+make test-powershell
+make test-js
+```
+
+See [TESTING.md](TESTING.md) for detailed testing documentation including:
+- Writing tests with proper mocking
+- Running tests locally and in CI
+- Coverage reporting
+- Best practices for testing without actual Hyper-V hosts
+
 ## Project Structure
 
 ```
