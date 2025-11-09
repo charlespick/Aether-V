@@ -5,9 +5,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_ICONS_DIR = ROOT / "app" / "static" / "icons"
 ICON_SOURCES = [
-    (ROOT / "node_modules" / "@material-design-icons" / "svg", {
-        "round": "round",
-    }),
     (ROOT / "node_modules" / "@material-symbols" / "svg-400", {
         "round": "rounded",
     }),
@@ -45,7 +42,8 @@ def copy_icon(style: str, icon_name: str) -> bool:
 def main():
     config_path = ROOT / "icons.json"
     if not config_path.exists():
-        raise SystemExit("icons.json not found. Create it before running this script.")
+        raise SystemExit(
+            "icons.json not found. Create it before running this script.")
 
     with config_path.open("r", encoding="utf-8") as config_file:
         config = json.load(config_file)
@@ -61,7 +59,8 @@ def main():
             else:
                 missing.append((style, icon_name))
 
-    print(f"[done] copied {copied} icons to {STATIC_ICONS_DIR.relative_to(ROOT)}")
+    print(
+        f"[done] copied {copied} icons to {STATIC_ICONS_DIR.relative_to(ROOT)}")
     if missing:
         print("[warn] missing icons:")
         for style, icon_name in missing:

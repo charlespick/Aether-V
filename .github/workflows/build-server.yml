@@ -120,19 +120,10 @@ jobs:
           
           const tagsList = tags.map(tag => `\`${tag}\``).join('\n');
           
-          const comment = `## Container Build Completed ✅
-          
-          The Aether-V Server container has been built and pushed to the registry!
-          
-          **Build Details:**
-          - Branch: \`${branch}\`
-          - Commit: \`${sha}\`
-          - PR Number: \`#${prNumber}\`
+          const comment = `## Container Build Completed 
           
           **Published Tags:**
           ${tagsList}
-          
-          🚀 **Status:** Container images are now available for testing!
           
           **Registry Info:**
           - Registry: \`${process.env.REGISTRY}\`
@@ -146,13 +137,6 @@ jobs:
           # Or use the commit SHA
           docker pull ghcr.io/${context.repo.owner}/${process.env.IMAGE_NAME}:sha-${sha}
           \`\`\`
-          
-          **Tagging Strategy:**
-          - \`latest\` → Latest \`main\` branch build
-          - \`devel\` → Latest \`devel\` branch build  
-          - \`pr-##\` → Pull request builds (this PR!)
-          - \`{branch}\` → Branch tracking builds
-          - \`sha-<short>\` → Commit-specific builds`;
           
           github.rest.issues.createComment({
             issue_number: prNumber,
