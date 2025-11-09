@@ -10,6 +10,8 @@ class ViewManager {
         this.viewContainer = null;
         this.views = new Map();
         this.state = {};
+        this.currentViewName = null;
+        this.currentViewData = {};
     }
 
     init(containerId) {
@@ -48,23 +50,79 @@ class ViewManager {
         }
 
         // Update navigation active state
-        this.updateNavigation(viewName);
+        this.currentViewName = viewName;
+        this.currentViewData = { ...data };
+        this.updateNavigation(viewName, this.currentViewData);
 
         if (typeof window.applyProvisioningAvailability === 'function') {
             window.applyProvisioningAvailability(window.agentDeploymentState);
         }
     }
 
-    updateNavigation(viewName) {
+    updateNavigation(viewName, viewData = {}) {
         // Remove active from all nav items
-        document.querySelectorAll('.nav-item, .sub-item, .sub-sub-item, .vm-item').forEach(item => {
+        document.querySelectorAll('.nav-item, .sub-item, .vm-item').forEach(item => {
             item.classList.remove('active');
         });
 
-        // Add active to current view's nav item
-        const navItem = document.querySelector(`[data-view="${viewName}"]`);
+        const escapeForSelector = (value) => {
+            if (typeof value !== 'string') {
+                return '';
+            }
+            if (window.CSS && typeof window.CSS.escape === 'function') {
+                return window.CSS.escape(value);
+            }
+            return value.replace(/(["'\\\[\]])/g, '\\$1');
+        };
+
+        let navItem = null;
+
+        if (viewName === 'overview' || viewName === 'disconnected-hosts') {
+            navItem = document.querySelector(`[data-view="${viewName}"]`);
+        } else if (viewName === 'cluster' && viewData?.name) {
+            const selector = escapeForSelector(viewData.name);
+            navItem = document.querySelector(`.nav-item.group-header[data-nav-type="cluster"][data-cluster-name="${selector}"]`);
+        } else if (viewName === 'host' && viewData?.hostname) {
+            const selector = escapeForSelector(viewData.hostname);
+            navItem = document.querySelector(`.sub-item.group-header[data-nav-type="host"][data-hostname="${selector}"]`);
+        } else if (viewName === 'vm' && viewData?.name && viewData?.host) {
+            const nameSelector = escapeForSelector(viewData.name);
+            const hostSelector = escapeForSelector(viewData.host);
+            navItem = document.querySelector(`.vm-item[data-nav-type="vm"][data-vm-name="${nameSelector}"][data-vm-host="${hostSelector}"]`);
+        }
+
         if (navItem) {
             navItem.classList.add('active');
+
+            const navGroup = navItem.closest('.nav-group');
+            if (navGroup) {
+                navGroup.classList.add('expanded');
+
+                if (navGroup.dataset && navGroup.dataset.host) {
+                    const clusterGroup = navGroup.closest('.nav-group[data-cluster]');
+                    if (clusterGroup) {
+                        clusterGroup.classList.add('expanded');
+                    }
+                }
+            }
+
+            const hostGroup = navItem.closest('.nav-group[data-host]');
+            if (hostGroup) {
+                hostGroup.classList.add('expanded');
+                const clusterGroup = hostGroup.closest('.nav-group[data-cluster]');
+                if (clusterGroup) {
+                    clusterGroup.classList.add('expanded');
+                }
+            }
+        }
+
+        this.currentViewName = viewName;
+        this.currentViewData = { ...viewData };
+    }
+
+    refreshNavigationState() {
+        if (this.currentViewName) {
+            this.updateNavigation(this.currentViewName, this.currentViewData);
         }
     }
 
@@ -349,20 +407,20 @@ class HostView extends BaseView {
                 <div class="section-header">
                     <h2>Host Information</h2>
                 </div>
-                <div class="info-grid">
-                    <div class="info-item">
-                        <span class="info-label">Status:</span>
+                <div class="vm-overview-grid host-info-grid">
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Status</span>
                         <span class="status ${host?.connected ? 'connected' : 'disconnected'}">
                             ${host?.connected ? 'Connected' : 'Disconnected'}
                         </span>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">Last Seen:</span>
-                        <span>${host?.last_seen ? new Date(host.last_seen).toLocaleString() : 'Never'}</span>
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Last Seen</span>
+                        <span class="vm-overview-value">${host?.last_seen ? new Date(host.last_seen).toLocaleString() : 'Never'}</span>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">VM Count:</span>
-                        <span>${hostVMs.length}</span>
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">VM Count</span>
+                        <span class="vm-overview-value">${hostVMs.length}</span>
                     </div>
                 </div>
             </div>
@@ -504,6 +562,9 @@ class VMView extends BaseView {
             </div>
 
             <section class="vm-overview-panel surface-card" aria-label="Virtual machine overview">
+                <div class="section-header">
+                    <h2>Virtual Machine Information</h2>
+                </div>
                 <div class="vm-overview-grid">
                     ${overviewItems.map(item => `
                         <div class="vm-overview-item">

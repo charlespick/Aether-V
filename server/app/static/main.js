@@ -1319,9 +1319,9 @@ function updateSidebarNavigation(inventory) {
             clustersHtml += `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-cluster="${cluster.name}">
                     <div class="nav-item group-header" data-nav-type="cluster" data-cluster-name="${cluster.name}">
-                        ${icon('inventory_2', { className: 'nav-icon' })}
+                        ${icon('circles_ext', { className: 'nav-icon' })}
                         <span class="nav-label">${cluster.name}</span>
-                        <span class="expand-icon"></span>
+                        <span class="expand-icon">${icon('arrow_drop_down')}</span>
                     </div>
                     <ul class="sub-list">
                         ${renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts, expandedHosts)}
@@ -1345,6 +1345,10 @@ function updateSidebarNavigation(inventory) {
     
     // Re-attach event listeners
     attachNavigationEventListeners();
+
+    if (typeof viewManager?.refreshNavigationState === 'function') {
+        viewManager.refreshNavigationState();
+    }
 }
 
 function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHosts = new Set()) {
@@ -1358,9 +1362,9 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
             return `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-host="${host.hostname}">
                     <div class="sub-item group-header" data-nav-type="host" data-hostname="${host.hostname}">
-                        ${icon('computer', { className: 'sub-icon' })}
+                        ${icon('host', { className: 'sub-icon' })}
                         <span class="sub-label">${shortName}</span>
-                        ${hostVMs.length > 0 ? '<span class="expand-icon"></span>' : ''}
+                        ${hostVMs.length > 0 ? `<span class="expand-icon">${icon('arrow_drop_down')}</span>` : ''}
                     </div>
                     ${hostVMs.length > 0 ? `
                         <ul class="sub-sub-list">
@@ -1434,13 +1438,33 @@ function attachNavigationEventListeners() {
                 
                 if (navType === 'cluster') {
                     const clusterName = navItem.dataset.clusterName;
+                    const navGroup = navItem.closest('.nav-group');
+                    if (navGroup && !navGroup.classList.contains('expanded')) {
+                        navGroup.classList.add('expanded');
+                    }
                     viewManager.switchView('cluster', { name: clusterName });
                 } else if (navType === 'host') {
                     const hostname = navItem.dataset.hostname;
+                    const hostGroup = navItem.closest('.nav-group');
+                    if (hostGroup && !hostGroup.classList.contains('expanded')) {
+                        hostGroup.classList.add('expanded');
+                    }
+                    const parentClusterGroup = hostGroup ? hostGroup.closest('.nav-group[data-cluster]') : null;
+                    if (parentClusterGroup && !parentClusterGroup.classList.contains('expanded')) {
+                        parentClusterGroup.classList.add('expanded');
+                    }
                     viewManager.switchView('host', { hostname: hostname });
                 } else if (navType === 'vm') {
                     const vmName = navItem.dataset.vmName;
                     const vmHost = navItem.dataset.vmHost;
+                    const hostGroup = navItem.closest('.nav-group[data-host]');
+                    if (hostGroup && !hostGroup.classList.contains('expanded')) {
+                        hostGroup.classList.add('expanded');
+                    }
+                    const parentClusterGroup = hostGroup ? hostGroup.closest('.nav-group[data-cluster]') : navItem.closest('.nav-group[data-cluster]');
+                    if (parentClusterGroup && !parentClusterGroup.classList.contains('expanded')) {
+                        parentClusterGroup.classList.add('expanded');
+                    }
                     viewManager.switchView('vm', { name: vmName, host: vmHost });
                 }
             }
