@@ -15,6 +15,7 @@ for the UI banner.
 | Variable                        | Default                      | Required?               | Notes                                                                                                                |
 | ------------------------------- | ---------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `DEBUG`                         | `false`                      | No                      | Enable verbose logging for troubleshooting. Keep `false` in production.                                              |
+| `APP_NAME`                     | `Aether-V Server`           | No                      | Base application name used in logs and UI metadata banners.                       |
 | `ENVIRONMENT_NAME`              | `Production Environment`     | No                      | Display name for the deployment environment shown in the UI and logs.                                                |
 | `AUTH_ENABLED`                  | `true`                       | No                      | Toggle authentication middleware. Only disable for controlled development scenarios.                                 |
 | `ALLOW_DEV_AUTH`                | `false`                      | When disabling auth     | Safety latch when `AUTH_ENABLED=false`; must be `true` before disabling auth.                                        |
@@ -35,10 +36,14 @@ for the UI banner.
 | `HYPERV_HOSTS`                  | _(empty)_                    | Recommended             | Comma-separated list of Hyper-V hostnames. Without hosts no workloads can be managed.                                |
 | `WINRM_TRANSPORT`               | `ntlm`                       | No                      | WinRM authentication mechanism (`ntlm`, `basic`, or `credssp`).                                                      |
 | `WINRM_PORT`                    | `5985`                       | No                      | WinRM port on Hyper-V hosts. Use `5986` when enforcing HTTPS.                                                        |
+| `WINRM_OPERATION_TIMEOUT`       | `15.0`                       | No                      | Seconds to wait for individual WinRM operations before cancelling the request.    |
+| `WINRM_CONNECTION_TIMEOUT`      | `30.0`                       | No                      | Network connect timeout (seconds) when establishing WinRM sessions.               |
+| `WINRM_READ_TIMEOUT`            | `30.0`                       | No                      | Maximum time (seconds) to wait for WinRM responses before retrying.               |
+| `WINRM_POLL_INTERVAL_SECONDS`   | `1.0`                        | No                      | Interval (seconds) between WinRM runspace status checks during long operations.   |
 | `INVENTORY_REFRESH_INTERVAL`    | `60`                         | No                      | Seconds between background host refreshes. Increase to reduce polling frequency.                                     |
 | `JOB_WORKER_CONCURRENCY`        | `6`                          | No                      | Maximum number of provisioning jobs executed simultaneously.                                                         |
-| `JOB_LONG_TIMEOUT_SECONDS`      | `900`                        | No                      | Timeout applied to long-running orchestration jobs such as VM provisioning or deletion.                              |
-| `JOB_SHORT_TIMEOUT_SECONDS`     | `60`                         | No                      | Timeout applied to quick orchestration jobs (power actions, script triggers).                                        |
+| `JOB_LONG_TIMEOUT_SECONDS`      | `900.0`                        | No                      | Timeout applied to long-running orchestration jobs such as VM provisioning or deletion.                              |
+| `JOB_SHORT_TIMEOUT_SECONDS`     | `60.0`                         | No                      | Timeout applied to quick orchestration jobs (power actions, script triggers).                                        |
 | `REMOTE_TASK_MIN_CONCURRENCY`   | `6`                          | No                      | Initial number of concurrent WinRM/PowerShell operations the orchestrator will run.                                  |
 | `REMOTE_TASK_MAX_CONCURRENCY`   | `24`                         | No                      | Baseline upper bound on simultaneous remote operations before dynamic scaling considers resource headroom.          |
 | `REMOTE_TASK_DYNAMIC_CEILING`   | `48`                         | No                      | Hard ceiling for automatic fast-pool expansion driven by local resource utilisation.                                 |
@@ -54,7 +59,7 @@ for the UI banner.
 | `WEBSOCKET_TIMEOUT`             | `1800`                       | No                      | Idle timeout (seconds) before closing WebSocket sessions. Default is 30 minutes.                                     |
 | `WEBSOCKET_PING_INTERVAL`       | `30`                         | No                      | Heartbeat ping interval in seconds. Align with load balancer expectations.                                           |
 | `WEBSOCKET_REFRESH_TIME`        | `1500`                       | No                      | Client reconnect hint (seconds). Default is 25 minutes.                                                              |
-| `HOST_INSTALL_DIRECTORY`        | `C\\Program Files\\Aether-V` | No                      | Remote path used when deploying assets to Hyper-V hosts. Customize for side-by-side installs.                        |
+| `HOST_INSTALL_DIRECTORY`        | `C:\Program Files\Aether-V` | No                      | Remote path used when deploying assets to Hyper-V hosts. Customize for side-by-side installs.                        |
 | `HOST_DEPLOYMENT_TIMEOUT`       | `60.0`                       | No                      | Seconds allowed for individual WinRM operations during host script deployment.                                       |
 | `AGENT_STARTUP_CONCURRENCY`     | `3`                          | No                      | Parallel host deployments performed during service startup.                                                          |
 | `AGENT_STARTUP_INGRESS_TIMEOUT` | `120.0`                      | No                      | Maximum time to wait for ingress routing before the initial agent deployment begins.                                 |
