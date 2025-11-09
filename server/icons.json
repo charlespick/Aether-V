@@ -2,20 +2,20 @@
   "round": [
     "account_circle",
     "add_circle",
+    "arrow_drop_down",
     "assignment",
     "autorenew",
-    "bolt",
-    "cancel",
     "check_circle",
-    "circle",
+    "circles_ext",
+    "cloud",
     "computer",
     "delete",
     "error",
     "help",
+    "host",
     "hourglass_top",
-    "info",
-    "inventory_2",
     "inbox",
+    "inventory_2",
     "notifications",
     "pause_circle",
     "pending",
@@ -25,7 +25,6 @@
     "search",
     "settings",
     "stop_circle",
-    "warning",
-    "warning_amber"
+    "warning"
   ]
 }

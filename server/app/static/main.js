@@ -1139,7 +1139,7 @@ function getNotificationIcon(notification) {
         case 'error':
             return { name: 'error', className: 'status-error' };
         case 'warning':
-            return { name: 'warning_amber', className: 'status-warning' };
+            return { name: 'warning', className: 'status-warning' };
         case 'success':
             return { name: 'check_circle', className: 'status-success' };
         case 'info':

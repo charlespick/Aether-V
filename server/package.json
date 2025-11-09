@@ -5,6 +5,6 @@
   "description": "Frontend icon dependencies for the Aether-V server UI",
   "license": "MIT",
   "dependencies": {
-    "@material-design-icons/svg": "^0.14.15"
+    "@material-symbols/svg-400": "^0.39.1"
   }
 }

@@ -4,7 +4,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_ICONS_DIR = ROOT / "app" / "static" / "icons"
-NODE_ICONS_DIR = ROOT / "node_modules" / "@material-design-icons" / "svg"
+ICON_SOURCES = [
+    (ROOT / "node_modules" / "@material-symbols" / "svg-400", {
+        "round": "rounded",
+    }),
+]
 
 
 def clean_static_icons():
@@ -17,23 +21,29 @@ def clean_static_icons():
 
 
 def copy_icon(style: str, icon_name: str) -> bool:
-    source = NODE_ICONS_DIR / style / f"{icon_name}.svg"
     destination = STATIC_ICONS_DIR / style / f"{icon_name}.svg"
 
-    if not source.exists():
-        print(f"[warn] missing icon: {style}/{icon_name}.svg")
-        return False
+    for base_dir, style_map in ICON_SOURCES:
+        mapped_style = style_map.get(style, style)
+        source = base_dir / mapped_style / f"{icon_name}.svg"
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, destination)
-    print(f"[copy] {style}/{icon_name}.svg")
-    return True
+        if not source.exists():
+            continue
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        print(f"[copy] {style}/{icon_name}.svg")
+        return True
+
+    print(f"[warn] missing icon: {style}/{icon_name}.svg")
+    return False
 
 
 def main():
     config_path = ROOT / "icons.json"
     if not config_path.exists():
-        raise SystemExit("icons.json not found. Create it before running this script.")
+        raise SystemExit(
+            "icons.json not found. Create it before running this script.")
 
     with config_path.open("r", encoding="utf-8") as config_file:
         config = json.load(config_file)
@@ -49,7 +59,8 @@ def main():
             else:
                 missing.append((style, icon_name))
 
-    print(f"[done] copied {copied} icons to {STATIC_ICONS_DIR.relative_to(ROOT)}")
+    print(
+        f"[done] copied {copied} icons to {STATIC_ICONS_DIR.relative_to(ROOT)}")
     if missing:
         print("[warn] missing icons:")
         for style, icon_name in missing:
