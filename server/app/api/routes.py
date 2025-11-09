@@ -65,8 +65,11 @@ _LOGOUT_TOKEN_PREFIX = "enc:"
 
 
 def _encode_logout_token(id_token: str) -> str:
-    """Compress and encode an ID token for compact session storage."""
+    """Compress and encode an ID token for compact session storage.
 
+    Returns the compressed and base64-encoded token with a prefix if it's smaller
+    than the original, otherwise returns the original token unmodified.
+    """
     compressed = zlib.compress(id_token.encode("utf-8"))
     encoded = base64.urlsafe_b64encode(compressed).decode("ascii")
 
