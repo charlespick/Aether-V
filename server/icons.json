@@ -1,0 +1,31 @@
+{
+  "round": [
+    "account_circle",
+    "add_circle",
+    "assignment",
+    "autorenew",
+    "bolt",
+    "cancel",
+    "check_circle",
+    "circle",
+    "computer",
+    "delete",
+    "error",
+    "help",
+    "hourglass_top",
+    "info",
+    "inventory_2",
+    "inbox",
+    "notifications",
+    "pause_circle",
+    "pending",
+    "play_circle",
+    "power_settings_new",
+    "save",
+    "search",
+    "settings",
+    "stop_circle",
+    "warning",
+    "warning_amber"
+  ]
+}

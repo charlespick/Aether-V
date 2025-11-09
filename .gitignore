@@ -9,3 +9,5 @@ docker-compose.override.yml
 ModuleAnalysisCache-*
 StartupProfileData-NonInteractive
 .vscode/
+server/node_modules/
+server/app/static/icons/

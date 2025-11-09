@@ -18,14 +18,24 @@
 
         <div class="topbar-center">
             <div class="search-container">
-                <span class="search-icon">🔍</span>
+                <span
+                    class="icon icon--sm search-icon"
+                    aria-hidden="true"
+                    style="--icon: url('/static/icons/round/search.svg');"
+                ></span>
                 <label class="sr-only" for="global-search">Search</label>
                 <input id="global-search" class="search" placeholder="Search Everywhere" />
             </div>
         </div>
 
         <div class="topbar-right">
-            <button id="notifications-btn" class="icon-btn" title="Notifications" aria-label="Notifications">🔔</button>
+            <button id="notifications-btn" class="icon-btn" title="Notifications" aria-label="Notifications">
+                <span
+                    class="icon icon--lg"
+                    aria-hidden="true"
+                    style="--icon: url('/static/icons/round/notifications.svg');"
+                ></span>
+            </button>
             <div class="profile-menu">
                 <button
                     id="profile-btn"
@@ -35,7 +45,13 @@
                     aria-haspopup="true"
                     aria-expanded="false"
                     type="button"
-                >👤</button>
+                >
+                    <span
+                        class="icon icon--lg"
+                        aria-hidden="true"
+                        style="--icon: url('/static/icons/round/account_circle.svg');"
+                    ></span>
+                </button>
                 <div
                     id="profile-overlay"
                     class="profile-overlay"
@@ -45,7 +61,13 @@
                 >
                     <div class="profile-card">
                         <div class="profile-header">
-                            <div class="profile-avatar" aria-hidden="true">👤</div>
+                            <div class="profile-avatar" aria-hidden="true">
+                                <span
+                                    class="icon icon--lg"
+                                    aria-hidden="true"
+                                    style="--icon: url('/static/icons/round/account_circle.svg');"
+                                ></span>
+                            </div>
                             <div class="profile-text">
                                 <div class="profile-name" id="profile-name">Guest user</div>
                                 <div class="profile-email" id="profile-email">Not signed in</div>
@@ -66,7 +88,11 @@
         <nav class="sidebar" aria-label="Primary">
             <ul class="nav-list">
                 <li class="nav-item active" data-view="overview">
-                    <span class="nav-icon">⚡</span>
+                    <span
+                        class="icon nav-icon"
+                        aria-hidden="true"
+                        style="--icon: url('/static/icons/round/bolt.svg');"
+                    ></span>
                     <span class="nav-label">Aether</span>
                 </li>
 
@@ -79,7 +105,11 @@
 
                 <!-- Disconnected hosts section -->
                 <li class="nav-item disconnected-hosts" data-view="disconnected-hosts" style="display: none;">
-                    <span class="nav-icon">⚠️</span>
+                    <span
+                        class="icon nav-icon"
+                        aria-hidden="true"
+                        style="--icon: url('/static/icons/round/warning.svg');"
+                    ></span>
                     <span class="nav-label">Disconnected Hosts</span>
                     <span class="badge disconnected-count" style="display: none;">0</span>
                 </li>
@@ -87,7 +117,11 @@
 
             <div class="sidebar-footer">
                 <button class="settings-btn" id="sidebar-settings" title="Settings">
-                    <span class="settings-icon">⚙️</span>
+                    <span
+                        class="icon settings-icon"
+                        aria-hidden="true"
+                        style="--icon: url('/static/icons/round/settings.svg');"
+                    ></span>
                     <span class="settings-label">Settings</span>
                 </button>
             </div>
@@ -112,7 +146,13 @@
                 <div class="notifications-list">
                     <!-- Notifications will be populated here -->
                     <div class="notification-item">
-                        <div class="notification-icon">📋</div>
+                        <div class="notification-icon">
+                            <span
+                                class="icon icon--lg"
+                                aria-hidden="true"
+                                style="--icon: url('/static/icons/round/assignment.svg');"
+                            ></span>
+                        </div>
                         <div class="notification-content">
                             <div class="notification-title">Job completed</div>
                             <div class="notification-message">VM deployment for "web-server-01" has finished successfully.</div>
@@ -120,7 +160,13 @@
                         </div>
                     </div>
                     <div class="notification-item unread">
-                        <div class="notification-icon">⚠️</div>
+                        <div class="notification-icon">
+                            <span
+                                class="icon icon--lg"
+                                aria-hidden="true"
+                                style="--icon: url('/static/icons/round/warning.svg');"
+                            ></span>
+                        </div>
                         <div class="notification-content">
                             <div class="notification-title">Host disconnected</div>
                             <div class="notification-message">Host "hyperv-01.domain.local" has lost connection.</div>
@@ -135,7 +181,13 @@
     <!-- Connection Status Indicator -->
     <div id="connection-status-indicator" class="connection-status-indicator" style="display: none;">
         <div class="connection-status-content">
-            <div class="connection-status-icon">⚠️</div>
+            <div class="connection-status-icon">
+                <span
+                    class="icon icon--lg"
+                    aria-hidden="true"
+                    style="--icon: url('/static/icons/round/warning_amber.svg');"
+                ></span>
+            </div>
             <div class="connection-status-text">
                 <div class="connection-status-title"></div>
                 <div class="connection-status-message"></div>
@@ -156,6 +208,7 @@
             "build": {{ build_metadata_payload | tojson }}
         }
     </script>
+    <script src="/static/icons.js"></script>
     <script src="/static/websocket.js"></script>
     <script src="/static/overlay.js"></script>
     <script src="/static/views.js"></script>

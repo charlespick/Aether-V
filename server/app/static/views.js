@@ -1,4 +1,9 @@
 // View System - Dynamic content management
+const { renderDefaultIcon: renderIconDefault } = window.iconUtils;
+
+function icon(name, options = {}) {
+    return renderIconDefault(name, options);
+}
 class ViewManager {
     constructor() {
         this.currentView = null;
@@ -134,7 +139,7 @@ class OverviewView extends BaseView {
                     </div>
                     <div class="empty-state">
                         ${(inventory.disconnected_hosts || []).length > 0 ? `
-                            <div class="empty-icon">⚠️</div>
+                            <div class="empty-icon">${icon('warning', { className: 'status-warning', size: 48 })}</div>
                             <div class="empty-title">No hosts connected</div>
                             <div class="empty-description">
                                 ${(inventory.disconnected_hosts || []).length} host(s) are configured but currently unreachable.
@@ -146,12 +151,12 @@ class OverviewView extends BaseView {
                                 <br>• Check firewall settings on hosts
                                 <br><br>
                                 <button class="action-btn" onclick="viewManager.switchView('disconnected-hosts')" style="margin-top: 12px;">
-                                    <span class="action-icon">⚠️</span>
+                                    ${icon('warning', { className: 'action-icon status-warning', size: 24 })}
                                     <span>View Disconnected Hosts</span>
                                 </button>
                             </div>
                         ` : `
-                            <div class="empty-icon">🖥️</div>
+                            <div class="empty-icon">${icon('computer', { className: 'status-muted', size: 48 })}</div>
                             <div class="empty-title">No hosts configured</div>
                             <div class="empty-description">
                                 Configure Hyper-V hosts in your environment settings to begin managing virtual machines.
@@ -178,15 +183,15 @@ class OverviewView extends BaseView {
                 </div>
                 <div class="quick-actions">
                     <button class="action-btn" data-action="open-provision" onclick="overlayManager.open('provision-job')">
-                        <span class="action-icon">🆕</span>
+                        ${icon('add_circle', { className: 'action-icon', size: 24 })}
                         <span>Create VM</span>
                     </button>
                     <button class="action-btn" onclick="overlayManager.open('settings')">
-                        <span class="action-icon">⚙️</span>
+                        ${icon('settings', { className: 'action-icon', size: 24 })}
                         <span>Settings</span>
                     </button>
                     <button class="action-btn" onclick="refreshInventory()">
-                        <span class="action-icon">🔄</span>
+                        ${icon('autorenew', { className: 'action-icon', size: 24 })}
                         <span>Refresh All</span>
                     </button>
                 </div>
@@ -263,7 +268,7 @@ class ClusterView extends BaseView {
         return hosts.map(host => `
             <div class="host-card" onclick="viewManager.switchView('host', { hostname: '${host.hostname}' })">
                 <div class="host-card-header">
-                    <span class="host-icon">🖥️</span>
+                    ${icon('computer', { className: 'host-icon status-muted', size: 28 })}
                     <span class="host-name">${host.hostname}</span>
                 </div>
                 <div class="host-card-status">
@@ -282,10 +287,19 @@ class ClusterView extends BaseView {
 
         return vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
+            const optionClasses = meta.iconOptions?.className
+                ? meta.iconOptions.className.split(' ').filter(Boolean)
+                : [];
+            const mergedClasses = Array.from(new Set(['vm-status-icon', ...optionClasses])).join(' ');
+            const vmIcon = icon(meta.iconName, {
+                ...meta.iconOptions,
+                className: mergedClasses,
+                size: meta.iconOptions?.size ?? 20,
+            });
             return `
                 <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
                     <div class="vm-card-header">
-                        <span class="vm-status-icon">${meta.emoji}</span>
+                        ${vmIcon}
                         <span class="vm-card-name">${vm.name}</span>
                     </div>
                     <div class="vm-card-details">
@@ -926,22 +940,23 @@ class VMView extends BaseView {
     buildVmActionButtons(vm) {
         const availability = this.getActionAvailability(vm && vm.state);
         const actions = [
-            { action: 'start', icon: '▶️', tooltip: 'Start', aria: 'Start virtual machine' },
-            { action: 'shutdown', icon: '⏻', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
-            { action: 'stop', icon: '⏹️', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
-            { action: 'reset', icon: '🔄', tooltip: 'Reset', aria: 'Reset virtual machine' },
-            { action: 'delete', icon: '🗑️', tooltip: 'Delete', aria: 'Delete virtual machine' },
+            { action: 'start', iconName: 'play_circle', tooltip: 'Start', aria: 'Start virtual machine' },
+            { action: 'shutdown', iconName: 'power_settings_new', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
+            { action: 'stop', iconName: 'stop_circle', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
+            { action: 'reset', iconName: 'autorenew', tooltip: 'Reset', aria: 'Reset virtual machine' },
+            { action: 'delete', iconName: 'delete', tooltip: 'Delete', aria: 'Delete virtual machine' },
         ];
 
-        return actions.map(({ action, icon, tooltip, aria }) => {
+        return actions.map(({ action, iconName, tooltip, aria }) => {
             const allowed = availability[action];
             const disabledAttr = allowed ? '' : 'disabled';
             const disabledClass = allowed ? '' : 'disabled';
+            const iconMarkup = icon(iconName, { className: 'vm-action-symbol', size: 22 });
 
             return `
                     <button type="button" class="vm-action-btn ${disabledClass}" data-action="${action}"
                         data-tooltip="${tooltip}" aria-label="${aria}" ${disabledAttr}>
-                        <span aria-hidden="true">${icon}</span>
+                        ${iconMarkup}
                     </button>
             `;
         }).join('');
@@ -1557,7 +1572,7 @@ class DisconnectedHostsView extends BaseView {
                 
                 ${disconnectedHosts.length === 0 ? `
                     <div class="empty-state">
-                        <div class="empty-icon">✅</div>
+                        <div class="empty-icon">${icon('check_circle', { className: 'status-success', size: 48 })}</div>
                         <div class="empty-title">All hosts are connected</div>
                         <div class="empty-description">Great! All configured hosts are currently reachable.</div>
                     </div>
@@ -1574,7 +1589,7 @@ class DisconnectedHostsView extends BaseView {
         return hosts.map(host => `
             <div class="host-card disconnected">
                 <div class="host-card-header">
-                    <span class="host-icon">⚠️</span>
+                    ${icon('warning', { className: 'host-icon status-warning', size: 28 })}
                     <span class="host-name">${host.hostname}</span>
                 </div>
                 <div class="host-card-status">
@@ -1592,7 +1607,7 @@ class DisconnectedHostsView extends BaseView {
                 ` : ''}
                 <div class="host-actions">
                     <button class="action-btn retry" onclick="retryHostConnection('${host.hostname}')">
-                        <span class="action-icon">🔄</span>
+                        ${icon('autorenew', { className: 'action-icon', size: 24 })}
                         <span>Retry Connection</span>
                     </button>
                 </div>
