@@ -21,7 +21,14 @@ class NotificationServiceAgentDeploymentTests(IsolatedAsyncioTestCase):
 
         self.service = NotificationService()
         # Prevent background broadcast tasks during tests
-        self.service._schedule_broadcast = lambda notification, action='updated': None  # type: ignore[assignment]
+        self.broadcast_calls = []
+
+        def capture_broadcast(notification, action='updated', extra=None):
+            self.broadcast_calls.append(
+                {'notification': notification, 'action': action, 'extra': extra}
+            )
+
+        self.service._schedule_broadcast = capture_broadcast  # type: ignore[assignment]
         await self.service.start()
 
     async def asyncTearDown(self):
@@ -60,3 +67,34 @@ class NotificationServiceAgentDeploymentTests(IsolatedAsyncioTestCase):
         self.assertTrue(updated.metadata.get('provisioning_available'))
         self.assertEqual(updated.metadata.get('status'), 'successful')
         self.assertEqual(updated.level, NotificationLevel.SUCCESS)
+
+    async def test_mark_all_read_triggers_broadcast_with_unread_count(self):
+        assert NotificationLevel is not None
+        assert NotificationCategory is not None
+
+        self.service.create_notification(
+            title='Unread 1',
+            message='First unread notification',
+            level=NotificationLevel.INFO,
+            category=NotificationCategory.SYSTEM,
+        )
+        self.service.create_notification(
+            title='Unread 2',
+            message='Second unread notification',
+            level=NotificationLevel.WARNING,
+            category=NotificationCategory.SYSTEM,
+        )
+
+        # Clear broadcasts from creation events
+        self.broadcast_calls.clear()
+
+        updated_count = self.service.mark_all_read()
+
+        self.assertEqual(updated_count, 2)
+        self.assertGreaterEqual(len(self.broadcast_calls), 1)
+        unread_counts = {
+            call['extra']['unread_count']
+            for call in self.broadcast_calls
+            if call['extra'] and 'unread_count' in call['extra']
+        }
+        self.assertIn(0, unread_counts)
