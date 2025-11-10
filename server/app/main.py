@@ -9,6 +9,7 @@ from pathlib import Path
 import secrets
 import uvicorn
 from fastapi import FastAPI, Request, status
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -150,12 +151,14 @@ async def lifespan(app: FastAPI):
         logger.info("Application stopped")
 
 
-# Create FastAPI app
+# Create FastAPI app with docs disabled (we'll serve them with local assets)
 app = FastAPI(
     title=settings.app_name,
     version=build_metadata.version,
     description="Lightweight orchestration service for Hyper-V virtual machines",
     lifespan=lifespan,
+    docs_url=None,  # Disable default docs
+    redoc_url=None,  # Disable default redoc
 )
 
 static_dir = Path("app/static")
@@ -298,6 +301,18 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router)
+
+# Custom Swagger UI endpoint using local assets to avoid CSP issues
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    """Serve Swagger UI with local assets instead of CDN."""
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - API Documentation",
+        swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger-ui/swagger-ui.css",
+        swagger_favicon_url="/static/swagger-ui/favicon-32x32.png",
+    )
 
 # Setup templates
 templates = Jinja2Templates(directory="app/templates")

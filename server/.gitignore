@@ -41,3 +41,7 @@ htmlcov/
 # Local development
 *.db
 *.sqlite
+
+# Build artifacts - generated during Docker build
+app/static/icons/
+app/static/swagger-ui/
