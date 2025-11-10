@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from swagger_ui_bundle import swagger_ui_3_path
 
 from .core.config import (
     settings,
@@ -155,6 +156,11 @@ app = FastAPI(
     title=settings.app_name,
     version=build_metadata.version,
     description="Lightweight orchestration service for Hyper-V virtual machines",
+    docs_url="/docs",
+    redoc_url=None,
+    swagger_ui_js_url="/static/swagger-ui/swagger-ui-bundle.js",
+    swagger_ui_css_url="/static/swagger-ui/swagger-ui.css",
+    swagger_ui_favicon_url="/static/swagger-ui/favicon-32x32.png",
     lifespan=lifespan,
 )
 
@@ -165,6 +171,12 @@ else:  # pragma: no cover - filesystem dependent
     logger.warning(
         "Static assets directory '%s' not found; static routes disabled", static_dir
     )
+
+app.mount(
+    "/static/swagger-ui",
+    StaticFiles(directory=str(swagger_ui_3_path)),
+    name="swagger-ui",
+)
 
 if AGENT_ARTIFACTS_DIR.is_dir():
     app.mount(

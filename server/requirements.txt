@@ -12,3 +12,4 @@ itsdangerous==2.1.2
 websockets>=12.0,<16.0
 PyYAML==6.0.1
 psutil==5.9.8
+swagger-ui-bundle==0.0.9
