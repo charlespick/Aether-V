@@ -12,6 +12,10 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.openapi.docs import (
+    get_swagger_ui_html,
+    get_swagger_ui_oauth2_redirect_html,
+)
 from starlette.middleware.sessions import SessionMiddleware
 from swagger_ui_bundle import swagger_ui_3_path
 
@@ -152,20 +156,21 @@ async def lifespan(app: FastAPI):
 
 
 # Create FastAPI app
+SWAGGER_UI_STATIC_ROUTE = "/static/swagger-ui"
+DOCS_URL = "/docs"
+SWAGGER_OAUTH2_REDIRECT_URL = f"{DOCS_URL}/oauth2-redirect"
+
 app = FastAPI(
     title=settings.app_name,
     version=build_metadata.version,
     description="Lightweight orchestration service for Hyper-V virtual machines",
-    docs_url="/docs",
+    docs_url=None,
     redoc_url=None,
-    swagger_ui_js_url="/static/swagger-ui/swagger-ui-bundle.js",
-    swagger_ui_css_url="/static/swagger-ui/swagger-ui.css",
-    swagger_ui_favicon_url="/static/swagger-ui/favicon-32x32.png",
     lifespan=lifespan,
 )
 
 app.mount(
-    "/static/swagger-ui",
+    SWAGGER_UI_STATIC_ROUTE,
     StaticFiles(directory=str(swagger_ui_3_path)),
     name="swagger-ui",
 )
@@ -189,6 +194,29 @@ else:  # pragma: no cover - filesystem dependent
         "Agent artifacts directory '%s' not found; host deployments will be disabled",
         AGENT_ARTIFACTS_DIR,
     )
+
+
+@app.get(DOCS_URL, include_in_schema=False)
+async def swagger_ui_html() -> HTMLResponse:
+    """Serve Swagger UI assets from local static files respecting CSP."""
+
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - Swagger UI",
+        swagger_js_url=f"{SWAGGER_UI_STATIC_ROUTE}/swagger-ui-bundle.js",
+        swagger_css_url=f"{SWAGGER_UI_STATIC_ROUTE}/swagger-ui.css",
+        swagger_favicon_url=f"{SWAGGER_UI_STATIC_ROUTE}/favicon-32x32.png",
+        oauth2_redirect_url=SWAGGER_OAUTH2_REDIRECT_URL,
+        init_oauth=app.swagger_ui_init_oauth,
+        swagger_ui_parameters=app.swagger_ui_parameters,
+    )
+
+
+@app.get(SWAGGER_OAUTH2_REDIRECT_URL, include_in_schema=False)
+async def swagger_ui_redirect() -> HTMLResponse:
+    """Serve the OAuth2 redirect HTML used by Swagger UI."""
+
+    return get_swagger_ui_oauth2_redirect_html()
 
 # Add security headers and audit logging middleware
 
