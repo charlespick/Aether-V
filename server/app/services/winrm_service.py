@@ -361,10 +361,12 @@ class WinRMService:
     _EXIT_SENTINEL: str = _PSRPStreamCursor._EXIT_SENTINEL
 
     @contextmanager
-    def _session(self, hostname: str) -> Iterator[RunspacePool]:
+    def _session(
+        self, hostname: str, *, transport: Optional[str] = None
+    ) -> Iterator[RunspacePool]:
         """Yield an opened runspace pool for the target host."""
 
-        wsman = self._create_session(hostname)
+        wsman = self._create_session(hostname, transport=transport)
         pool = self._open_runspace_pool(hostname, wsman)
         try:
             yield pool
@@ -374,25 +376,30 @@ class WinRMService:
             finally:
                 self._dispose_session(wsman)
 
-    def get_session(self, hostname: str) -> RunspacePool:
+    def get_session(
+        self, hostname: str, *, transport: Optional[str] = None
+    ) -> RunspacePool:
         """Return a new runspace pool for the caller."""
 
         logger.debug("Creating new runspace pool for %s", hostname)
-        wsman = self._create_session(hostname)
+        wsman = self._create_session(hostname, transport=transport)
         return self._open_runspace_pool(hostname, wsman)
 
-    def _create_session(self, hostname: str) -> WSMan:
+    def _create_session(
+        self, hostname: str, *, transport: Optional[str] = None
+    ) -> WSMan:
         """Create a new WSMan session using configured credentials."""
 
         connection_timeout = int(max(1.0, float(settings.winrm_connection_timeout)))
         operation_timeout = int(max(1.0, float(settings.winrm_operation_timeout)))
         read_timeout = int(max(1.0, float(settings.winrm_read_timeout)))
 
+        selected_transport = (transport or settings.winrm_transport or "ntlm").lower()
         logger.info(
             "Creating WinRM (PSRP) session to %s (port=%s, transport=%s, username=%s)",
             hostname,
             settings.winrm_port,
-            settings.winrm_transport,
+            selected_transport,
             settings.winrm_username or "<anonymous>",
         )
         logger.debug(
@@ -403,7 +410,7 @@ class WinRMService:
             read_timeout,
         )
 
-        auth = settings.winrm_transport or "ntlm"
+        auth = selected_transport
         use_ssl = settings.winrm_port == 5986
 
         try:
@@ -445,6 +452,8 @@ class WinRMService:
         script_path: str,
         parameters: Dict[str, Any],
         environment: Optional[Dict[str, str]] = None,
+        *,
+        transport: Optional[str] = None,
     ) -> tuple[str, str, int]:
         """Execute a PowerShell script on a remote host."""
 
@@ -460,10 +469,10 @@ class WinRMService:
             environment,
         )
 
-        return self._execute(hostname, script)
+        return self._execute(hostname, script, transport=transport)
 
     def execute_ps_command(
-        self, hostname: str, command: str
+        self, hostname: str, command: str, *, transport: Optional[str] = None
     ) -> tuple[str, str, int]:
         """Execute an arbitrary PowerShell command on a host."""
 
@@ -474,13 +483,15 @@ class WinRMService:
         logger.debug("Full PowerShell command on %s: %s", hostname, command)
 
         script = self._wrap_command(command, None)
-        return self._execute(hostname, script)
+        return self._execute(hostname, script, transport=transport)
 
     def stream_ps_command(
         self,
         hostname: str,
         command: str,
         on_chunk: Callable[[str, str], None],
+        *,
+        transport: Optional[str] = None,
     ) -> int:
         """Execute a PowerShell command and stream output via callback."""
 
@@ -492,7 +503,7 @@ class WinRMService:
 
         script = self._wrap_command(command, None)
 
-        with self._session(hostname) as pool:
+        with self._session(hostname, transport=transport) as pool:
             cursor = _PSRPStreamCursor(hostname=hostname, on_chunk=on_chunk)
             exit_code, duration = self._invoke(pool, hostname, script, cursor)
 
@@ -509,7 +520,9 @@ class WinRMService:
 
         return exit_code
 
-    def _execute(self, hostname: str, script: str) -> tuple[str, str, int]:
+    def _execute(
+        self, hostname: str, script: str, *, transport: Optional[str] = None
+    ) -> tuple[str, str, int]:
         """Execute a script synchronously and return collected output."""
 
         stdout_chunks: list[str] = []
@@ -523,7 +536,7 @@ class WinRMService:
 
         cursor = _PSRPStreamCursor(hostname=hostname, on_chunk=_collect)
 
-        with self._session(hostname) as pool:
+        with self._session(hostname, transport=transport) as pool:
             exit_code, duration = self._invoke(pool, hostname, script, cursor)
 
         stdout = self._join_chunks(stdout_chunks)

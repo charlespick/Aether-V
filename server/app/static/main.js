@@ -1422,7 +1422,7 @@ function renderClusterContent(
                 const meta = getVmStateMeta(vm.state);
                 const vmClasses = ['vm-item'];
                 const availabilityInfo = deriveVmAvailability(vm, { host, hostPresent: true });
-                if (availabilityInfo.availability === false) {
+                if (availabilityInfo.availability !== true) {
                     vmClasses.push('non-clustered');
                     hasNonClustered = true;
                 }
@@ -1472,7 +1472,7 @@ function renderClusterContent(
             host: hostRecord,
             hostPresent: Boolean(hostRecord || vm.host),
         });
-        if (availabilityInfo.availability === false) {
+        if (availabilityInfo.availability !== true) {
             vmClasses.push('non-clustered');
             hasNonClustered = true;
         }

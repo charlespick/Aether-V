@@ -157,6 +157,7 @@ class InventoryService:
         self._average_host_refresh_seconds = 0.0
         self._snapshot_sequence_counter = itertools.count()
         self._host_last_applied_sequence: Dict[str, int] = {}
+        self._warned_transport_override = False
 
     async def start(self):
         """Start the inventory service and begin periodic refresh."""
@@ -1257,10 +1258,19 @@ class InventoryService:
         script_path = str(
             PureWindowsPath(settings.host_install_directory) / INVENTORY_SCRIPT_NAME
         )
+        configured_transport = (settings.winrm_transport or "ntlm").lower()
+        if configured_transport != "credssp" and not self._warned_transport_override:
+            logger.warning(
+                "Configured WinRM transport '%s' does not support cluster delegation; overriding to CredSSP for inventory collection",
+                configured_transport,
+            )
+            self._warned_transport_override = True
+
         stdout, stderr, exit_code = winrm_service.execute_ps_script(
             hostname,
             script_path,
             {"ComputerName": hostname},
+            transport="credssp",
         )
 
         logger.debug(

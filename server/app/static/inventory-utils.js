@@ -219,7 +219,7 @@
 
         return {
             availability,
-            isHighlyAvailable: availability !== false,
+            isHighlyAvailable: availability === true,
             determined: availability !== null,
             clusterName,
             host,
