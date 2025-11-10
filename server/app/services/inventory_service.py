@@ -1360,7 +1360,9 @@ class InventoryService:
     def _derive_vm_high_availability(
         cls,
         normalized_vm_fields: Dict[str, Any],
-        cluster_name: Optional[str],
+        *,
+        vm_cluster: Optional[str] = None,
+        host_cluster: Optional[str] = None,
         host_present: bool,
     ) -> Optional[bool]:
         for key in cls._VM_HA_FLAG_KEYS:
@@ -1369,10 +1371,10 @@ class InventoryService:
                 if result is not None:
                     return result
 
-        if cluster_name:
+        if vm_cluster:
             return True
 
-        if host_present:
+        if host_cluster is None and host_present:
             return False
 
         return None
@@ -1471,8 +1473,9 @@ class InventoryService:
 
             availability = self._derive_vm_high_availability(
                 normalized_fields,
-                cluster_name,
-                host_present=host_present or host_cluster is not None,
+                vm_cluster=vm_cluster_override,
+                host_cluster=host_cluster,
+                host_present=host_present,
             )
 
             vm = VM(

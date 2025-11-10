@@ -16,6 +16,9 @@ $result = @{
     Warnings        = @()
 }
 
+$highAvailabilityLookup = $null
+$haLookupReliable = $false
+
 try {
     try {
         $clusterNode = Get-ClusterNode -Name $ComputerName -ErrorAction Stop
@@ -24,6 +27,51 @@ try {
         }
     } catch {
         $result.Host.Warnings += "Cluster lookup failed: $($_.Exception.Message)"
+    }
+
+    if ($result.Host.ClusterName) {
+        try {
+            $highAvailabilityLookup = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $vmResources = Get-ClusterResource -Cluster $result.Host.ClusterName -ErrorAction Stop |
+                Where-Object { $_ -and $_.ResourceType -eq 'Virtual Machine' }
+
+            foreach ($resource in $vmResources) {
+                if (-not $resource) { continue }
+                $resourceName = $resource.Name
+                if ([string]::IsNullOrWhiteSpace($resourceName)) { continue }
+
+                $candidates = @()
+                $trimmed = $resourceName.Trim()
+                if ($trimmed) {
+                    $candidates += $trimmed
+                }
+
+                if ($trimmed -match '^(?i)Virtual\s+Machine\s+(.+)$') {
+                    $vmName = $Matches[1].Trim()
+                    if ($vmName) {
+                        $vmName = $vmName.Trim([char[]]@('"', "'"))
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($vmName)) {
+                        $candidates += $vmName
+                    }
+                }
+
+                foreach ($candidate in $candidates) {
+                    if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+                        [void]$highAvailabilityLookup.Add($candidate)
+                    }
+                }
+            }
+
+            $haLookupReliable = $true
+        } catch {
+            $result.Host.Warnings += "Cluster resource lookup failed: $($_.Exception.Message)"
+            $highAvailabilityLookup = $null
+            $haLookupReliable = $false
+        }
+    } else {
+        $highAvailabilityLookup = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $haLookupReliable = $true
     }
 
     $vmProjection = Get-VM | Select-Object `
@@ -46,6 +94,15 @@ try {
             } else {
                 $null
             }
+        }}, `
+        @{Name='HighAvailability';Expression={
+            if ($haLookupReliable -and $highAvailabilityLookup) {
+                return $highAvailabilityLookup.Contains($_.Name)
+            }
+            if (-not $result.Host.ClusterName -and $haLookupReliable) {
+                return $false
+            }
+            return $null
         }}
 
     $result.VirtualMachines = $vmProjection

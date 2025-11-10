@@ -155,32 +155,42 @@
             host = hostIndex.get(String(hostNameCandidate).toLowerCase()) || null;
         }
 
-        const clusterCandidates = [];
-        if (Object.prototype.hasOwnProperty.call(options, 'cluster')) {
-            clusterCandidates.push(options.cluster);
-        }
-        clusterCandidates.push(record.cluster);
-        clusterCandidates.push(normalizedFields['cluster']);
-        clusterCandidates.push(normalizedFields['cluster_name']);
-        clusterCandidates.push(normalizedFields['clustername']);
-        if (host) {
-            clusterCandidates.push(host.cluster);
-            if (host.ClusterName) {
-                clusterCandidates.push(host.ClusterName);
-            }
-            if (host.cluster_name) {
-                clusterCandidates.push(host.cluster_name);
-            }
-        }
-
-        let clusterName = null;
-        for (const candidate of clusterCandidates) {
+        let vmCluster = null;
+        const vmClusterCandidates = [
+            record.cluster,
+            normalizedFields['cluster'],
+            normalizedFields['cluster_name'],
+            normalizedFields['clustername'],
+        ];
+        for (const candidate of vmClusterCandidates) {
             const sanitized = sanitizeClusterName(candidate);
             if (sanitized) {
-                clusterName = sanitized;
+                vmCluster = sanitized;
                 break;
             }
         }
+
+        let hostCluster = null;
+        if (host) {
+            const hostClusterCandidates = [
+                host.cluster,
+                host.ClusterName,
+                host.cluster_name,
+            ];
+            for (const candidate of hostClusterCandidates) {
+                const sanitized = sanitizeClusterName(candidate);
+                if (sanitized) {
+                    hostCluster = sanitized;
+                    break;
+                }
+            }
+        }
+
+        const clusterName = vmCluster || hostCluster || (
+            Object.prototype.hasOwnProperty.call(options, 'cluster')
+                ? sanitizeClusterName(options.cluster)
+                : null
+        );
 
         let availability = null;
         let source = 'unknown';
@@ -198,10 +208,10 @@
 
         const hostAvailable = Boolean(host || options.hostPresent);
         if (availability === null) {
-            if (clusterName) {
+            if (vmCluster) {
                 availability = true;
                 source = 'cluster';
-            } else if (hostAvailable) {
+            } else if (!hostCluster && hostAvailable) {
                 availability = false;
                 source = 'host';
             }

@@ -277,29 +277,77 @@ def test_derive_vm_high_availability_prefers_vm_flag():
         pytest.skip("server package unavailable")
 
     normalized = {"clustered": "no"}
-    result = InventoryService._derive_vm_high_availability(normalized, "Production", True)
+    result = InventoryService._derive_vm_high_availability(
+        normalized,
+        vm_cluster=None,
+        host_cluster="Production",
+        host_present=True,
+    )
     assert result is False
 
     normalized_true = {"ha_enabled": "yes"}
-    result_true = InventoryService._derive_vm_high_availability(normalized_true, None, True)
+    result_true = InventoryService._derive_vm_high_availability(
+        normalized_true,
+        vm_cluster=None,
+        host_cluster=None,
+        host_present=True,
+    )
     assert result_true is True
 
 
-def test_deserialize_vms_derives_high_availability_from_context():
+def test_derive_vm_high_availability_is_unknown_when_cluster_context_missing_flags():
+    if InventoryService is None:
+        pytest.skip("server package unavailable")
+
+    result = InventoryService._derive_vm_high_availability(
+        {},
+        vm_cluster=None,
+        host_cluster="Production",
+        host_present=True,
+    )
+    assert result is None
+
+
+def test_derive_vm_high_availability_uses_vm_cluster_override():
+    if InventoryService is None:
+        pytest.skip("server package unavailable")
+
+    normalized = {}
+    result = InventoryService._derive_vm_high_availability(
+        normalized,
+        vm_cluster="Production",
+        host_cluster="Production",
+        host_present=True,
+    )
+    assert result is True
+
+
+def test_deserialize_vms_prefers_payload_high_availability():
     if InventoryService is None:
         pytest.skip("server package unavailable")
 
     service = InventoryService.__new__(InventoryService)
     production_cluster = InventoryService._normalize_cluster_name("Production")
 
-    clustered_vm = service._deserialize_vms(
+    mixed_vms = service._deserialize_vms(
         "clustered-host",
-        [{"Name": "vm1", "State": "Running"}],
+        [
+            {"Name": "vm3", "State": "Running", "HighAvailability": False},
+            {"Name": "vm4", "State": "Running", "Cluster": "QA"},
+        ],
         host_cluster=production_cluster,
         host_present=True,
-    )[0]
-    assert clustered_vm.cluster == "Production"
-    assert clustered_vm.high_availability is True
+    )
+    assert mixed_vms[0].high_availability is False
+    assert mixed_vms[1].cluster == "QA"
+    assert mixed_vms[1].high_availability is True
+
+
+def test_deserialize_vms_marks_standalone_host_as_not_highly_available():
+    if InventoryService is None:
+        pytest.skip("server package unavailable")
+
+    service = InventoryService.__new__(InventoryService)
 
     standalone_vm = service._deserialize_vms(
         "standalone-host",
@@ -309,16 +357,3 @@ def test_deserialize_vms_derives_high_availability_from_context():
     )[0]
     assert standalone_vm.cluster is None
     assert standalone_vm.high_availability is False
-
-    mixed_vms = service._deserialize_vms(
-        "clustered-host",
-        [
-            {"Name": "vm3", "State": "Running", "Clustered": "No"},
-            {"Name": "vm4", "State": "Running", "Cluster": "QA"},
-        ],
-        host_cluster=production_cluster,
-        host_present=True,
-    )
-    assert mixed_vms[0].high_availability is False
-    assert mixed_vms[1].cluster == "QA"
-    assert mixed_vms[1].high_availability is True
