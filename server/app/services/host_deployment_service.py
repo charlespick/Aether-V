@@ -91,6 +91,8 @@ class HostDeploymentService:
         self._deployment_enabled = self._initialize_agent_download_base_url()
         self._verified_host_versions: Dict[str, str] = {}
         self._host_setup_status: Dict[str, HostSetupStatus] = {}
+        self._host_locks: Dict[str, asyncio.Lock] = {}
+        self._host_locks_lock = asyncio.Lock()
         self._load_container_version()
         self._startup_task: Optional[asyncio.Task[None]] = None
         self._startup_event: Optional[asyncio.Event] = None
@@ -161,7 +163,38 @@ class HostDeploymentService:
         Returns:
             True if setup successful, False otherwise
         """
+
+        lock = await self._get_host_lock(hostname)
+        async with lock:
+            return await self._ensure_host_setup_locked(hostname)
+
+    async def _get_host_lock(self, hostname: str) -> asyncio.Lock:
+        """Return an asyncio lock dedicated to the specified host."""
+
+        async with self._host_locks_lock:
+            lock = self._host_locks.get(hostname)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._host_locks[hostname] = lock
+            return lock
+
+    async def _ensure_host_setup_locked(self, hostname: str) -> bool:
+        """Internal implementation that assumes the per-host lock is held."""
+
         logger.debug("Ensuring host setup for %s", hostname)
+
+        container_version = (self._container_version or "").strip()
+        cached_version = self._verified_host_versions.get(hostname)
+
+        if container_version and cached_version == container_version:
+            logger.debug(
+                "Host %s already verified for container version %s; skipping redeployment",
+                hostname,
+                container_version,
+            )
+            self._host_setup_status[hostname] = HostSetupStatus(state="ready")
+            return True
+
         self._host_setup_status[hostname] = HostSetupStatus(state="checking")
 
         try:
@@ -177,7 +210,7 @@ class HostDeploymentService:
             logger.debug(
                 "Host %s version check: container=%r host=%r -> %s",
                 hostname,
-                (self._container_version or "").strip() or None,
+                container_version or None,
                 normalized_host_version or None,
                 decision,
             )
