@@ -1,3 +1,4 @@
+[CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
     [string]$ComputerName = $env:COMPUTERNAME
@@ -20,13 +21,17 @@ $highAvailabilityLookup = $null
 $haLookupReliable = $false
 
 try {
+    Write-Verbose "Inventory collection starting on host '$ComputerName'"
+
     try {
         $clusterNode = Get-ClusterNode -Name $ComputerName -ErrorAction Stop
         if ($clusterNode -and $clusterNode.Cluster) {
             $result.Host.ClusterName = $clusterNode.Cluster.Name
+            Write-Verbose "Detected cluster '$($result.Host.ClusterName)' for host '$ComputerName'"
         }
     } catch {
         $result.Host.Warnings += "Cluster lookup failed: $($_.Exception.Message)"
+        Write-Verbose "Cluster lookup failed on host '$ComputerName': $($_.Exception.Message)"
     }
 
     if ($result.Host.ClusterName) {
@@ -34,6 +39,8 @@ try {
             $highAvailabilityLookup = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             $vmResources = Get-ClusterResource -Cluster $result.Host.ClusterName -ErrorAction Stop |
                 Where-Object { $_ -and $_.ResourceType -eq 'Virtual Machine' }
+
+            $resourceCount = 0
 
             foreach ($resource in $vmResources) {
                 if (-not $resource) { continue }
@@ -61,17 +68,22 @@ try {
                         [void]$highAvailabilityLookup.Add($candidate)
                     }
                 }
+
+                $resourceCount++
             }
 
             $haLookupReliable = $true
+            Write-Verbose "Recorded $resourceCount clustered VM resource name(s) for cluster '$($result.Host.ClusterName)'"
         } catch {
             $result.Host.Warnings += "Cluster resource lookup failed: $($_.Exception.Message)"
             $highAvailabilityLookup = $null
             $haLookupReliable = $false
+            Write-Verbose "Cluster resource lookup failed on host '$ComputerName': $($_.Exception.Message)"
         }
     } else {
         $highAvailabilityLookup = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $haLookupReliable = $true
+        Write-Verbose "Host '$ComputerName' is not part of a cluster; assuming standalone availability detection"
     }
 
     $vmProjection = Get-VM | Select-Object `
@@ -106,6 +118,18 @@ try {
         }}
 
     $result.VirtualMachines = $vmProjection
+
+    Write-Verbose "Collected $($vmProjection.Count) virtual machine(s) on host '$ComputerName'"
+    foreach ($vm in $vmProjection) {
+        $status = if ($null -eq $vm.HighAvailability) {
+            'Unknown'
+        } elseif ($vm.HighAvailability) {
+            'Clustered'
+        } else {
+            'Standalone'
+        }
+        Write-Verbose "VM '$($vm.Name)': HighAvailability=$status"
+    }
 } catch {
     $result.Host.Error = $_.Exception.Message
     $result.Host.ExceptionType = $_.Exception.GetType().FullName

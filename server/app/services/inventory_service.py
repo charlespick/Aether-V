@@ -1364,19 +1364,55 @@ class InventoryService:
         vm_cluster: Optional[str] = None,
         host_cluster: Optional[str] = None,
         host_present: bool,
+        vm_name: Optional[str] = None,
     ) -> Optional[bool]:
+        vm_label = vm_name or normalized_vm_fields.get("name") or "<unknown>"
         for key in cls._VM_HA_FLAG_KEYS:
             if key in normalized_vm_fields:
-                result = cls._coerce_optional_bool(normalized_vm_fields[key])
+                value = normalized_vm_fields[key]
+                result = cls._coerce_optional_bool(value)
                 if result is not None:
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "VM %s: derived high availability=%s from field %s",
+                            vm_label,
+                            result,
+                            key,
+                        )
                     return result
+                if value is not None and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "VM %s: unable to interpret high availability indicator %s=%r",
+                        vm_label,
+                        key,
+                        value,
+                    )
 
         if vm_cluster:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "VM %s: treating as highly available because payload specifies cluster %s",
+                    vm_label,
+                    vm_cluster,
+                )
             return True
 
         if host_cluster is None and host_present:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "VM %s: host present without cluster association; marking as not highly available",
+                    vm_label,
+                )
             return False
 
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "VM %s: high availability undetermined (vm_cluster=%r host_cluster=%r host_present=%s)",
+                vm_label,
+                vm_cluster,
+                host_cluster,
+                host_present,
+            )
         return None
 
     def _parse_inventory_snapshot(
@@ -1437,6 +1473,7 @@ class InventoryService:
             )
 
         vms: List[VM] = []
+        ha_true = ha_false = ha_unknown = 0
         for vm_data in records:
             if not isinstance(vm_data, dict):
                 logger.warning(
@@ -1476,7 +1513,15 @@ class InventoryService:
                 vm_cluster=vm_cluster_override,
                 host_cluster=host_cluster,
                 host_present=host_present,
+                vm_name=vm_data.get("Name"),
             )
+
+            if availability is True:
+                ha_true += 1
+            elif availability is False:
+                ha_false += 1
+            else:
+                ha_unknown += 1
 
             vm = VM(
                 name=vm_data.get("Name", ""),
@@ -1490,6 +1535,16 @@ class InventoryService:
                 high_availability=availability,
             )
             vms.append(vm)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Host %s VM availability summary: total=%d clustered=%d standalone=%d unknown=%d",
+                hostname,
+                len(vms),
+                ha_true,
+                ha_false,
+                ha_unknown,
+            )
 
         return vms
 
