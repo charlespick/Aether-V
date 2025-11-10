@@ -444,3 +444,41 @@ class HostDeploymentServiceIngressTests(IsolatedAsyncioTestCase):
         self.assertEqual(run_mock.await_count, 1)
         wait_mock.assert_not_called()
 
+    async def test_ensure_host_setup_serializes_concurrent_invocations(self):
+        self.service._wait_for_agent_endpoint_ready = mock.AsyncMock()
+
+        deploy_started = asyncio.Event()
+        release_deploy = asyncio.Event()
+        call_sequence: list[str] = []
+
+        async def run_call(hostname, func, *args, **kwargs):
+            if func is self.service._get_host_version:
+                call_sequence.append("version")
+                return "1.0.0"
+            if func is self.service._deploy_to_host:
+                call_sequence.append("deploy")
+                deploy_started.set()
+                await release_deploy.wait()
+                return True
+            raise AssertionError(f"Unexpected function {func}")
+
+        run_mock = mock.AsyncMock(side_effect=run_call)
+
+        with mock.patch.object(self.service, "_run_winrm_call", run_mock):
+            first = asyncio.create_task(self.service.ensure_host_setup("host-1"))
+            await deploy_started.wait()
+
+            second = asyncio.create_task(self.service.ensure_host_setup("host-1"))
+
+            await asyncio.sleep(0)
+            self.assertEqual(call_sequence, ["version", "deploy"])
+
+            release_deploy.set()
+
+            result_one, result_two = await asyncio.gather(first, second)
+
+        self.assertTrue(result_one)
+        self.assertTrue(result_two)
+        self.assertEqual(run_mock.await_count, 2)
+        self.assertEqual(call_sequence, ["version", "deploy"])
+
