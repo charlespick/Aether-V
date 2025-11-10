@@ -2139,7 +2139,11 @@ tbody tr:last-child td {
 /* View-specific Styles */
 .view-section {
     margin-bottom: 24px;
-    overflow: hidden;
+}
+
+.view-section.surface-card,
+.view-section > .surface-card {
+    overflow: visible;
 }
 
 .view-section-label {
