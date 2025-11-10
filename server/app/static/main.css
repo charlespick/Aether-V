@@ -963,13 +963,15 @@ tbody tr:last-child td {
 }
 
 .host-card.disconnected {
-    border-left: 3px solid #ef4444;
-    background: #fef2f2;
+    border-color: rgba(239, 68, 68, 0.35);
+    background: #fff7f7;
+    box-shadow: 0 16px 36px rgba(239, 68, 68, 0.16);
 }
 
 [data-theme="dark"] .host-card.disconnected {
-    border-left: 3px solid #f87171;
-    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(248, 113, 113, 0.45);
+    background: rgba(239, 68, 68, 0.12);
+    box-shadow: 0 18px 38px rgba(239, 68, 68, 0.32);
 }
 
 .host-card .host-error {
@@ -2195,40 +2197,60 @@ tbody tr:last-child td {
 }
 
 .host-card {
-    padding: 16px;
-    background: var(--muted);
-    border-radius: 8px;
+    padding: 18px 20px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--surface-radius);
+    box-shadow: var(--card-shadow);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 120px;
 }
 
 .host-card:hover {
-    background: #e5e5e5;
-    transform: translateY(-2px);
+    transform: translateY(-4px);
+    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.18);
+    border-color: rgba(15, 23, 42, 0.16);
+}
+
+[data-theme="dark"] .host-card {
+    background: #1f2933;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
 }
 
 [data-theme="dark"] .host-card:hover {
-    background: #333;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+    border-color: rgba(255, 255, 255, 0.14);
 }
 
 .host-card-header {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 12px;
+    margin-bottom: 4px;
 }
 
 .host-icon {
     flex-shrink: 0;
+    color: var(--muted-ink);
 }
 
 .host-name {
-    font-weight: 600;
-    font-size: 14px;
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--ink);
+    letter-spacing: 0.01em;
 }
 
 .host-card-status {
     font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
 }
 
 .vm-grid {
