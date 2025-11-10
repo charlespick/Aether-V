@@ -1968,7 +1968,7 @@ class SearchOverlay {
             hosts.forEach(host => {
                 const shortName = host.hostname.split('.')[0];
                 const iconClass = host.status === 'connected' ? 'status-icon--online' : 'status-icon--offline';
-                const hostIcon = icon('computer', {
+                const hostIcon = icon('host', {
                     className: ['search-result-icon', iconClass].join(' '),
                 });
                 html += `
@@ -1993,7 +1993,7 @@ class SearchOverlay {
         if (clusters.length > 0) {
             html += '<ul class="search-results-list">';
             clusters.forEach(cluster => {
-                const clusterIcon = icon('inventory_2', {
+                const clusterIcon = icon('circles_ext', {
                     className: 'search-result-icon status-muted',
                 });
                 html += `

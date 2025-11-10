@@ -270,7 +270,7 @@ class OverviewView extends BaseView {
                                 </button>
                             </div>
                         ` : `
-                            <div class="empty-icon">${icon('computer', { className: 'status-muted', size: 48 })}</div>
+                            <div class="empty-icon">${icon('host', { className: 'status-muted', size: 48 })}</div>
                             <div class="empty-title">No hosts configured</div>
                             <div class="empty-description">
                                 Configure Hyper-V hosts in your environment settings to begin managing virtual machines.
@@ -386,7 +386,7 @@ class ClusterView extends BaseView {
             return `
             <div class="host-card" onclick="viewManager.switchView('host', { hostname: '${targetHost}' })">
                 <div class="host-card-header">
-                    ${icon('computer', { className: 'host-icon status-muted', size: 28 })}
+                    ${icon('host', { className: 'host-icon status-muted', size: 28 })}
                     <span class="host-name" title="${tooltip}">${displayName}</span>
                 </div>
                 <div class="host-card-status">
