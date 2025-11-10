@@ -2638,7 +2638,6 @@ tbody tr:last-child td {
 
 [data-theme="dark"] .vm-overview-panel.surface-card {
     background: var(--card-bg);
-    border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .vm-overview-grid {
@@ -2716,7 +2715,6 @@ tbody tr:last-child td {
 
 [data-theme="dark"] .vm-tab-panels.surface-card {
     background: var(--card-bg);
-    border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 [data-theme="dark"] .vm-tab.active {
