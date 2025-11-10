@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional, Set
 
 from .config import (
@@ -170,25 +171,30 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             "Set HYPERV_HOSTS to a comma-separated list so workloads can be managed.",
         )
 
-    # WinRM credentials - warn when missing or partially configured.
-    if settings.winrm_username and not settings.winrm_password:
-        _warn(
+    principal = (settings.winrm_kerberos_principal or "").strip()
+    keytab = (settings.winrm_kerberos_keytab or "").strip()
+
+    if not principal:
+        _error(
             result,
-            "WINRM_USERNAME is set but WINRM_PASSWORD is missing.",
-            "Set WINRM_PASSWORD so hosts can be managed.",
+            "WINRM_KERBEROS_PRINCIPAL is not configured.",
+            "Set WINRM_KERBEROS_PRINCIPAL to the service principal that matches your keytab.",
         )
-    elif settings.winrm_password and not settings.winrm_username:
-        _warn(
+
+    if not keytab:
+        _error(
             result,
-            "WINRM_PASSWORD is set but WINRM_USERNAME is missing.",
-            "Set WINRM_USERNAME so hosts can be managed.",
+            "WINRM_KERBEROS_KEYTAB is not configured.",
+            "Mount the Kerberos keytab and set WINRM_KERBEROS_KEYTAB to its absolute path.",
         )
-    elif not settings.winrm_username and not settings.winrm_password:
-        _warn(
-            result,
-            "WINRM credentials are not configured.",
-            "Provide WINRM_USERNAME and WINRM_PASSWORD to manage Hyper-V hosts.",
-        )
+    else:
+        keytab_path = Path(keytab)
+        if not keytab_path.is_file():
+            _error(
+                result,
+                f"Kerberos keytab not found at {keytab_path}.",
+                "Ensure the Kubernetes Secret is mounted and the WINRM_KERBEROS_KEYTAB path is correct.",
+            )
 
     set_config_validation_result(result)
     return result

@@ -33,8 +33,9 @@ Aether-V enables automated, secure, and scalable management of Hyper-V virtual m
 - OIDC provider (Azure AD recommended) or disable auth for development
 
 The orchestration service relies on the [`pypsrp`](https://github.com/jborean93/pypsrp) library for PowerShell Remoting Protocol
-(PSRP) communication. Ensure the configured WinRM endpoint and authentication method permit PSRP sessions (NTLM, Basic, or
-CredSSP as configured via `WINRM_TRANSPORT`).
+(PSRP) communication. Aether-V now authenticates exclusively with Kerberos using a pre-generated keytab. Ensure the
+container hosts have network line-of-sight to your domain controllers, the service principal exists, and resource-based
+delegation is enabled on every Hyper-V host and cluster computer object that Aether-V will manage.
 
 ### Development Setup
 
@@ -61,12 +62,13 @@ All settings are managed via environment variables (ConfigMap/Secrets):
 - `DEBUG`, `APP_VERSION`
 - `AUTH_ENABLED`, `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_API_AUDIENCE`
 - `OIDC_READER_PERMISSIONS`, `OIDC_WRITER_PERMISSIONS`, `OIDC_ADMIN_PERMISSIONS`
-- `HYPERV_HOSTS`, `WINRM_USERNAME`, `WINRM_PASSWORD`, `WINRM_TRANSPORT`, `WINRM_PORT`
+- `HYPERV_HOSTS`, `WINRM_KERBEROS_PRINCIPAL`, `WINRM_KERBEROS_KEYTAB`, `WINRM_KERBEROS_CCACHE`, `WINRM_PORT`
 - `INVENTORY_REFRESH_INTERVAL`
 - `HOST_INSTALL_DIRECTORY`
 - `AGENT_DOWNLOAD_BASE_URL`
 
-See [Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details, plus
+See [Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details, the
+Kerberos-specific onboarding steps in [Docs/KerberosSetup.md](Docs/KerberosSetup.md), plus
 [Docs/vm-provisioning-service.md](Docs/vm-provisioning-service.md) and
 [Docs/vm-deletion-service.md](Docs/vm-deletion-service.md) for end-to-end job
 workflows.

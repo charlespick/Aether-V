@@ -36,8 +36,10 @@ data:
   # Hyper-V hosts
   # HYPERV_HOSTS: "hyperv01.example.com,hyperv02.example.com"  # Default: (empty; provide hostnames to manage workloads)
 
-  # WinRM
-  # WINRM_TRANSPORT: "ntlm"  # Default: ntlm (supports ntlm, basic, credssp)
+  # WinRM / Kerberos
+  # WINRM_KERBEROS_PRINCIPAL: "AETHERV/host@REALM"  # Kerberos service principal (required)
+  # WINRM_KERBEROS_KEYTAB: "/var/run/secrets/aetherv/kerberos.keytab"  # Absolute path to mounted keytab (required)
+  # WINRM_KERBEROS_CCACHE: "/tmp/aetherv_krb5_ccache"  # Optional credential cache path (must be writable)
   # WINRM_PORT: "5985"  # Default: 5985
   # WINRM_OPERATION_TIMEOUT: "15.0"  # Default: 15.0 seconds for WinRM operations
   # WINRM_CONNECTION_TIMEOUT: "30.0"  # Default: 30.0 second network connect timeout

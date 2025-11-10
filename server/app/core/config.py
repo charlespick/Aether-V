@@ -57,9 +57,9 @@ class Settings(BaseSettings):
 
     # Hyper-V Host settings
     hyperv_hosts: str = ""  # Comma-separated list of hosts
-    winrm_username: Optional[str] = None
-    winrm_password: Optional[str] = None
-    winrm_transport: str = "ntlm"  # ntlm, basic, or credssp
+    winrm_kerberos_principal: Optional[str] = None
+    winrm_kerberos_keytab: Optional[str] = None
+    winrm_kerberos_ccache: str = "/tmp/aetherv_krb5_ccache"
     winrm_port: int = 5985
     winrm_operation_timeout: float = 15.0  # seconds to wait for WinRM calls
     winrm_connection_timeout: float = 30.0  # network connect timeout in seconds

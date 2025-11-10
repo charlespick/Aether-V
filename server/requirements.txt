@@ -3,6 +3,7 @@ uvicorn[standard]==0.27.0
 pydantic==2.5.3
 pydantic-settings==2.1.0
 pypsrp==0.8.1
+requests-kerberos==0.14.0
 authlib==1.6.5
 python-multipart==0.0.6
 jinja2==3.1.3

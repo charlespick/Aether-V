@@ -36,7 +36,9 @@ for the UI banner.
 | `COOKIE_SECURE`                 | `true`                       | No                      | Set the secure flag on cookies. Leave `true` unless developing over HTTP.                                            |
 | `COOKIE_SAMESITE`               | `lax`                        | No                      | SameSite policy for cookies. Use `none` for cross-site scenarios (requires HTTPS).                                   |
 | `HYPERV_HOSTS`                  | _(empty)_                    | Recommended             | Comma-separated list of Hyper-V hostnames. Without hosts no workloads can be managed.                                |
-| `WINRM_TRANSPORT`               | `ntlm`                       | No                      | WinRM authentication mechanism (`ntlm`, `basic`, or `credssp`).                                                      |
+| `WINRM_KERBEROS_PRINCIPAL`      | _(unset)_                    | Yes                     | Service principal name used to authenticate to WinRM (for example `AETHERV/host@REALM`).                           |
+| `WINRM_KERBEROS_KEYTAB`         | _(unset)_                    | Yes                     | Absolute path to the Kerberos keytab mounted inside the container.                                                 |
+| `WINRM_KERBEROS_CCACHE`         | `/tmp/aetherv_krb5_ccache`   | No                      | Writable credential cache path used to store Kerberos tickets obtained from the keytab.                            |
 | `WINRM_PORT`                    | `5985`                       | No                      | WinRM port on Hyper-V hosts. Use `5986` when enforcing HTTPS.                                                        |
 | `WINRM_OPERATION_TIMEOUT`       | `15.0`                       | No                      | Seconds to wait for individual WinRM operations before cancelling the request.    |
 | `WINRM_CONNECTION_TIMEOUT`      | `30.0`                       | No                      | Network connect timeout (seconds) when establishing WinRM sessions.               |
@@ -80,8 +82,7 @@ never committed to source control.
 | -------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `OIDC_CLIENT_SECRET` | Client secret for the OIDC application.   | Required when using interactive login.                                                                                                   |
 | `SESSION_SECRET_KEY` | Key used to sign session cookies.         | Optional for development; required in production to keep sessions stable across restarts.                                                |
-| `WINRM_USERNAME`     | Username for connecting to Hyper-V hosts. | Typically a domain account with necessary privileges.                                                                                    |
-| `WINRM_PASSWORD`     | Password for the WinRM account.           | Consider using certificates for enhanced security.                                                                                       |
+| `WINRM_KERBEROS_KEYTAB` | Kerberos keytab used for WinRM authentication. | Store as a Kubernetes Secret and mount it read-only. Set `WINRM_KERBEROS_KEYTAB` to the mounted file path. |
 
 Service principals and other non-interactive callers authenticate by requesting OAuth tokens directly from the identity provider (for example, using a Microsoft Entra application client ID and secret) and presenting those bearer tokens to Aether-V. Access tokens should be requested with the API audience (for example `api://<client-id>/.default`) so the resulting token contains the configured app roles. No static API keys are required or supported.
 

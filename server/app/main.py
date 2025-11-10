@@ -29,6 +29,7 @@ from .services.host_deployment_service import host_deployment_service
 from .services.job_service import job_service
 from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
+from .services.winrm_service import winrm_service, WinRMAuthenticationError
 from .services.websocket_service import websocket_manager
 from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
 
@@ -85,6 +86,12 @@ async def lifespan(app: FastAPI):
             logger.warning("Configuration warning: %s", issue.message)
             if issue.hint:
                 logger.warning("Hint: %s", issue.hint)
+
+    try:
+        winrm_service.initialize()
+    except WinRMAuthenticationError as exc:
+        logger.error("Kerberos initialization failed: %s", exc)
+        raise
 
     remote_started = False
     notifications_started = False

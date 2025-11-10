@@ -2,17 +2,14 @@
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Set
-
-try:  # pragma: no cover - optional dependency detection
-    import requests_credssp  # type: ignore # noqa: F401
-
-    _HAS_REQUESTS_CREDSSP = True
-except ImportError:  # pragma: no cover - optional dependency detection
-    _HAS_REQUESTS_CREDSSP = False
 
 from pypsrp.exceptions import (
     AuthenticationError,
@@ -366,27 +363,133 @@ class WinRMService:
     """Service for managing WinRM connections to Hyper-V hosts."""
 
     _EXIT_SENTINEL: str = _PSRPStreamCursor._EXIT_SENTINEL
-    _CREDSSP_AVAILABLE: bool = _HAS_REQUESTS_CREDSSP
+    _DEFAULT_CCACHE: str = "/tmp/aetherv_krb5_ccache"
 
-    def supports_transport(self, transport: Optional[str]) -> bool:
-        """Return whether the requested transport is available locally."""
+    def __init__(self) -> None:
+        self._kerberos_lock = threading.Lock()
+        self._kerberos_ready = False
+        self._kerberos_ccache: Optional[str] = None
+        self._warned_klist_missing = False
 
-        if not transport:
-            return True
+    def initialize(self) -> None:
+        """Ensure Kerberos credentials are available before serving requests."""
 
-        normalized = transport.lower()
-        if normalized == "credssp":
-            return self._CREDSSP_AVAILABLE
+        try:
+            self._ensure_kerberos_ticket()
+        except WinRMAuthenticationError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.exception("Kerberos initialization failed: %s", exc)
+            raise
 
-        return True
+    def _ensure_kerberos_ticket(self) -> None:
+        """Acquire or renew Kerberos credentials as needed."""
+
+        with self._kerberos_lock:
+            if self._kerberos_ready and self._kerberos_ccache:
+                env = os.environ.copy()
+                env["KRB5CCNAME"] = self._kerberos_ccache
+                try:
+                    result = subprocess.run(
+                        ["klist", "-s"],
+                        env=env,
+                        capture_output=True,
+                        check=False,
+                    )
+                except FileNotFoundError:
+                    if not self._warned_klist_missing:
+                        logger.warning(
+                            "klist utility not found; Kerberos ticket freshness checks are disabled"
+                        )
+                        self._warned_klist_missing = True
+                    return
+
+                if result.returncode == 0:
+                    return
+
+                logger.warning(
+                    "Kerberos ticket cache check failed (rc=%s); reinitializing credentials",
+                    result.returncode,
+                )
+                self._kerberos_ready = False
+
+            self._acquire_kerberos_ticket_locked()
+
+    def _acquire_kerberos_ticket_locked(self) -> None:
+        """Initialise Kerberos credentials using the configured keytab."""
+
+        principal = (settings.winrm_kerberos_principal or "").strip()
+        keytab_path_value = (settings.winrm_kerberos_keytab or "").strip()
+
+        if not principal or not keytab_path_value:
+            raise WinRMAuthenticationError(
+                "Kerberos principal and keytab must be configured via WINRM_KERBEROS_PRINCIPAL and WINRM_KERBEROS_KEYTAB"
+            )
+
+        keytab_path = Path(keytab_path_value)
+        if not keytab_path.is_file():
+            raise WinRMAuthenticationError(
+                f"Kerberos keytab not found at {keytab_path}. Ensure the Kubernetes secret is mounted."
+            )
+
+        ccache_value = (settings.winrm_kerberos_ccache or self._DEFAULT_CCACHE).strip()
+        if not ccache_value:
+            ccache_value = self._DEFAULT_CCACHE
+
+        ccache_path = Path(ccache_value)
+        try:
+            ccache_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # pragma: no cover - filesystem permissions
+            logger.warning(
+                "Unable to pre-create Kerberos credential cache directory %s: %s", ccache_path.parent, exc
+            )
+
+        env = os.environ.copy()
+        env["KRB5_CLIENT_KTNAME"] = str(keytab_path)
+        env["KRB5CCNAME"] = str(ccache_path)
+
+        logger.info(
+            "Acquiring Kerberos ticket for %s using keytab %s (ccache=%s)",
+            principal,
+            keytab_path,
+            ccache_path,
+        )
+
+        try:
+            result = subprocess.run(
+                ["kinit", "-k", "-t", str(keytab_path), principal],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise WinRMAuthenticationError(
+                "kinit utility not found on PATH; install Kerberos user tools in the container"
+            ) from exc
+
+        if result.returncode != 0:
+            error_output = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            raise WinRMAuthenticationError(
+                f"Failed to initialize Kerberos credentials for {principal}: {error_output}"
+            )
+
+        os.environ["KRB5_CLIENT_KTNAME"] = env["KRB5_CLIENT_KTNAME"]
+        os.environ["KRB5CCNAME"] = env["KRB5CCNAME"]
+        self._kerberos_ccache = env["KRB5CCNAME"]
+        self._kerberos_ready = True
+
+        logger.info(
+            "Kerberos ticket acquired successfully for %s; credentials cached at %s",
+            principal,
+            self._kerberos_ccache,
+        )
 
     @contextmanager
-    def _session(
-        self, hostname: str, *, transport: Optional[str] = None
-    ) -> Iterator[RunspacePool]:
+    def _session(self, hostname: str) -> Iterator[RunspacePool]:
         """Yield an opened runspace pool for the target host."""
 
-        wsman = self._create_session(hostname, transport=transport)
+        wsman = self._create_session(hostname)
         pool = self._open_runspace_pool(hostname, wsman)
         try:
             yield pool
@@ -396,37 +499,29 @@ class WinRMService:
             finally:
                 self._dispose_session(wsman)
 
-    def get_session(
-        self, hostname: str, *, transport: Optional[str] = None
-    ) -> RunspacePool:
+    def get_session(self, hostname: str) -> RunspacePool:
         """Return a new runspace pool for the caller."""
 
         logger.debug("Creating new runspace pool for %s", hostname)
-        wsman = self._create_session(hostname, transport=transport)
+        wsman = self._create_session(hostname)
         return self._open_runspace_pool(hostname, wsman)
 
-    def _create_session(
-        self, hostname: str, *, transport: Optional[str] = None
-    ) -> WSMan:
+    def _create_session(self, hostname: str) -> WSMan:
         """Create a new WSMan session using configured credentials."""
 
         connection_timeout = int(max(1.0, float(settings.winrm_connection_timeout)))
         operation_timeout = int(max(1.0, float(settings.winrm_operation_timeout)))
         read_timeout = int(max(1.0, float(settings.winrm_read_timeout)))
 
-        selected_transport = (transport or settings.winrm_transport or "ntlm").lower()
-        if selected_transport == "credssp" and not self._CREDSSP_AVAILABLE:
-            logger.warning(
-                "CredSSP transport requested for %s but requests-credssp is not installed; falling back to NTLM",
-                hostname,
-            )
-            selected_transport = "ntlm"
+        self._ensure_kerberos_ticket()
+
+        selected_transport = "kerberos"
         logger.info(
             "Creating WinRM (PSRP) session to %s (port=%s, transport=%s, username=%s)",
             hostname,
             settings.winrm_port,
             selected_transport,
-            settings.winrm_username or "<anonymous>",
+            settings.winrm_kerberos_principal or "<unspecified>",
         )
         logger.debug(
             "WSMan timeouts for %s -> connection=%ss, operation=%ss, read=%ss",
@@ -443,14 +538,14 @@ class WinRMService:
             session = WSMan(
                 hostname,
                 port=settings.winrm_port,
-                username=settings.winrm_username,
-                password=settings.winrm_password,
+                username=settings.winrm_kerberos_principal,
                 auth=auth,
                 ssl=use_ssl,
                 cert_validation=False,
                 connection_timeout=connection_timeout,
                 operation_timeout=operation_timeout,
                 read_timeout=read_timeout,
+                kerberos_delegation=True,
             )
         except AuthenticationError as exc:  # pragma: no cover - network heavy
             logger.error("Authentication failed while connecting to %s: %s", hostname, exc)
@@ -478,8 +573,6 @@ class WinRMService:
         script_path: str,
         parameters: Dict[str, Any],
         environment: Optional[Dict[str, str]] = None,
-        *,
-        transport: Optional[str] = None,
     ) -> tuple[str, str, int]:
         """Execute a PowerShell script on a remote host."""
 
@@ -495,11 +588,9 @@ class WinRMService:
             environment,
         )
 
-        return self._execute(hostname, script, transport=transport)
+        return self._execute(hostname, script)
 
-    def execute_ps_command(
-        self, hostname: str, command: str, *, transport: Optional[str] = None
-    ) -> tuple[str, str, int]:
+    def execute_ps_command(self, hostname: str, command: str) -> tuple[str, str, int]:
         """Execute an arbitrary PowerShell command on a host."""
 
         truncated = command.replace("\n", " ")
@@ -509,15 +600,13 @@ class WinRMService:
         logger.debug("Full PowerShell command on %s: %s", hostname, command)
 
         script = self._wrap_command(command, None)
-        return self._execute(hostname, script, transport=transport)
+        return self._execute(hostname, script)
 
     def stream_ps_command(
         self,
         hostname: str,
         command: str,
         on_chunk: Callable[[str, str], None],
-        *,
-        transport: Optional[str] = None,
     ) -> int:
         """Execute a PowerShell command and stream output via callback."""
 
@@ -529,7 +618,7 @@ class WinRMService:
 
         script = self._wrap_command(command, None)
 
-        with self._session(hostname, transport=transport) as pool:
+        with self._session(hostname) as pool:
             cursor = _PSRPStreamCursor(hostname=hostname, on_chunk=on_chunk)
             exit_code, duration = self._invoke(pool, hostname, script, cursor)
 
@@ -546,9 +635,7 @@ class WinRMService:
 
         return exit_code
 
-    def _execute(
-        self, hostname: str, script: str, *, transport: Optional[str] = None
-    ) -> tuple[str, str, int]:
+    def _execute(self, hostname: str, script: str) -> tuple[str, str, int]:
         """Execute a script synchronously and return collected output."""
 
         stdout_chunks: list[str] = []
@@ -562,7 +649,7 @@ class WinRMService:
 
         cursor = _PSRPStreamCursor(hostname=hostname, on_chunk=_collect)
 
-        with self._session(hostname, transport=transport) as pool:
+        with self._session(hostname) as pool:
             exit_code, duration = self._invoke(pool, hostname, script, cursor)
 
         stdout = self._join_chunks(stdout_chunks)

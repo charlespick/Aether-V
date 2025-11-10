@@ -38,6 +38,44 @@ T = TypeVar("T")
 
 INVENTORY_SCRIPT_NAME = "Inventory.Collect.ps1"
 PREPARING_HOST_MESSAGE = "Preparing host, will retry later"
+DELEGATION_CHECK_COMMAND = """\
+Import-Module FailoverClusters -ErrorAction SilentlyContinue | Out-Null
+$result = [ordered]@{
+    Clustered = $false
+    DelegationOk = $true
+    Error = $null
+    ClusterName = $null
+}
+try {
+    $cluster = Get-Cluster -ErrorAction Stop
+    $result.Clustered = $true
+    $result.ClusterName = $cluster.Name
+    try {
+        Get-ClusterResource -Cluster $cluster.Name -ErrorAction Stop | Out-Null
+    } catch {
+        $result.DelegationOk = $false
+        $result.Error = $_.Exception.Message
+    }
+} catch [Microsoft.FailoverClusters.PowerShell.ClusterCmdletException] {
+    $message = $_.Exception.Message
+    $result.Error = $message
+    if ($message -match 'cluster service is not running' -or $message -match 'not (currently )?part of a failover cluster') {
+        $result.Clustered = $false
+        $result.DelegationOk = $true
+    } elseif ($message -match 'administrative privileges') {
+        $result.Clustered = $true
+        $result.DelegationOk = $false
+    }
+} catch {
+    $message = $_.Exception.Message
+    $result.Error = $message
+    if ($message -match 'administrative privileges') {
+        $result.Clustered = $true
+        $result.DelegationOk = $false
+    }
+}
+$result | ConvertTo-Json -Depth 3 -Compress
+"""
 
 
 class InventoryScriptMissingError(RuntimeError):
@@ -151,14 +189,14 @@ class InventoryService:
         self._preparing_hosts: Set[str] = set()
         self._preparing_notification_prefix = "inventory-preparing"
         self._slow_host_notification_prefix = "inventory-slow-host"
+        self._delegation_warning_prefix = "inventory-delegation"
         self._slow_hosts: Set[str] = set()
         self._total_host_refresh_duration = 0.0
         self._host_refresh_samples = 0
         self._average_host_refresh_seconds = 0.0
         self._snapshot_sequence_counter = itertools.count()
         self._host_last_applied_sequence: Dict[str, int] = {}
-        self._warned_transport_override = False
-        self._warned_missing_credssp = False
+        self._hosts_missing_delegation: Set[str] = set()
 
     async def start(self):
         """Start the inventory service and begin periodic refresh."""
@@ -192,6 +230,10 @@ class InventoryService:
                     deployment_summary.get("successful_hosts", 0),
                     deployment_summary.get("failed_hosts", 0),
                 )
+
+            hostnames = settings.get_hyperv_hosts_list()
+            if hostnames:
+                await self._verify_kerberos_delegation(hostnames)
 
             if settings.dummy_data:
                 logger.info("DUMMY_DATA enabled - using development data")
@@ -301,6 +343,12 @@ class InventoryService:
                 self._slow_host_notification_key(hostname)
             )
         self._slow_hosts.clear()
+
+        for hostname in list(self._hosts_missing_delegation):
+            notification_service.clear_system_notification(
+                self._delegation_notification_key(hostname)
+            )
+        self._hosts_missing_delegation.clear()
 
     async def _initialize_dummy_data(self):
         """Initialize with dummy data for development."""
@@ -1007,6 +1055,7 @@ class InventoryService:
 
                 # Clear preparing state and notifications.
                 self._clear_preparing_host(hostname)
+                self._clear_delegation_warning(hostname)
 
                 # Clear slow host tracking and notification if active.
                 if hostname in self._slow_hosts:
@@ -1105,6 +1154,45 @@ class InventoryService:
         host = self.hosts.get(hostname)
         if host and host.error == PREPARING_HOST_MESSAGE:
             host.error = None
+
+    def _delegation_notification_key(self, hostname: str) -> str:
+        return f"{self._delegation_warning_prefix}:{hostname}"
+
+    def _record_delegation_warning(
+        self, hostname: str, *, message: str, cluster: Optional[str]
+    ) -> None:
+        """Surface a Kerberos delegation warning for a host."""
+
+        principal = settings.winrm_kerberos_principal or "the configured Aether-V principal"
+        details = message.strip()
+        base_message = (
+            f"Aether-V could not access failover cluster resources on {hostname}. "
+            f"Enable resource-based constrained delegation for {principal} on this host."
+        )
+        if details:
+            base_message = f"{base_message} Details: {details}"
+
+        self._hosts_missing_delegation.add(hostname)
+        notification_service.upsert_system_notification(
+            self._delegation_notification_key(hostname),
+            title=f"Enable Kerberos delegation for {hostname}",
+            message=base_message,
+            level=NotificationLevel.WARNING,
+            metadata={
+                "host": hostname,
+                "cluster": cluster,
+                "type": "kerberos-delegation",
+            },
+        )
+
+    def _clear_delegation_warning(self, hostname: str) -> None:
+        """Clear any outstanding delegation warnings for a host."""
+
+        if hostname in self._hosts_missing_delegation:
+            notification_service.clear_system_notification(
+                self._delegation_notification_key(hostname)
+            )
+            self._hosts_missing_delegation.discard(hostname)
 
     def _record_host_refresh_duration(
         self,
@@ -1253,41 +1341,113 @@ class InventoryService:
             )
             return result
 
+    async def _verify_kerberos_delegation(self, hostnames: Sequence[str]) -> None:
+        """Run Kerberos delegation probes for each configured host."""
+
+        for hostname in hostnames:
+            if not hostname:
+                continue
+
+            try:
+                stdout, stderr, exit_code = await self._run_winrm_call(
+                    hostname,
+                    winrm_service.execute_ps_command,
+                    DELEGATION_CHECK_COMMAND,
+                    description="kerberos delegation probe",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Kerberos delegation probe on %s failed: %s", hostname, exc
+                )
+                self._record_delegation_warning(
+                    hostname,
+                    message=str(exc),
+                    cluster=None,
+                )
+                continue
+
+            message = (stderr or "").strip() or (stdout or "").strip()
+            if exit_code != 0:
+                logger.warning(
+                    "Kerberos delegation probe on %s exited with %s: %s",
+                    hostname,
+                    exit_code,
+                    message,
+                )
+                self._record_delegation_warning(
+                    hostname,
+                    message=message or f"Exit code {exit_code}",
+                    cluster=None,
+                )
+                continue
+
+            payload = (stdout or "").strip()
+            if not payload:
+                logger.warning(
+                    "Kerberos delegation probe on %s returned no data", hostname
+                )
+                self._record_delegation_warning(
+                    hostname,
+                    message="Delegation probe returned no data",
+                    cluster=None,
+                )
+                continue
+
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Unable to parse delegation probe output from %s: %s", hostname, exc
+                )
+                self._record_delegation_warning(
+                    hostname,
+                    message=f"Invalid delegation probe output: {exc}",
+                    cluster=None,
+                )
+                continue
+
+            if not isinstance(data, dict):
+                logger.warning(
+                    "Unexpected delegation probe payload type from %s: %s",
+                    hostname,
+                    type(data).__name__,
+                )
+                self._record_delegation_warning(
+                    hostname,
+                    message="Delegation probe returned unexpected data",
+                    cluster=None,
+                )
+                continue
+
+            clustered = bool(data.get("Clustered"))
+            delegation_ok = bool(data.get("DelegationOk"))
+            cluster_name = data.get("ClusterName")
+            error_text = str(data.get("Error") or "").strip()
+
+            if clustered and not delegation_ok:
+                self._record_delegation_warning(
+                    hostname,
+                    message=error_text or "Kerberos delegation is not permitted for cluster operations.",
+                    cluster=str(cluster_name) if cluster_name else None,
+                )
+            else:
+                if error_text:
+                    logger.debug(
+                        "Delegation probe on %s reported: %s", hostname, error_text
+                    )
+                self._clear_delegation_warning(hostname)
+
     def _collect_host_inventory(self, hostname: str) -> Dict[str, Any]:
         """Execute the inventory collection script on the target host."""
 
         script_path = str(
             PureWindowsPath(settings.host_install_directory) / INVENTORY_SCRIPT_NAME
         )
-        configured_transport = (settings.winrm_transport or "ntlm").lower()
-        transport_override: Optional[str] = None
-
-        if winrm_service.supports_transport("credssp"):
-            if configured_transport != "credssp" and not self._warned_transport_override:
-                logger.warning(
-                    "Configured WinRM transport '%s' does not support cluster delegation; overriding to CredSSP for inventory collection",
-                    configured_transport,
-                )
-                self._warned_transport_override = True
-            transport_override = "credssp"
-        else:
-            if not self._warned_missing_credssp:
-                if configured_transport == "credssp":
-                    logger.error(
-                        "CredSSP configured for WinRM but requests-credssp is not installed; falling back to NTLM for inventory collection"
-                    )
-                else:
-                    logger.warning(
-                        "CredSSP override requested for inventory collection but requests-credssp is not installed; continuing with configured transport '%s'",
-                        configured_transport,
-                    )
-                self._warned_missing_credssp = True
 
         stdout, stderr, exit_code = winrm_service.execute_ps_script(
             hostname,
             script_path,
             {"ComputerName": hostname},
-            transport=transport_override,
         )
 
         logger.debug(
