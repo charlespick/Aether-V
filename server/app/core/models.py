@@ -88,6 +88,8 @@ class VM(BaseModel):
     memory_gb: float = 0.0
     os_family: Optional[OSFamily] = None
     created_at: Optional[datetime] = None
+    cluster: Optional[str] = None
+    high_availability: Optional[bool] = None
 
 
 class VMDeleteRequest(BaseModel):

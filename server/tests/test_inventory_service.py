@@ -259,3 +259,66 @@ async def test_refresh_inventory_prunes_unconfigured_hosts(monkeypatch):
     assert slow_key not in notification_service._system_notification_ids
     assert preparing_id not in notification_service.notifications
     assert slow_id not in notification_service.notifications
+
+
+def test_normalize_cluster_name_handles_sentinels():
+    if InventoryService is None:
+        pytest.skip("server package unavailable")
+
+    assert InventoryService._normalize_cluster_name("Production") == "Production"
+    assert InventoryService._normalize_cluster_name("  Production  ") == "Production"
+    assert InventoryService._normalize_cluster_name("Default") is None
+    assert InventoryService._normalize_cluster_name("standalone") is None
+    assert InventoryService._normalize_cluster_name(None) is None
+
+
+def test_derive_vm_high_availability_prefers_vm_flag():
+    if InventoryService is None:
+        pytest.skip("server package unavailable")
+
+    normalized = {"clustered": "no"}
+    result = InventoryService._derive_vm_high_availability(normalized, "Production", True)
+    assert result is False
+
+    normalized_true = {"ha_enabled": "yes"}
+    result_true = InventoryService._derive_vm_high_availability(normalized_true, None, True)
+    assert result_true is True
+
+
+def test_deserialize_vms_derives_high_availability_from_context():
+    if InventoryService is None:
+        pytest.skip("server package unavailable")
+
+    service = InventoryService.__new__(InventoryService)
+    production_cluster = InventoryService._normalize_cluster_name("Production")
+
+    clustered_vm = service._deserialize_vms(
+        "clustered-host",
+        [{"Name": "vm1", "State": "Running"}],
+        host_cluster=production_cluster,
+        host_present=True,
+    )[0]
+    assert clustered_vm.cluster == "Production"
+    assert clustered_vm.high_availability is True
+
+    standalone_vm = service._deserialize_vms(
+        "standalone-host",
+        [{"Name": "vm2", "State": "Running"}],
+        host_cluster=None,
+        host_present=True,
+    )[0]
+    assert standalone_vm.cluster is None
+    assert standalone_vm.high_availability is False
+
+    mixed_vms = service._deserialize_vms(
+        "clustered-host",
+        [
+            {"Name": "vm3", "State": "Running", "Clustered": "No"},
+            {"Name": "vm4", "State": "Running", "Cluster": "QA"},
+        ],
+        host_cluster=production_cluster,
+        host_present=True,
+    )
+    assert mixed_vms[0].high_availability is False
+    assert mixed_vms[1].cluster == "QA"
+    assert mixed_vms[1].high_availability is True

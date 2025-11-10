@@ -1,5 +1,9 @@
 // View System - Dynamic content management
 const { renderDefaultIcon: renderIconDefault } = window.iconUtils;
+const viewsInventoryUtils = window.inventoryUtils || {};
+const formatVmAvailabilityLabel = typeof viewsInventoryUtils.formatVmAvailabilityLabel === 'function'
+    ? viewsInventoryUtils.formatVmAvailabilityLabel
+    : () => 'Unknown';
 
 function icon(name, options = {}) {
     return renderIconDefault(name, options);
@@ -1600,36 +1604,16 @@ class VMView extends BaseView {
     }
 
     formatClusterState(vm, hostInfo) {
-        const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
-        if (typeof rawClustered !== 'undefined' && rawClustered !== null) {
-            if (typeof rawClustered === 'boolean') {
-                if (rawClustered) {
-                    const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
-                    return `Yes${clusterName}`;
-                }
-                return 'No';
-            }
-
-            const normalized = String(rawClustered).trim().toLowerCase();
-            if (['yes', 'true', '1'].includes(normalized)) {
-                const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
-                return `Yes${clusterName}`;
-            }
-            if (['no', 'false', '0'].includes(normalized)) {
-                return 'No';
-            }
-            if (normalized.length > 0) {
-                return this.formatValue(rawClustered, 'Unknown');
-            }
+        if (!vm) {
+            return 'Unknown';
         }
 
-        if (hostInfo && hostInfo.cluster) {
-            return `Yes (${hostInfo.cluster})`;
-        }
-        if (hostInfo) {
-            return 'No';
-        }
-        return 'Unknown';
+        const label = formatVmAvailabilityLabel(vm, {
+            host: hostInfo || null,
+            hostPresent: Boolean(hostInfo || vm.host),
+        });
+
+        return label || 'Unknown';
     }
 
     extractIpAddresses(vm) {

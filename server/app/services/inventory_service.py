@@ -76,6 +76,61 @@ class HostRefreshSnapshot:
 class InventoryService:
     """Service for managing inventory of hosts and VMs."""
 
+    _VM_HA_FLAG_KEYS: tuple[str, ...] = (
+        "high_availability",
+        "highavailability",
+        "ha_enabled",
+        "haenabled",
+        "clustered",
+        "is_clustered",
+        "isclustered",
+        "vm_clustered",
+        "vmclustered",
+        "ha",
+    )
+    _CLUSTER_SENTINELS: Set[str] = {
+        "",
+        "default",
+        "standalone",
+        "stand-alone",
+        "standalone host",
+        "standalone-host",
+        "none",
+        "null",
+        "n/a",
+        "not clustered",
+        "notclustered",
+        "nonclustered",
+        "single host",
+        "single-host",
+    }
+    _BOOLEAN_TRUE_VALUES: Set[str] = {
+        "1",
+        "true",
+        "yes",
+        "enabled",
+        "ha",
+        "clustered",
+        "high availability",
+        "high-availability",
+        "highavailability",
+        "on",
+    }
+    _BOOLEAN_FALSE_VALUES: Set[str] = {
+        "0",
+        "false",
+        "no",
+        "disabled",
+        "off",
+        "standalone",
+        "stand-alone",
+        "not clustered",
+        "notclustered",
+        "nonclustered",
+        "single host",
+        "single-host",
+    }
+
     def __init__(self):
         self.clusters: Dict[str, Cluster] = {}
         self.hosts: Dict[str, Host] = {}
@@ -323,6 +378,8 @@ class InventoryService:
                 memory_gb=8.0,
                 os_family=OSFamily.LINUX,
                 created_at=now - timedelta(days=5),
+                cluster="Production",
+                high_availability=True,
             ),
             VM(
                 name="db-server-01",
@@ -332,6 +389,8 @@ class InventoryService:
                 memory_gb=16.0,
                 os_family=OSFamily.LINUX,
                 created_at=now - timedelta(days=10),
+                cluster="Production",
+                high_availability=True,
             ),
             VM(
                 name="win-app-01",
@@ -341,6 +400,8 @@ class InventoryService:
                 memory_gb=4.0,
                 os_family=OSFamily.WINDOWS,
                 created_at=now - timedelta(days=2),
+                cluster="Production",
+                high_availability=True,
             ),
             # VMs on hyperv02
             VM(
@@ -351,6 +412,8 @@ class InventoryService:
                 memory_gb=4.0,
                 os_family=OSFamily.LINUX,
                 created_at=now - timedelta(days=7),
+                cluster="Production",
+                high_availability=True,
             ),
             VM(
                 name="monitoring-01",
@@ -360,6 +423,8 @@ class InventoryService:
                 memory_gb=8.0,
                 os_family=OSFamily.LINUX,
                 created_at=now - timedelta(days=3),
+                cluster="Production",
+                high_availability=True,
             ),
             VM(
                 name="backup-vm",
@@ -369,6 +434,8 @@ class InventoryService:
                 memory_gb=2.0,
                 os_family=OSFamily.WINDOWS,
                 created_at=now - timedelta(days=15),
+                cluster="Production",
+                high_availability=True,
             ),
             # VMs on dev host
             VM(
@@ -379,6 +446,8 @@ class InventoryService:
                 memory_gb=4.0,
                 os_family=OSFamily.LINUX,
                 created_at=now - timedelta(days=1),
+                cluster="Development",
+                high_availability=True,
             ),
             VM(
                 name="dev-workstation",
@@ -388,6 +457,8 @@ class InventoryService:
                 memory_gb=8.0,
                 os_family=OSFamily.WINDOWS,
                 created_at=now - timedelta(hours=8),
+                cluster="Development",
+                high_availability=True,
             ),
         ]
 
@@ -1245,6 +1316,67 @@ class InventoryService:
 
         return payload
 
+    @classmethod
+    def _normalize_cluster_name(cls, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        lowered = text.lower()
+        if lowered in cls._CLUSTER_SENTINELS:
+            return None
+
+        return text
+
+    @classmethod
+    def _coerce_optional_bool(cls, value: Any) -> Optional[bool]:
+        if value is None:
+            return None
+
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, (int, float)):
+            if value == 1:
+                return True
+            if value == 0:
+                return False
+
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if not normalized:
+                return None
+            if normalized in cls._BOOLEAN_TRUE_VALUES:
+                return True
+            if normalized in cls._BOOLEAN_FALSE_VALUES:
+                return False
+
+        return None
+
+    @classmethod
+    def _derive_vm_high_availability(
+        cls,
+        normalized_vm_fields: Dict[str, Any],
+        cluster_name: Optional[str],
+        host_present: bool,
+    ) -> Optional[bool]:
+        for key in cls._VM_HA_FLAG_KEYS:
+            if key in normalized_vm_fields:
+                result = cls._coerce_optional_bool(normalized_vm_fields[key])
+                if result is not None:
+                    return result
+
+        if cluster_name:
+            return True
+
+        if host_present:
+            return False
+
+        return None
+
     def _parse_inventory_snapshot(
         self, hostname: str, payload: Dict[str, Any]
     ) -> tuple[str, List[VM]]:
@@ -1266,13 +1398,27 @@ class InventoryService:
         if error_message:
             raise RuntimeError(f"Inventory script reported an error: {error_message}")
 
-        cluster_name = host_section.get("ClusterName") or "Default"
+        raw_cluster_name = host_section.get("ClusterName")
+        normalized_cluster = self._normalize_cluster_name(raw_cluster_name)
+        cluster_name = normalized_cluster or "Default"
         vm_payload = payload.get("VirtualMachines")
 
-        vms = self._deserialize_vms(hostname, vm_payload)
+        vms = self._deserialize_vms(
+            hostname,
+            vm_payload,
+            host_cluster=normalized_cluster,
+            host_present=True,
+        )
         return cluster_name, vms
 
-    def _deserialize_vms(self, hostname: str, data: Any) -> List[VM]:
+    def _deserialize_vms(
+        self,
+        hostname: str,
+        data: Any,
+        *,
+        host_cluster: Optional[str] = None,
+        host_present: bool = False,
+    ) -> List[VM]:
         """Convert raw VM payloads into VM models."""
 
         if data is None:
@@ -1298,6 +1444,21 @@ class InventoryService:
                 )
                 continue
 
+            normalized_fields: Dict[str, Any] = {}
+            for key, value in vm_data.items():
+                if key is None:
+                    continue
+                lowered_key = str(key).lower()
+                if lowered_key not in normalized_fields:
+                    normalized_fields[lowered_key] = value
+
+            vm_cluster_override = self._normalize_cluster_name(
+                normalized_fields.get("cluster")
+                or normalized_fields.get("cluster_name")
+                or normalized_fields.get("clustername")
+            )
+            cluster_name = vm_cluster_override or host_cluster
+
             state_str = vm_data.get("State", "Unknown")
             try:
                 state = VMState(state_str)
@@ -1308,6 +1469,12 @@ class InventoryService:
             cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
             os_family = self._infer_os_family(vm_data.get("OperatingSystem"))
 
+            availability = self._derive_vm_high_availability(
+                normalized_fields,
+                cluster_name,
+                host_present=host_present or host_cluster is not None,
+            )
+
             vm = VM(
                 name=vm_data.get("Name", ""),
                 host=hostname,
@@ -1316,6 +1483,8 @@ class InventoryService:
                 memory_gb=memory_gb,
                 os_family=os_family,
                 created_at=vm_data.get("CreationTime"),
+                cluster=cluster_name,
+                high_availability=availability,
             )
             vms.append(vm)
 

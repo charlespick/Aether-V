@@ -7,6 +7,31 @@ const authEnabled = configData.auth_enabled;
 const { DEFAULT_STYLE, applyIcon, renderDefaultIcon } = window.iconUtils;
 const ICON_STYLE = DEFAULT_STYLE;
 
+const inventoryUtils = window.inventoryUtils || {};
+const buildHostIndex = typeof inventoryUtils.buildHostIndex === 'function'
+    ? inventoryUtils.buildHostIndex
+    : (hosts) => {
+        const index = new Map();
+        if (Array.isArray(hosts)) {
+            hosts.forEach((host) => {
+                if (host && host.hostname) {
+                    index.set(String(host.hostname).toLowerCase(), host);
+                }
+            });
+        }
+        return index;
+    };
+const deriveVmAvailability = typeof inventoryUtils.deriveVmAvailability === 'function'
+    ? inventoryUtils.deriveVmAvailability
+    : (vm) => ({
+        availability: null,
+        isHighlyAvailable: true,
+        determined: false,
+        clusterName: null,
+        host: null,
+        source: 'fallback',
+    });
+
 function icon(name, options = {}) {
     return renderDefaultIcon(name, options);
 }
@@ -1256,45 +1281,6 @@ function updateNotificationBadge(unreadCount) {
     }
 }
 
-function isVmHighlyAvailable(vm) {
-    if (!vm) {
-        return true;
-    }
-
-    const rawValue = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered ?? vm.ha_enabled;
-
-    if (typeof rawValue === 'boolean') {
-        return rawValue;
-    }
-
-    if (typeof rawValue === 'number') {
-        if (rawValue === 0) {
-            return false;
-        }
-        if (rawValue === 1) {
-            return true;
-        }
-    }
-
-    if (typeof rawValue === 'string') {
-        const normalized = rawValue.trim().toLowerCase();
-
-        if (!normalized) {
-            return true;
-        }
-
-        if (['yes', 'true', '1', 'ha', 'enabled', 'clustered', 'high availability', 'high-availability'].includes(normalized)) {
-            return true;
-        }
-
-        if (['no', 'false', '0', 'disabled', 'off', 'standalone', 'not clustered', 'nonclustered'].includes(normalized)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 // Update sidebar navigation with dynamic cluster/host/VM data
 function updateSidebarNavigation(inventory) {
     const clustersContainer = document.getElementById('clusters-container');
@@ -1308,6 +1294,7 @@ function updateSidebarNavigation(inventory) {
     const hosts = inventory.hosts || [];
     const vms = inventory.vms || [];
     const disconnectedHosts = inventory.disconnected_hosts || [];
+    const hostIndex = buildHostIndex(hosts);
     
     // Get user setting for showing hosts
     const showHosts = localStorage.getItem('setting.showHosts') !== 'false';
@@ -1357,7 +1344,14 @@ function updateSidebarNavigation(inventory) {
             const clusterHosts = hostsByCluster[cluster.name] || [];
             const isExpanded = expandedClusters.has(cluster.name);
             
-            const clusterContent = renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts, expandedHosts);
+            const clusterContent = renderClusterContent(
+                cluster,
+                clusterHosts,
+                vmsByHost,
+                showHosts,
+                expandedHosts,
+                hostIndex,
+            );
             if (clusterContent.hasNonClustered) {
                 hasNonClusteredVm = true;
             }
@@ -1407,7 +1401,14 @@ function updateSidebarNavigation(inventory) {
     }
 }
 
-function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHosts = new Set()) {
+function renderClusterContent(
+    cluster,
+    hosts,
+    vmsByHost,
+    showHosts,
+    expandedHosts = new Set(),
+    hostIndex = new Map(),
+) {
     let hasNonClustered = false;
 
     if (showHosts) {
@@ -1420,7 +1421,8 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
             const vmListHtml = hostVMs.map(vm => {
                 const meta = getVmStateMeta(vm.state);
                 const vmClasses = ['vm-item'];
-                if (!isVmHighlyAvailable(vm)) {
+                const availabilityInfo = deriveVmAvailability(vm, { host, hostPresent: true });
+                if (availabilityInfo.availability === false) {
                     vmClasses.push('non-clustered');
                     hasNonClustered = true;
                 }
@@ -1462,7 +1464,15 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
     const vmHtml = allVMs.map(vm => {
         const meta = getVmStateMeta(vm.state);
         const vmClasses = ['vm-item', 'direct'];
-        if (!isVmHighlyAvailable(vm)) {
+        const lowerHostName = vm.host ? String(vm.host).toLowerCase() : null;
+        const hostRecord = lowerHostName && hostIndex instanceof Map
+            ? hostIndex.get(lowerHostName) || null
+            : null;
+        const availabilityInfo = deriveVmAvailability(vm, {
+            host: hostRecord,
+            hostPresent: Boolean(hostRecord || vm.host),
+        });
+        if (availabilityInfo.availability === false) {
             vmClasses.push('non-clustered');
             hasNonClustered = true;
         }
