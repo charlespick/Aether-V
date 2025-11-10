@@ -164,6 +164,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.mount(
+    "/static/swagger-ui",
+    StaticFiles(directory=str(swagger_ui_3_path)),
+    name="swagger-ui",
+)
+
 static_dir = Path("app/static")
 if static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
@@ -171,12 +177,6 @@ else:  # pragma: no cover - filesystem dependent
     logger.warning(
         "Static assets directory '%s' not found; static routes disabled", static_dir
     )
-
-app.mount(
-    "/static/swagger-ui",
-    StaticFiles(directory=str(swagger_ui_3_path)),
-    name="swagger-ui",
-)
 
 if AGENT_ARTIFACTS_DIR.is_dir():
     app.mount(
