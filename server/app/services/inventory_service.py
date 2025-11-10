@@ -158,6 +158,7 @@ class InventoryService:
         self._snapshot_sequence_counter = itertools.count()
         self._host_last_applied_sequence: Dict[str, int] = {}
         self._warned_transport_override = False
+        self._warned_missing_credssp = False
 
     async def start(self):
         """Start the inventory service and begin periodic refresh."""
@@ -1259,18 +1260,34 @@ class InventoryService:
             PureWindowsPath(settings.host_install_directory) / INVENTORY_SCRIPT_NAME
         )
         configured_transport = (settings.winrm_transport or "ntlm").lower()
-        if configured_transport != "credssp" and not self._warned_transport_override:
-            logger.warning(
-                "Configured WinRM transport '%s' does not support cluster delegation; overriding to CredSSP for inventory collection",
-                configured_transport,
-            )
-            self._warned_transport_override = True
+        transport_override: Optional[str] = None
+
+        if winrm_service.supports_transport("credssp"):
+            if configured_transport != "credssp" and not self._warned_transport_override:
+                logger.warning(
+                    "Configured WinRM transport '%s' does not support cluster delegation; overriding to CredSSP for inventory collection",
+                    configured_transport,
+                )
+                self._warned_transport_override = True
+            transport_override = "credssp"
+        else:
+            if not self._warned_missing_credssp:
+                if configured_transport == "credssp":
+                    logger.error(
+                        "CredSSP configured for WinRM but requests-credssp is not installed; falling back to NTLM for inventory collection"
+                    )
+                else:
+                    logger.warning(
+                        "CredSSP override requested for inventory collection but requests-credssp is not installed; continuing with configured transport '%s'",
+                        configured_transport,
+                    )
+                self._warned_missing_credssp = True
 
         stdout, stderr, exit_code = winrm_service.execute_ps_script(
             hostname,
             script_path,
             {"ComputerName": hostname},
-            transport="credssp",
+            transport=transport_override,
         )
 
         logger.debug(

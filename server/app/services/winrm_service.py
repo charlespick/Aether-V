@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Set
 
+try:  # pragma: no cover - optional dependency detection
+    import requests_credssp  # type: ignore # noqa: F401
+
+    _HAS_REQUESTS_CREDSSP = True
+except ImportError:  # pragma: no cover - optional dependency detection
+    _HAS_REQUESTS_CREDSSP = False
+
 from pypsrp.exceptions import (
     AuthenticationError,
     PSInvocationState,
@@ -359,6 +366,19 @@ class WinRMService:
     """Service for managing WinRM connections to Hyper-V hosts."""
 
     _EXIT_SENTINEL: str = _PSRPStreamCursor._EXIT_SENTINEL
+    _CREDSSP_AVAILABLE: bool = _HAS_REQUESTS_CREDSSP
+
+    def supports_transport(self, transport: Optional[str]) -> bool:
+        """Return whether the requested transport is available locally."""
+
+        if not transport:
+            return True
+
+        normalized = transport.lower()
+        if normalized == "credssp":
+            return self._CREDSSP_AVAILABLE
+
+        return True
 
     @contextmanager
     def _session(
@@ -395,6 +415,12 @@ class WinRMService:
         read_timeout = int(max(1.0, float(settings.winrm_read_timeout)))
 
         selected_transport = (transport or settings.winrm_transport or "ntlm").lower()
+        if selected_transport == "credssp" and not self._CREDSSP_AVAILABLE:
+            logger.warning(
+                "CredSSP transport requested for %s but requests-credssp is not installed; falling back to NTLM",
+                hostname,
+            )
+            selected_transport = "ntlm"
         logger.info(
             "Creating WinRM (PSRP) session to %s (port=%s, transport=%s, username=%s)",
             hostname,
