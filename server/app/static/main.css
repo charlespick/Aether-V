@@ -2041,7 +2041,7 @@ tbody tr:last-child td {
     margin-top: 0;
     overflow-y: auto;
     background: transparent;
-    flex: 1;
+    flex: 0 1 auto;
     min-height: 0; /* Allow shrinking */
     padding: 0;
 }

@@ -1819,6 +1819,12 @@ class SearchOverlay {
         let resultsHeight = 0;
         let resultsMargin = 0;
         if (resultsElement) {
+            // Clear any sizing constraints before measuring so the element can
+            // report its natural height. Without this, the expando may only grow
+            // larger but never shrink when fewer results are rendered.
+            resultsElement.style.maxHeight = 'none';
+            resultsElement.style.height = 'auto';
+
             resultsHeight = resultsElement.scrollHeight;
             const resultsStyles = getComputedStyle(resultsElement);
             const marginTop = parseFloat(resultsStyles.marginTop) || 0;
