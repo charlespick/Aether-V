@@ -137,8 +137,9 @@ jobs:
           # Or use the commit SHA
           docker pull ghcr.io/${context.repo.owner}/${process.env.IMAGE_NAME}:sha-${sha}
           \`\`\`
+          `;
           
-          github.rest.issues.createComment({
+          await github.rest.issues.createComment({
             issue_number: prNumber,
             owner: context.repo.owner,
             repo: context.repo.repo,

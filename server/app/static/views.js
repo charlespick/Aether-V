@@ -154,6 +154,62 @@ class BaseView {
     }
 }
 
+function sanitizeHtml(value) {
+    if (value === null || typeof value === 'undefined') {
+        return '';
+    }
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function escapeJsString(value) {
+    if (value === null || typeof value === 'undefined') {
+        return '';
+    }
+    return String(value)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+}
+
+function formatVmMemory(memory) {
+    if (memory === null || typeof memory === 'undefined') {
+        return '—';
+    }
+    const parsed = Number(memory);
+    if (!Number.isFinite(parsed)) {
+        return '—';
+    }
+    return `${parsed.toFixed(2)} GB`;
+}
+
+function formatCpuCount(cpu) {
+    if (cpu === null || typeof cpu === 'undefined') {
+        return '—';
+    }
+    const parsed = Number(cpu);
+    if (!Number.isFinite(parsed)) {
+        return '—';
+    }
+    return parsed.toString();
+}
+
+function formatHostnamePrefix(hostname) {
+    if (hostname === null || typeof hostname === 'undefined') {
+        return '';
+    }
+    const trimmed = String(hostname).trim();
+    if (!trimmed) {
+        return '';
+    }
+    return trimmed.split('.')[0];
+}
+
 // Overview View (Aether root)
 class OverviewView extends BaseView {
     async render() {
@@ -297,12 +353,10 @@ class ClusterView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section surface-card">
-                <div class="section-header">
-                    <h2>Virtual Machines</h2>
-                </div>
-                <div class="vm-grid">
-                    ${this.renderVMCards(clusterVMs)}
+            <div class="view-section">
+                <div class="view-section-label">Virtual Machines</div>
+                <div class="surface-card vm-table-card">
+                    ${this.renderVmTable(clusterVMs)}
                 </div>
             </div>
 
@@ -323,11 +377,17 @@ class ClusterView extends BaseView {
             return '<p class="empty">No hosts configured</p>';
         }
 
-        return hosts.map(host => `
-            <div class="host-card" onclick="viewManager.switchView('host', { hostname: '${host.hostname}' })">
+        return hosts.map(host => {
+            const hostname = host.hostname || 'Unknown Host';
+            const hostnamePrefix = formatHostnamePrefix(hostname) || hostname;
+            const displayName = sanitizeHtml(hostnamePrefix);
+            const tooltip = sanitizeHtml(hostname);
+            const targetHost = escapeJsString(host.hostname || hostnamePrefix);
+            return `
+            <div class="host-card" onclick="viewManager.switchView('host', { hostname: '${targetHost}' })">
                 <div class="host-card-header">
                     ${icon('computer', { className: 'host-icon status-muted', size: 28 })}
-                    <span class="host-name">${host.hostname}</span>
+                    <span class="host-name" title="${tooltip}">${displayName}</span>
                 </div>
                 <div class="host-card-status">
                     <span class="status ${host.connected ? 'connected' : 'disconnected'}">
@@ -335,42 +395,57 @@ class ClusterView extends BaseView {
                     </span>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
     }
 
-    renderVMCards(vms) {
-        if (vms.length === 0) {
+    renderVmTable(vms) {
+        if (!Array.isArray(vms) || vms.length === 0) {
             return '<p class="empty">No virtual machines</p>';
         }
 
-        return vms.map(vm => {
+        const rows = vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
-            const optionClasses = meta.iconOptions?.className
-                ? meta.iconOptions.className.split(' ').filter(Boolean)
-                : [];
-            const mergedClasses = Array.from(new Set(['vm-status-icon', ...optionClasses])).join(' ');
-            const vmIcon = icon(meta.iconName, {
-                ...meta.iconOptions,
-                className: mergedClasses,
-                size: meta.iconOptions?.size ?? 20,
-            });
+            const vmName = vm.name || 'Virtual Machine';
+            const hostName = vm.host || '';
+            const hostDisplay = formatHostnamePrefix(hostName);
+            const safeHostDisplay = hostDisplay ? sanitizeHtml(hostDisplay) : '—';
+            const safeHostTitle = hostName ? sanitizeHtml(hostName) : '';
             return `
-                <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
-                    <div class="vm-card-header">
-                        ${vmIcon}
-                        <span class="vm-card-name">${vm.name}</span>
-                    </div>
-                    <div class="vm-card-details">
-                        <div class="vm-card-spec">${vm.cpu_cores ?? 0} vCPU</div>
-                        <div class="vm-card-spec">${Number(vm.memory_gb ?? 0).toFixed(2)} GB RAM</div>
-                        <div class="vm-card-host">Host: ${vm.host.split('.')[0]}</div>
-                    </div>
-                    <div class="vm-card-status">
-                        <span class="status ${meta.badgeClass}">${meta.label.toUpperCase()}</span>
-                    </div>
-                </div>
+                <tr class="vm-table-row">
+                    <td>
+                        <button type="button" class="vm-table-link"
+                            onclick="viewManager.switchView('vm', { name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
+                            <span class="vm-status-dot ${meta.dotClass}"></span>
+                            <span class="vm-name-text">${sanitizeHtml(vmName)}</span>
+                        </button>
+                    </td>
+                    <td><span class="status ${meta.badgeClass}">${sanitizeHtml(meta.label)}</span></td>
+                    <td>${sanitizeHtml(formatCpuCount(vm.cpu_cores))}</td>
+                    <td>${sanitizeHtml(formatVmMemory(vm.memory_gb))}</td>
+                    <td>${hostDisplay ? `<span class="vm-table-host" title="${safeHostTitle}">${safeHostDisplay}</span>` : '<span class="vm-table-host">—</span>'}</td>
+                </tr>
             `;
         }).join('');
+
+        return `
+            <div class="vm-table-wrapper">
+                <table class="vm-data-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Name</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">vCPU</th>
+                            <th scope="col">Memory</th>
+                            <th scope="col">Host</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        `;
     }
 
     calculateTotalCPU(vms) {
@@ -425,38 +500,57 @@ class HostView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section surface-card">
-                <div class="section-header">
-                    <h2>Virtual Machines</h2>
-                </div>
-                <div class="vm-list-view">
-                    ${this.renderVMList(hostVMs)}
+            <div class="view-section">
+                <div class="view-section-label">Virtual Machines</div>
+                <div class="surface-card vm-table-card">
+                    ${this.renderVmTable(hostVMs, hostname)}
                 </div>
             </div>
         `;
     }
 
-    renderVMList(vms) {
-        if (vms.length === 0) {
+    renderVmTable(vms, fallbackHost = '') {
+        if (!Array.isArray(vms) || vms.length === 0) {
             return '<p class="empty">No VMs on this host</p>';
         }
 
-        return vms.map(vm => {
+        const rows = vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
+            const vmName = vm.name || 'Virtual Machine';
+            const hostName = vm.host || fallbackHost || '';
             return `
-                <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
-                    <div class="vm-card-header">
-                        <span class="vm-status-dot ${meta.dotClass}"></span>
-                        <span class="vm-name">${vm.name}</span>
-                    </div>
-                    <div class="vm-card-details">
-                        <span>${vm.cpu_cores ?? 0} vCPU</span>
-                        <span>${Number(vm.memory_gb ?? 0).toFixed(2)} GB RAM</span>
-                        <span class="status ${meta.badgeClass}">${meta.label}</span>
-                    </div>
-                </div>
+                <tr class="vm-table-row">
+                    <td>
+                        <button type="button" class="vm-table-link"
+                            onclick="viewManager.switchView('vm', { name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
+                            <span class="vm-status-dot ${meta.dotClass}"></span>
+                            <span class="vm-name-text">${sanitizeHtml(vmName)}</span>
+                        </button>
+                    </td>
+                    <td><span class="status ${meta.badgeClass}">${sanitizeHtml(meta.label)}</span></td>
+                    <td>${sanitizeHtml(formatCpuCount(vm.cpu_cores))}</td>
+                    <td>${sanitizeHtml(formatVmMemory(vm.memory_gb))}</td>
+                </tr>
             `;
         }).join('');
+
+        return `
+            <div class="vm-table-wrapper">
+                <table class="vm-data-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Name</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">vCPU</th>
+                            <th scope="col">Memory</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        `;
     }
 
     async fetchInventory() {

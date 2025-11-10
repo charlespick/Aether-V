@@ -2142,6 +2142,13 @@ tbody tr:last-child td {
     overflow: hidden;
 }
 
+.view-section-label {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin: 0 0 12px 4px;
+}
+
 .quick-actions {
     display: flex;
     gap: 12px;
@@ -2738,6 +2745,19 @@ tbody tr:last-child td {
     overflow-x: auto;
 }
 
+.vm-table-card {
+    padding: 0;
+    overflow: hidden;
+}
+
+.vm-table-card .vm-table-wrapper {
+    padding: 0 0 12px;
+}
+
+.vm-table-card .empty {
+    margin: 0;
+}
+
 .vm-data-table {
     width: 100%;
     border-collapse: collapse;
@@ -2766,6 +2786,40 @@ tbody tr:last-child td {
 
 .vm-data-table tbody tr:hover {
     background: rgba(59, 130, 246, 0.06);
+}
+
+.vm-table-row:hover .vm-name-text {
+    color: var(--primary-color);
+}
+
+.vm-table-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+
+.vm-table-link:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
+.vm-name-text {
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.vm-table-host {
+    color: var(--muted-ink);
+    font-size: 0.875rem;
 }
 
 .vm-empty-row td {
