@@ -116,6 +116,22 @@
             </ul>
 
             <div class="sidebar-footer">
+                <div
+                    class="sidebar-availability-warning"
+                    id="sidebar-availability-warning"
+                    role="note"
+                    tabindex="0"
+                    hidden
+                    aria-hidden="true"
+                    aria-label="Some virtual machines do not have high availability enabled. Virtual machines with a dashed border around their button do not have high availability enabled and are only placed on that cluster."
+                >
+                    <span class="warning-text">Some virtual machines do not have high availability enabled.</span>
+                    <span
+                        class="warning-tooltip"
+                        id="sidebar-availability-tooltip"
+                        role="tooltip"
+                    >Virtual machines with a dashed border around their button do not have high availability enabled and are only placed on that cluster.</span>
+                </div>
                 <button class="settings-btn" id="sidebar-settings" title="Settings">
                     <span
                         class="icon settings-icon"

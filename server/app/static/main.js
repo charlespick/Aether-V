@@ -1256,14 +1256,54 @@ function updateNotificationBadge(unreadCount) {
     }
 }
 
+function isVmHighlyAvailable(vm) {
+    if (!vm) {
+        return true;
+    }
+
+    const rawValue = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered ?? vm.ha_enabled;
+
+    if (typeof rawValue === 'boolean') {
+        return rawValue;
+    }
+
+    if (typeof rawValue === 'number') {
+        if (rawValue === 0) {
+            return false;
+        }
+        if (rawValue === 1) {
+            return true;
+        }
+    }
+
+    if (typeof rawValue === 'string') {
+        const normalized = rawValue.trim().toLowerCase();
+
+        if (!normalized) {
+            return true;
+        }
+
+        if (['yes', 'true', '1', 'ha', 'enabled', 'clustered', 'high availability', 'high-availability'].includes(normalized)) {
+            return true;
+        }
+
+        if (['no', 'false', '0', 'disabled', 'off', 'standalone', 'not clustered', 'nonclustered'].includes(normalized)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Update sidebar navigation with dynamic cluster/host/VM data
 function updateSidebarNavigation(inventory) {
     const clustersContainer = document.getElementById('clusters-container');
     const disconnectedHostsItem = document.querySelector('.disconnected-hosts');
     const disconnectedBadge = document.querySelector('.disconnected-count');
-    
+    const availabilityWarning = document.getElementById('sidebar-availability-warning');
+
     if (!clustersContainer || !inventory) return;
-    
+
     const clusters = inventory.clusters || [];
     const hosts = inventory.hosts || [];
     const vms = inventory.vms || [];
@@ -1303,6 +1343,7 @@ function updateSidebarNavigation(inventory) {
     
     // Generate clusters HTML
     let clustersHtml = '';
+    let hasNonClusteredVm = false;
     
     if (clusters.length === 0) {
         // No clusters available - show empty state
@@ -1316,6 +1357,11 @@ function updateSidebarNavigation(inventory) {
             const clusterHosts = hostsByCluster[cluster.name] || [];
             const isExpanded = expandedClusters.has(cluster.name);
             
+            const clusterContent = renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts, expandedHosts);
+            if (clusterContent.hasNonClustered) {
+                hasNonClusteredVm = true;
+            }
+
             clustersHtml += `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-cluster="${cluster.name}">
                     <div class="nav-item group-header" data-nav-type="cluster" data-cluster-name="${cluster.name}">
@@ -1324,14 +1370,24 @@ function updateSidebarNavigation(inventory) {
                         <span class="expand-icon">${icon('arrow_drop_down')}</span>
                     </div>
                     <ul class="sub-list">
-                        ${renderClusterContent(cluster, clusterHosts, vmsByHost, showHosts, expandedHosts)}
+                        ${clusterContent.html}
                     </ul>
                 </li>
             `;
         });
     }
-    
+
     clustersContainer.innerHTML = `<ul class="nav-list">${clustersHtml}</ul>`;
+
+    if (availabilityWarning) {
+        if (hasNonClusteredVm) {
+            availabilityWarning.removeAttribute('hidden');
+            availabilityWarning.setAttribute('aria-hidden', 'false');
+        } else {
+            availabilityWarning.setAttribute('hidden', '');
+            availabilityWarning.setAttribute('aria-hidden', 'true');
+        }
+    }
     
     // Update disconnected hosts section
     if (disconnectedHosts.length > 0) {
@@ -1352,13 +1408,31 @@ function updateSidebarNavigation(inventory) {
 }
 
 function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHosts = new Set()) {
+    let hasNonClustered = false;
+
     if (showHosts) {
         // Show hosts as intermediate level
-        return hosts.map(host => {
+        const hostHtml = hosts.map(host => {
             const shortName = host.hostname.split('.')[0];
             const hostVMs = vmsByHost[host.hostname] || [];
             const isExpanded = expandedHosts.has(host.hostname);
-            
+
+            const vmListHtml = hostVMs.map(vm => {
+                const meta = getVmStateMeta(vm.state);
+                const vmClasses = ['vm-item'];
+                if (!isVmHighlyAvailable(vm)) {
+                    vmClasses.push('non-clustered');
+                    hasNonClustered = true;
+                }
+
+                return `
+                    <li class="${vmClasses.join(' ')}" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
+                        <span class="vm-status">${meta.icon}</span>
+                        <span class="vm-name">${vm.name}</span>
+                    </li>
+                `;
+            }).join('');
+
             return `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-host="${host.hostname}">
                     <div class="sub-item group-header" data-nav-type="host" data-hostname="${host.hostname}">
@@ -1368,40 +1442,40 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
                     </div>
                     ${hostVMs.length > 0 ? `
                         <ul class="sub-sub-list">
-                            ${hostVMs.map(vm => {
-                                const meta = getVmStateMeta(vm.state);
-                                return `
-                                    <li class="vm-item" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
-                                        <span class="vm-status">${meta.icon}</span>
-                                        <span class="vm-name">${vm.name}</span>
-                                    </li>
-                                `;
-                            }).join('')}
+                            ${vmListHtml}
                         </ul>
                     ` : ''}
                 </li>
             `;
         }).join('');
-    } else {
-        // Show VMs directly under cluster
-        const allVMs = [];
-        hosts.forEach(host => {
-            const hostVMs = vmsByHost[host.hostname] || [];
-            allVMs.push(...hostVMs);
-        });
-        
-        return allVMs.map(vm => {
-            const meta = getVmStateMeta(vm.state);
-            const hostShort = vm.host.split('.')[0];
-            return `
-                <li class="vm-item direct" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
-                    <span class="vm-status">${meta.icon}</span>
-                    <span class="vm-name">${vm.name}</span>
-                    <span class="vm-host">(${hostShort})</span>
-                </li>
-            `;
-        }).join('');
+
+        return { html: hostHtml, hasNonClustered };
     }
+
+    // Show VMs directly under cluster
+    const allVMs = [];
+    hosts.forEach(host => {
+        const hostVMs = vmsByHost[host.hostname] || [];
+        allVMs.push(...hostVMs);
+    });
+
+    const vmHtml = allVMs.map(vm => {
+        const meta = getVmStateMeta(vm.state);
+        const vmClasses = ['vm-item', 'direct'];
+        if (!isVmHighlyAvailable(vm)) {
+            vmClasses.push('non-clustered');
+            hasNonClustered = true;
+        }
+
+        return `
+            <li class="${vmClasses.join(' ')}" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
+                <span class="vm-status">${meta.icon}</span>
+                <span class="vm-name">${vm.name}</span>
+            </li>
+        `;
+    }).join('');
+
+    return { html: vmHtml, hasNonClustered };
 }
 
 function attachNavigationEventListeners() {

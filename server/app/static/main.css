@@ -455,6 +455,77 @@ body {
     border-top: 1px solid var(--border-color);
 }
 
+.sidebar-availability-warning {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--muted-ink);
+    background: rgba(0, 0, 0, 0.02);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    position: relative;
+    cursor: default;
+    transition: background 0.2s ease;
+    outline: none;
+}
+
+[data-theme="dark"] .sidebar-availability-warning {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.sidebar-availability-warning:focus-visible {
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.45);
+}
+
+.sidebar-availability-warning .warning-tooltip {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 8px);
+    width: 220px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(17, 24, 39, 0.95);
+    color: #f9fafb;
+    font-size: 12px;
+    line-height: 1.5;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    visibility: hidden;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 10;
+}
+
+.sidebar-availability-warning .warning-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 18px;
+    border-width: 6px;
+    border-style: solid;
+    border-color: rgba(17, 24, 39, 0.95) transparent transparent transparent;
+}
+
+.sidebar-availability-warning:hover .warning-tooltip,
+.sidebar-availability-warning:focus .warning-tooltip,
+.sidebar-availability-warning:focus-within .warning-tooltip {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+    visibility: visible;
+}
+
+[data-theme="dark"] .sidebar-availability-warning .warning-tooltip {
+    background: rgba(30, 30, 30, 0.92);
+    color: #f9fafb;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .sidebar-availability-warning .warning-tooltip::after {
+    border-color: rgba(30, 30, 30, 0.92) transparent transparent transparent;
+}
+
 .settings-btn {
     width: 100%;
     display: flex;
@@ -693,6 +764,7 @@ body {
     font-size: 13px;
     cursor: pointer;
     border-radius: 6px;
+    border: 1px solid transparent;
     transition: background 0.2s;
 }
 
@@ -714,6 +786,14 @@ body {
 [data-theme="dark"] .vm-item.active {
     background: rgba(255, 255, 255, 0.1);
     color: var(--ink);
+}
+
+.vm-item.non-clustered {
+    border: 1px dashed rgba(245, 158, 11, 0.55);
+}
+
+[data-theme="dark"] .vm-item.non-clustered {
+    border-color: rgba(251, 191, 36, 0.7);
 }
 
 .vm-status {
