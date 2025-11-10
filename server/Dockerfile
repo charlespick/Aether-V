@@ -25,7 +25,7 @@ RUN apt-get update && \
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 3: Build icon assets from Material Design SVG package
+# Stage 3: Build icon assets from Material Design SVG package and extract Swagger UI assets
 FROM base AS icon-build
 
 RUN apt-get update && \
@@ -40,6 +40,9 @@ RUN npm install --omit=dev
 COPY server/icons.json ./icons.json
 COPY server/scripts ./scripts
 RUN python scripts/extract_icons.py
+
+# Extract Swagger UI static assets from node_modules
+RUN python scripts/extract_swagger_ui.py
 
 # Stage 4: Capture build metadata
 FROM base AS build-info
@@ -150,6 +153,7 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 # Copy application code and schema definitions
 COPY server/app /app/app
 COPY --from=icon-build /src/server/app/static/icons /app/app/static/icons
+COPY --from=icon-build /src/server/app/static/swagger-ui /app/app/static/swagger-ui
 COPY Schemas /app/Schemas
 
 # Prepare unified agent artifact directory

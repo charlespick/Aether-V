@@ -5,6 +5,7 @@
   "description": "Frontend icon dependencies for the Aether-V server UI",
   "license": "MIT",
   "dependencies": {
-    "@material-symbols/svg-400": "^0.39.1"
+    "@material-symbols/svg-400": "^0.39.1",
+    "swagger-ui-dist": "5.9.0"
   }
 }
