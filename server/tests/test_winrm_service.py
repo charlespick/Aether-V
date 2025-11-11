@@ -1,9 +1,12 @@
 """Unit tests for helpers in the WinRM service."""
 
+from unittest.mock import MagicMock, patch
+
 from pypsrp.powershell import InformationRecord
 from pypsrp.serializer import GenericComplexObject
 
-from app.services.winrm_service import _PSRPStreamCursor
+from app.services.winrm_service import _PSRPStreamCursor, WinRMService
+from app.core.config import Settings
 
 
 def test_stringify_prefers_complex_object_properties():
@@ -71,3 +74,57 @@ def test_stringify_information_handles_dict_payload():
     rendered = _PSRPStreamCursor._stringify_information(record)
 
     assert rendered == "Provisioning complete"
+
+
+def test_winrm_service_create_session_uses_kerberos():
+    """Test that WinRM service creates sessions with Kerberos authentication."""
+    service = WinRMService()
+    
+    with patch("app.services.winrm_service.WSMan") as mock_wsman:
+        with patch("app.services.winrm_service.settings") as mock_settings:
+            # Configure mock settings for Kerberos
+            mock_settings.winrm_kerberos_principal = "svc-test@EXAMPLE.COM"
+            mock_settings.winrm_port = 5985
+            mock_settings.winrm_connection_timeout = 30.0
+            mock_settings.winrm_operation_timeout = 15.0
+            mock_settings.winrm_read_timeout = 30.0
+            
+            # Create a mock WSMan instance
+            mock_wsman_instance = MagicMock()
+            mock_wsman.return_value = mock_wsman_instance
+            
+            # Call _create_session
+            session = service._create_session("test-host.example.com")
+            
+            # Verify WSMan was called with Kerberos auth
+            mock_wsman.assert_called_once()
+            call_kwargs = mock_wsman.call_args[1]
+            
+            assert call_kwargs["auth"] == "kerberos"
+            assert call_kwargs["username"] is None
+            assert call_kwargs["password"] is None
+            assert call_kwargs["port"] == 5985
+            assert session == mock_wsman_instance
+
+
+def test_winrm_service_logs_kerberos_principal():
+    """Test that WinRM service logs the Kerberos principal."""
+    service = WinRMService()
+    
+    with patch("app.services.winrm_service.WSMan"):
+        with patch("app.services.winrm_service.settings") as mock_settings:
+            with patch("app.services.winrm_service.logger") as mock_logger:
+                # Configure mock settings
+                mock_settings.winrm_kerberos_principal = "svc-test@EXAMPLE.COM"
+                mock_settings.winrm_port = 5985
+                mock_settings.winrm_connection_timeout = 30.0
+                mock_settings.winrm_operation_timeout = 15.0
+                mock_settings.winrm_read_timeout = 30.0
+                
+                # Call _create_session
+                service._create_session("test-host.example.com")
+                
+                # Verify logging includes Kerberos principal
+                info_calls = [call for call in mock_logger.info.call_args_list]
+                assert any("kerberos" in str(call).lower() for call in info_calls)
+                assert any("svc-test@EXAMPLE.COM" in str(call) for call in info_calls)
