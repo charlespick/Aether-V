@@ -294,3 +294,28 @@ async def test_logout_get_prefers_idp_redirect(monkeypatch):
     location = response.headers["location"]
     assert location.startswith("https://issuer/logout")
     assert "post_logout_redirect_uri=https%3A%2F%2Fapp.example%3A8443%2Fafter" in location
+
+
+@pytest.mark.anyio("asyncio")
+async def test_logout_get_handles_post_logout_callback(monkeypatch):
+    monkeypatch.setattr(routes.settings, "oidc_force_https", False)
+    monkeypatch.setattr(routes.settings, "oidc_post_logout_redirect_uri", None)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/auth/logout",
+        "headers": [(b"host", b"example.com")],
+        "client": ("127.0.0.1", 9999),
+        "scheme": "http",
+        "server": ("example.com", 80),
+        "query_string": b"",
+        "app": SimpleNamespace(),
+        "session": {},
+    }
+
+    request = Request(scope)
+    response = await routes.logout(request)
+
+    assert isinstance(response, routes.RedirectResponse)
+    assert response.headers["location"] == "http://example.com/"

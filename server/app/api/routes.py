@@ -972,7 +972,13 @@ async def logout(request: Request):
 
     logout_context = request.session.get("oidc_logout")
     post_logout_redirect = _build_post_logout_redirect_url(request)
-    idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+
+    idp_logout_url: Optional[str] = None
+    if request.method == "POST":
+        idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+    elif logout_context:
+        # Treat GET requests with stored logout context as user-initiated logouts.
+        idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
 
     # Clear session data regardless of logout method
     request.session.clear()
