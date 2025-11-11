@@ -57,9 +57,14 @@ class Settings(BaseSettings):
 
     # Hyper-V Host settings
     hyperv_hosts: str = ""  # Comma-separated list of hosts
-    winrm_username: Optional[str] = None
-    winrm_password: Optional[str] = None
-    winrm_transport: str = "ntlm"  # ntlm, basic, or credssp
+    
+    # WinRM Kerberos authentication settings
+    winrm_kerberos_principal: Optional[str] = None  # Service principal (e.g., user@REALM)
+    winrm_keytab_b64: Optional[str] = None  # Base64-encoded keytab file
+    winrm_kerberos_realm: Optional[str] = None  # Optional Kerberos realm override
+    winrm_kerberos_kdc: Optional[str] = None  # Optional KDC server override
+    
+    # WinRM connection settings
     winrm_port: int = 5985
     winrm_operation_timeout: float = 15.0  # seconds to wait for WinRM calls
     winrm_connection_timeout: float = 30.0  # network connect timeout in seconds
@@ -132,6 +137,21 @@ class Settings(BaseSettings):
         if not self.hyperv_hosts:
             return []
         return [h.strip() for h in self.hyperv_hosts.split(",") if h.strip()]
+
+    def get_keytab_bytes(self) -> Optional[bytes]:
+        """Decode base64-encoded keytab data if configured."""
+        if not self.winrm_keytab_b64:
+            return None
+        
+        import base64
+        try:
+            return base64.b64decode(self.winrm_keytab_b64)
+        except Exception:
+            return None
+
+    def has_kerberos_config(self) -> bool:
+        """Check if Kerberos authentication is configured."""
+        return bool(self.winrm_kerberos_principal and self.winrm_keytab_b64)
 
 
 settings = Settings()

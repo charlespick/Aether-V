@@ -32,6 +32,7 @@ from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
 from .services.websocket_service import websocket_manager
 from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
+from .services.kerberos_manager import initialize_kerberos, cleanup_kerberos, KerberosManagerError
 
 # Configure logging
 logging.basicConfig(
@@ -86,6 +87,23 @@ async def lifespan(app: FastAPI):
             logger.warning("Configuration warning: %s", issue.message)
             if issue.hint:
                 logger.warning("Hint: %s", issue.hint)
+
+    # Initialize Kerberos if configured
+    if settings.has_kerberos_config():
+        try:
+            logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
+            initialize_kerberos(
+                principal=settings.winrm_kerberos_principal,
+                keytab_b64=settings.winrm_keytab_b64,
+                realm=settings.winrm_kerberos_realm,
+                kdc=settings.winrm_kerberos_kdc,
+            )
+            logger.info("Kerberos authentication initialized successfully")
+        except KerberosManagerError as exc:
+            logger.error("Failed to initialize Kerberos: %s", exc)
+            raise RuntimeError("Kerberos initialization failed; cannot start application") from exc
+    else:
+        logger.warning("Kerberos credentials not configured; WinRM operations will fail")
 
     remote_started = False
     notifications_started = False
@@ -148,6 +166,12 @@ async def lifespan(app: FastAPI):
             await notification_service.stop()
         if remote_started:
             await remote_task_service.stop()
+        
+        # Clean up Kerberos resources
+        if settings.has_kerberos_config():
+            logger.info("Cleaning up Kerberos resources")
+            cleanup_kerberos()
+        
         logger.info("Application stopped")
 
 

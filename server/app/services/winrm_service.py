@@ -382,18 +382,18 @@ class WinRMService:
         return self._open_runspace_pool(hostname, wsman)
 
     def _create_session(self, hostname: str) -> WSMan:
-        """Create a new WSMan session using configured credentials."""
+        """Create a new WSMan session using Kerberos authentication."""
 
         connection_timeout = int(max(1.0, float(settings.winrm_connection_timeout)))
         operation_timeout = int(max(1.0, float(settings.winrm_operation_timeout)))
         read_timeout = int(max(1.0, float(settings.winrm_read_timeout)))
 
+        principal = settings.winrm_kerberos_principal or "not-configured"
         logger.info(
-            "Creating WinRM (PSRP) session to %s (port=%s, transport=%s, username=%s)",
+            "Creating WinRM (PSRP) session to %s (port=%s, auth=kerberos, principal=%s)",
             hostname,
             settings.winrm_port,
-            settings.winrm_transport,
-            settings.winrm_username or "<anonymous>",
+            principal,
         )
         logger.debug(
             "WSMan timeouts for %s -> connection=%ss, operation=%ss, read=%ss",
@@ -403,16 +403,15 @@ class WinRMService:
             read_timeout,
         )
 
-        auth = settings.winrm_transport or "ntlm"
         use_ssl = settings.winrm_port == 5986
 
         try:
             session = WSMan(
                 hostname,
                 port=settings.winrm_port,
-                username=settings.winrm_username,
-                password=settings.winrm_password,
-                auth=auth,
+                username=None,  # Kerberos uses principal from keytab
+                password=None,  # Kerberos uses keytab
+                auth="kerberos",  # Use Kerberos authentication
                 ssl=use_ssl,
                 cert_validation=False,
                 connection_timeout=connection_timeout,
@@ -420,13 +419,13 @@ class WinRMService:
                 read_timeout=read_timeout,
             )
         except AuthenticationError as exc:  # pragma: no cover - network heavy
-            logger.error("Authentication failed while connecting to %s: %s", hostname, exc)
+            logger.error("Kerberos authentication failed while connecting to %s: %s", hostname, exc)
             raise WinRMAuthenticationError(str(exc)) from exc
         except (PyWinRMTransportError, WinRMError) as exc:  # pragma: no cover - network heavy
             logger.error("Failed to create WSMan session to %s: %s", hostname, exc)
             raise WinRMTransportError(str(exc)) from exc
 
-        logger.debug("Created WSMan session to %s", hostname)
+        logger.debug("Created WSMan session to %s using Kerberos authentication", hostname)
         return session
 
     def close_session(self, hostname: str) -> None:

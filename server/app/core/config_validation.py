@@ -170,25 +170,34 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             "Set HYPERV_HOSTS to a comma-separated list so workloads can be managed.",
         )
 
-    # WinRM credentials - warn when missing or partially configured.
-    if settings.winrm_username and not settings.winrm_password:
+    # Kerberos credentials - warn when missing or partially configured.
+    if settings.winrm_kerberos_principal and not settings.winrm_keytab_b64:
         _warn(
             result,
-            "WINRM_USERNAME is set but WINRM_PASSWORD is missing.",
-            "Set WINRM_PASSWORD so hosts can be managed.",
+            "WINRM_KERBEROS_PRINCIPAL is set but WINRM_KEYTAB_B64 is missing.",
+            "Set WINRM_KEYTAB_B64 with base64-encoded keytab so hosts can be managed.",
         )
-    elif settings.winrm_password and not settings.winrm_username:
+    elif settings.winrm_keytab_b64 and not settings.winrm_kerberos_principal:
         _warn(
             result,
-            "WINRM_PASSWORD is set but WINRM_USERNAME is missing.",
-            "Set WINRM_USERNAME so hosts can be managed.",
+            "WINRM_KEYTAB_B64 is set but WINRM_KERBEROS_PRINCIPAL is missing.",
+            "Set WINRM_KERBEROS_PRINCIPAL to the service principal name (e.g., user@REALM).",
         )
-    elif not settings.winrm_username and not settings.winrm_password:
+    elif not settings.winrm_kerberos_principal and not settings.winrm_keytab_b64:
         _warn(
             result,
-            "WINRM credentials are not configured.",
-            "Provide WINRM_USERNAME and WINRM_PASSWORD to manage Hyper-V hosts.",
+            "Kerberos credentials are not configured.",
+            "Provide WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64 to manage Hyper-V hosts.",
         )
+    elif settings.winrm_kerberos_principal and settings.winrm_keytab_b64:
+        # Validate keytab can be decoded
+        keytab_bytes = settings.get_keytab_bytes()
+        if keytab_bytes is None:
+            _error(
+                result,
+                "WINRM_KEYTAB_B64 is not valid base64-encoded data.",
+                "Ensure the keytab is properly base64-encoded before setting WINRM_KEYTAB_B64.",
+            )
 
     set_config_validation_result(result)
     return result

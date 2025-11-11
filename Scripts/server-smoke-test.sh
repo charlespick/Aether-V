@@ -33,8 +33,8 @@ declare -A CONFIG_authenticated=(
   [OIDC_CLIENT_ID]="ci-smoke-client"
   [OIDC_REDIRECT_URI]="https://ci-smoke.example.com/callback"
   [ENVIRONMENT_NAME]="CI Smoke Test"
-  [WINRM_USERNAME]="ci-admin"
-  [WINRM_PASSWORD]="super-secret-password"
+  [WINRM_KERBEROS_PRINCIPAL]="svc-ci@AD.EXAMPLE.COM"
+  [WINRM_KEYTAB_B64]="YWV0aGVydi1jaS1rZXl0YWItcGxhY2Vob2xkZXI="  # Placeholder keytab
   [HYPERV_HOSTS]="hyperv-01.example.com,hyperv-02.example.com"
   [AGENT_DOWNLOAD_BASE_URL]="https://downloads.example.com/aether"
 )
@@ -59,8 +59,8 @@ declare -A CONFIG_high_scale=(
   [OIDC_CLIENT_ID]="ci-qa-client"
   [OIDC_REDIRECT_URI]="https://qa.example.com/callback"
   [ENVIRONMENT_NAME]="QA Lab"
-  [WINRM_USERNAME]="qa-admin"
-  [WINRM_PASSWORD]="qa-password"
+  [WINRM_KERBEROS_PRINCIPAL]="svc-qa@AD.EXAMPLE.COM"
+  [WINRM_KEYTAB_B64]="YWV0aGVydi1xYS1rZXl0YWItcGxhY2Vob2xkZXI="  # Placeholder keytab
   [HYPERV_HOSTS]="qa-host-01.lab.local,qa-host-02.lab.local,qa-host-03.lab.local"
   [AGENT_DOWNLOAD_BASE_URL]="https://downloads.example.com/qa-agent"
   [REMOTE_TASK_MAX_CONCURRENCY]="32"
