@@ -1,6 +1,7 @@
 """Configuration validation utilities."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Set
@@ -168,6 +169,30 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             result,
             "No Hyper-V hosts configured (HYPERV_HOSTS).",
             "Set HYPERV_HOSTS to a comma-separated list so workloads can be managed.",
+        )
+
+    # Check for legacy WinRM configuration (NTLM/Basic/CredSSP) from environment
+    legacy_fields = []
+    if os.getenv("WINRM_USERNAME"):
+        legacy_fields.append("WINRM_USERNAME")
+    if os.getenv("WINRM_PASSWORD"):
+        legacy_fields.append("WINRM_PASSWORD")
+    if os.getenv("WINRM_TRANSPORT"):
+        legacy_fields.append("WINRM_TRANSPORT")
+    
+    if legacy_fields:
+        _error(
+            result,
+            f"Legacy WinRM configuration detected: {', '.join(legacy_fields)}. "
+            "NTLM/Basic/CredSSP authentication is no longer supported.",
+            "Migrate to Kerberos authentication by:\n"
+            "1. Generate a keytab for your service account: ktutil or AD tools\n"
+            "2. Base64 encode it: base64 < service.keytab | tr -d '\\n'\n"
+            "3. Set WINRM_KERBEROS_PRINCIPAL (e.g., svc-aetherv@AD.EXAMPLE.COM)\n"
+            "4. Set WINRM_KEYTAB_B64 to the base64-encoded keytab\n"
+            "5. Remove WINRM_USERNAME, WINRM_PASSWORD, and WINRM_TRANSPORT\n"
+            "6. Configure Resource-Based Constrained Delegation (RBCD) for double-hop\n"
+            "See documentation for detailed migration instructions.",
         )
 
     # Kerberos credentials - warn when missing or partially configured.
