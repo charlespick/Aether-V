@@ -1,10 +1,17 @@
 // View System - Dynamic content management
+const { renderDefaultIcon: renderIconDefault } = window.iconUtils;
+
+function icon(name, options = {}) {
+    return renderIconDefault(name, options);
+}
 class ViewManager {
     constructor() {
         this.currentView = null;
         this.viewContainer = null;
         this.views = new Map();
         this.state = {};
+        this.currentViewName = null;
+        this.currentViewData = {};
     }
 
     init(containerId) {
@@ -43,23 +50,127 @@ class ViewManager {
         }
 
         // Update navigation active state
-        this.updateNavigation(viewName);
+        this.currentViewName = viewName;
+        this.currentViewData = { ...data };
+        this.updateNavigation(viewName, this.currentViewData);
 
         if (typeof window.applyProvisioningAvailability === 'function') {
             window.applyProvisioningAvailability(window.agentDeploymentState);
         }
     }
 
-    updateNavigation(viewName) {
+    updateNavigation(viewName, viewData = {}) {
         // Remove active from all nav items
-        document.querySelectorAll('.nav-item, .sub-item, .sub-sub-item, .vm-item').forEach(item => {
+        document.querySelectorAll('.nav-item, .sub-item, .vm-item').forEach(item => {
             item.classList.remove('active');
         });
 
-        // Add active to current view's nav item
-        const navItem = document.querySelector(`[data-view="${viewName}"]`);
+        const escapeForSelector = (value) => {
+            if (typeof value !== 'string') {
+                return '';
+            }
+            if (window.CSS && typeof window.CSS.escape === 'function') {
+                return window.CSS.escape(value);
+            }
+            // Polyfill for CSS.escape from https://developer.mozilla.org/en-US/docs/Web/API/CSS/escape#polyfill
+            // This polyfill escapes all characters that could cause issues in CSS selectors.
+            // Copyright Mathias Bynens <https://mathiasbynens.be/>
+            // Licensed under the MIT license.
+            var string = String(value);
+            var length = string.length;
+            var index = -1;
+            var codeUnit;
+            var result = '';
+            var firstCodeUnit = string.charCodeAt(0);
+            while (++index < length) {
+                codeUnit = string.charCodeAt(index);
+                // Note: there’s no need to special-case astral symbols, surrogate
+                // pairs, or lone surrogates.
+                if (
+                    // If the character is NULL (U+0000), then the REPLACEMENT CHARACTER (U+FFFD).
+                    codeUnit == 0x0000
+                ) {
+                    result += '\uFFFD';
+                    continue;
+                }
+                if (
+                    // If the character is in the range [1-31] (U+0001 to U+001F) or U+007F, escape.
+                    (codeUnit >= 0x0001 && codeUnit <= 0x001F) ||
+                    codeUnit == 0x007F ||
+                    // If the character is the first character and is a digit, escape.
+                    (index == 0 && codeUnit >= 0x0030 && codeUnit <= 0x0039) ||
+                    // If the character is the second character and is a digit and the first character is a hyphen, escape.
+                    (index == 1 && codeUnit >= 0x0030 && codeUnit <= 0x0039 && firstCodeUnit == 0x002D)
+                ) {
+                    result += '\\' + codeUnit.toString(16) + ' ';
+                    continue;
+                }
+                if (
+                    // If the character is ASCII and not a letter, digit, or underscore, escape.
+                    codeUnit >= 0x0080 ||
+                    codeUnit == 0x002D || // hyphen
+                    codeUnit == 0x005F || // underscore
+                    (codeUnit >= 0x0030 && codeUnit <= 0x0039) || // 0-9
+                    (codeUnit >= 0x0041 && codeUnit <= 0x005A) || // A-Z
+                    (codeUnit >= 0x0061 && codeUnit <= 0x007A)    // a-z
+                ) {
+                    // No need to escape
+                    result += string.charAt(index);
+                } else {
+                    result += '\\' + string.charAt(index);
+                }
+            }
+            return result;
+        };
+
+        let navItem = null;
+
+        if (viewName === 'overview' || viewName === 'disconnected-hosts') {
+            navItem = document.querySelector(`[data-view="${viewName}"]`);
+        } else if (viewName === 'cluster' && viewData?.name) {
+            const selector = escapeForSelector(viewData.name);
+            navItem = document.querySelector(`.nav-item.group-header[data-nav-type="cluster"][data-cluster-name="${selector}"]`);
+        } else if (viewName === 'host' && viewData?.hostname) {
+            const selector = escapeForSelector(viewData.hostname);
+            navItem = document.querySelector(`.sub-item.group-header[data-nav-type="host"][data-hostname="${selector}"]`);
+        } else if (viewName === 'vm' && viewData?.name && viewData?.host) {
+            const nameSelector = escapeForSelector(viewData.name);
+            const hostSelector = escapeForSelector(viewData.host);
+            navItem = document.querySelector(`.vm-item[data-nav-type="vm"][data-vm-name="${nameSelector}"][data-vm-host="${hostSelector}"]`);
+        }
+
         if (navItem) {
             navItem.classList.add('active');
+
+            const navGroup = navItem.closest('.nav-group');
+            if (navGroup) {
+                navGroup.classList.add('expanded');
+
+                if (navGroup.dataset && navGroup.dataset.host) {
+                    const clusterGroup = navGroup.closest('.nav-group[data-cluster]');
+                    if (clusterGroup) {
+                        clusterGroup.classList.add('expanded');
+                    }
+                }
+            }
+
+            const hostGroup = navItem.closest('.nav-group[data-host]');
+            if (hostGroup) {
+                hostGroup.classList.add('expanded');
+                const clusterGroup = hostGroup.closest('.nav-group[data-cluster]');
+                if (clusterGroup) {
+                    clusterGroup.classList.add('expanded');
+                }
+            }
+        }
+
+        this.currentViewName = viewName;
+        this.currentViewData = { ...viewData };
+    }
+
+    refreshNavigationState() {
+        if (this.currentViewName) {
+            this.updateNavigation(this.currentViewName, this.currentViewData);
         }
     }
 
@@ -89,6 +200,62 @@ class BaseView {
     cleanup() {
         // Override to clean up event listeners, timers, etc.
     }
+}
+
+function sanitizeHtml(value) {
+    if (value === null || typeof value === 'undefined') {
+        return '';
+    }
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function escapeJsString(value) {
+    if (value === null || typeof value === 'undefined') {
+        return '';
+    }
+    return String(value)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+}
+
+function formatVmMemory(memory) {
+    if (memory === null || typeof memory === 'undefined') {
+        return '—';
+    }
+    const parsed = Number(memory);
+    if (!Number.isFinite(parsed)) {
+        return '—';
+    }
+    return `${parsed.toFixed(2)} GB`;
+}
+
+function formatCpuCount(cpu) {
+    if (cpu === null || typeof cpu === 'undefined') {
+        return '—';
+    }
+    const parsed = Number(cpu);
+    if (!Number.isFinite(parsed)) {
+        return '—';
+    }
+    return parsed.toString();
+}
+
+function formatHostnamePrefix(hostname) {
+    if (hostname === null || typeof hostname === 'undefined') {
+        return '';
+    }
+    const trimmed = String(hostname).trim();
+    if (!trimmed) {
+        return '';
+    }
+    return trimmed.split('.')[0];
 }
 
 // Overview View (Aether root)
@@ -134,7 +301,7 @@ class OverviewView extends BaseView {
                     </div>
                     <div class="empty-state">
                         ${(inventory.disconnected_hosts || []).length > 0 ? `
-                            <div class="empty-icon">⚠️</div>
+                            <div class="empty-icon">${icon('warning', { className: 'status-warning', size: 48 })}</div>
                             <div class="empty-title">No hosts connected</div>
                             <div class="empty-description">
                                 ${(inventory.disconnected_hosts || []).length} host(s) are configured but currently unreachable.
@@ -146,12 +313,12 @@ class OverviewView extends BaseView {
                                 <br>• Check firewall settings on hosts
                                 <br><br>
                                 <button class="action-btn" onclick="viewManager.switchView('disconnected-hosts')" style="margin-top: 12px;">
-                                    <span class="action-icon">⚠️</span>
+                                    ${icon('warning', { className: 'action-icon status-warning', size: 24 })}
                                     <span>View Disconnected Hosts</span>
                                 </button>
                             </div>
                         ` : `
-                            <div class="empty-icon">🖥️</div>
+                            <div class="empty-icon">${icon('host', { className: 'status-muted', size: 48 })}</div>
                             <div class="empty-title">No hosts configured</div>
                             <div class="empty-description">
                                 Configure Hyper-V hosts in your environment settings to begin managing virtual machines.
@@ -178,15 +345,15 @@ class OverviewView extends BaseView {
                 </div>
                 <div class="quick-actions">
                     <button class="action-btn" data-action="open-provision" onclick="overlayManager.open('provision-job')">
-                        <span class="action-icon">🆕</span>
+                        ${icon('add_circle', { className: 'action-icon', size: 24 })}
                         <span>Create VM</span>
                     </button>
                     <button class="action-btn" onclick="overlayManager.open('settings')">
-                        <span class="action-icon">⚙️</span>
+                        ${icon('settings', { className: 'action-icon', size: 24 })}
                         <span>Settings</span>
                     </button>
                     <button class="action-btn" onclick="refreshInventory()">
-                        <span class="action-icon">🔄</span>
+                        ${icon('autorenew', { className: 'action-icon', size: 24 })}
                         <span>Refresh All</span>
                     </button>
                 </div>
@@ -234,12 +401,10 @@ class ClusterView extends BaseView {
                 </div>
             </div>
 
-            <div class="view-section surface-card">
-                <div class="section-header">
-                    <h2>Virtual Machines</h2>
-                </div>
-                <div class="vm-grid">
-                    ${this.renderVMCards(clusterVMs)}
+            <div class="view-section">
+                <div class="view-section-label">Virtual Machines</div>
+                <div class="surface-card vm-table-card">
+                    ${this.renderVmTable(clusterVMs)}
                 </div>
             </div>
 
@@ -260,11 +425,17 @@ class ClusterView extends BaseView {
             return '<p class="empty">No hosts configured</p>';
         }
 
-        return hosts.map(host => `
-            <div class="host-card" onclick="viewManager.switchView('host', { hostname: '${host.hostname}' })">
+        return hosts.map(host => {
+            const hostname = host.hostname || 'Unknown Host';
+            const hostnamePrefix = formatHostnamePrefix(hostname) || hostname;
+            const displayName = sanitizeHtml(hostnamePrefix);
+            const tooltip = sanitizeHtml(hostname);
+            const targetHost = escapeJsString(host.hostname || hostnamePrefix);
+            return `
+            <div class="host-card" onclick="viewManager.switchView('host', { hostname: '${targetHost}' })">
                 <div class="host-card-header">
-                    <span class="host-icon">🖥️</span>
-                    <span class="host-name">${host.hostname}</span>
+                    ${icon('host', { className: 'host-icon status-muted', size: 28 })}
+                    <span class="host-name" title="${tooltip}">${displayName}</span>
                 </div>
                 <div class="host-card-status">
                     <span class="status ${host.connected ? 'connected' : 'disconnected'}">
@@ -272,33 +443,57 @@ class ClusterView extends BaseView {
                     </span>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
     }
 
-    renderVMCards(vms) {
-        if (vms.length === 0) {
+    renderVmTable(vms) {
+        if (!Array.isArray(vms) || vms.length === 0) {
             return '<p class="empty">No virtual machines</p>';
         }
 
-        return vms.map(vm => {
+        const rows = vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
+            const vmName = vm.name || 'Virtual Machine';
+            const hostName = vm.host || '';
+            const hostDisplay = formatHostnamePrefix(hostName);
+            const safeHostDisplay = hostDisplay ? sanitizeHtml(hostDisplay) : '—';
+            const safeHostTitle = hostName ? sanitizeHtml(hostName) : '';
             return `
-                <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
-                    <div class="vm-card-header">
-                        <span class="vm-status-icon">${meta.emoji}</span>
-                        <span class="vm-card-name">${vm.name}</span>
-                    </div>
-                    <div class="vm-card-details">
-                        <div class="vm-card-spec">${vm.cpu_cores ?? 0} vCPU</div>
-                        <div class="vm-card-spec">${Number(vm.memory_gb ?? 0).toFixed(2)} GB RAM</div>
-                        <div class="vm-card-host">Host: ${vm.host.split('.')[0]}</div>
-                    </div>
-                    <div class="vm-card-status">
-                        <span class="status ${meta.badgeClass}">${meta.label.toUpperCase()}</span>
-                    </div>
-                </div>
+                <tr class="vm-table-row">
+                    <td>
+                        <button type="button" class="vm-table-link"
+                            onclick="viewManager.switchView('vm', { name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
+                            <span class="vm-status-dot ${meta.dotClass}"></span>
+                            <span class="vm-name-text">${sanitizeHtml(vmName)}</span>
+                        </button>
+                    </td>
+                    <td><span class="status ${meta.badgeClass}">${sanitizeHtml(meta.label)}</span></td>
+                    <td>${sanitizeHtml(formatCpuCount(vm.cpu_cores))}</td>
+                    <td>${sanitizeHtml(formatVmMemory(vm.memory_gb))}</td>
+                    <td>${hostDisplay ? `<span class="vm-table-host" title="${safeHostTitle}">${safeHostDisplay}</span>` : '<span class="vm-table-host">—</span>'}</td>
+                </tr>
             `;
         }).join('');
+
+        return `
+            <div class="vm-table-wrapper">
+                <table class="vm-data-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Name</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">vCPU</th>
+                            <th scope="col">Memory</th>
+                            <th scope="col">Host</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        `;
     }
 
     calculateTotalCPU(vms) {
@@ -335,56 +530,75 @@ class HostView extends BaseView {
                 <div class="section-header">
                     <h2>Host Information</h2>
                 </div>
-                <div class="info-grid">
-                    <div class="info-item">
-                        <span class="info-label">Status:</span>
+                <div class="vm-overview-grid host-info-grid">
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Status</span>
                         <span class="status ${host?.connected ? 'connected' : 'disconnected'}">
                             ${host?.connected ? 'Connected' : 'Disconnected'}
                         </span>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">Last Seen:</span>
-                        <span>${host?.last_seen ? new Date(host.last_seen).toLocaleString() : 'Never'}</span>
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Last Seen</span>
+                        <span class="vm-overview-value">${host?.last_seen ? new Date(host.last_seen).toLocaleString() : 'Never'}</span>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">VM Count:</span>
-                        <span>${hostVMs.length}</span>
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">VM Count</span>
+                        <span class="vm-overview-value">${hostVMs.length}</span>
                     </div>
                 </div>
             </div>
 
-            <div class="view-section surface-card">
-                <div class="section-header">
-                    <h2>Virtual Machines</h2>
-                </div>
-                <div class="vm-list-view">
-                    ${this.renderVMList(hostVMs)}
+            <div class="view-section">
+                <div class="view-section-label">Virtual Machines</div>
+                <div class="surface-card vm-table-card">
+                    ${this.renderVmTable(hostVMs, hostname)}
                 </div>
             </div>
         `;
     }
 
-    renderVMList(vms) {
-        if (vms.length === 0) {
+    renderVmTable(vms, fallbackHost = '') {
+        if (!Array.isArray(vms) || vms.length === 0) {
             return '<p class="empty">No VMs on this host</p>';
         }
 
-        return vms.map(vm => {
+        const rows = vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
+            const vmName = vm.name || 'Virtual Machine';
+            const hostName = vm.host || fallbackHost || '';
             return `
-                <div class="vm-card" onclick="viewManager.switchView('vm', { name: '${vm.name}', host: '${vm.host}' })">
-                    <div class="vm-card-header">
-                        <span class="vm-status-dot ${meta.dotClass}"></span>
-                        <span class="vm-name">${vm.name}</span>
-                    </div>
-                    <div class="vm-card-details">
-                        <span>${vm.cpu_cores ?? 0} vCPU</span>
-                        <span>${Number(vm.memory_gb ?? 0).toFixed(2)} GB RAM</span>
-                        <span class="status ${meta.badgeClass}">${meta.label}</span>
-                    </div>
-                </div>
+                <tr class="vm-table-row">
+                    <td>
+                        <button type="button" class="vm-table-link"
+                            onclick="viewManager.switchView('vm', { name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
+                            <span class="vm-status-dot ${meta.dotClass}"></span>
+                            <span class="vm-name-text">${sanitizeHtml(vmName)}</span>
+                        </button>
+                    </td>
+                    <td><span class="status ${meta.badgeClass}">${sanitizeHtml(meta.label)}</span></td>
+                    <td>${sanitizeHtml(formatCpuCount(vm.cpu_cores))}</td>
+                    <td>${sanitizeHtml(formatVmMemory(vm.memory_gb))}</td>
+                </tr>
             `;
         }).join('');
+
+        return `
+            <div class="vm-table-wrapper">
+                <table class="vm-data-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Name</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">vCPU</th>
+                            <th scope="col">Memory</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        `;
     }
 
     async fetchInventory() {
@@ -490,6 +704,9 @@ class VMView extends BaseView {
             </div>
 
             <section class="vm-overview-panel surface-card" aria-label="Virtual machine overview">
+                <div class="section-header">
+                    <h2>Virtual Machine Information</h2>
+                </div>
                 <div class="vm-overview-grid">
                     ${overviewItems.map(item => `
                         <div class="vm-overview-item">
@@ -926,22 +1143,23 @@ class VMView extends BaseView {
     buildVmActionButtons(vm) {
         const availability = this.getActionAvailability(vm && vm.state);
         const actions = [
-            { action: 'start', icon: '▶️', tooltip: 'Start', aria: 'Start virtual machine' },
-            { action: 'shutdown', icon: '⏻', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
-            { action: 'stop', icon: '⏹️', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
-            { action: 'reset', icon: '🔄', tooltip: 'Reset', aria: 'Reset virtual machine' },
-            { action: 'delete', icon: '🗑️', tooltip: 'Delete', aria: 'Delete virtual machine' },
+            { action: 'start', iconName: 'play_circle', tooltip: 'Start', aria: 'Start virtual machine' },
+            { action: 'shutdown', iconName: 'power_settings_new', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
+            { action: 'stop', iconName: 'stop_circle', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
+            { action: 'reset', iconName: 'autorenew', tooltip: 'Reset', aria: 'Reset virtual machine' },
+            { action: 'delete', iconName: 'delete', tooltip: 'Delete', aria: 'Delete virtual machine' },
         ];
 
-        return actions.map(({ action, icon, tooltip, aria }) => {
+        return actions.map(({ action, iconName, tooltip, aria }) => {
             const allowed = availability[action];
             const disabledAttr = allowed ? '' : 'disabled';
             const disabledClass = allowed ? '' : 'disabled';
+            const iconMarkup = icon(iconName, { className: 'vm-action-symbol', size: 22 });
 
             return `
                     <button type="button" class="vm-action-btn ${disabledClass}" data-action="${action}"
                         data-tooltip="${tooltip}" aria-label="${aria}" ${disabledAttr}>
-                        <span aria-hidden="true">${icon}</span>
+                        ${iconMarkup}
                     </button>
             `;
         }).join('');
@@ -1557,7 +1775,7 @@ class DisconnectedHostsView extends BaseView {
                 
                 ${disconnectedHosts.length === 0 ? `
                     <div class="empty-state">
-                        <div class="empty-icon">✅</div>
+                        <div class="empty-icon">${icon('check_circle', { className: 'status-success', size: 48 })}</div>
                         <div class="empty-title">All hosts are connected</div>
                         <div class="empty-description">Great! All configured hosts are currently reachable.</div>
                     </div>
@@ -1574,7 +1792,7 @@ class DisconnectedHostsView extends BaseView {
         return hosts.map(host => `
             <div class="host-card disconnected">
                 <div class="host-card-header">
-                    <span class="host-icon">⚠️</span>
+                    ${icon('warning', { className: 'host-icon status-warning', size: 28 })}
                     <span class="host-name">${host.hostname}</span>
                 </div>
                 <div class="host-card-status">
@@ -1592,7 +1810,7 @@ class DisconnectedHostsView extends BaseView {
                 ` : ''}
                 <div class="host-actions">
                     <button class="action-btn retry" onclick="retryHostConnection('${host.hostname}')">
-                        <span class="action-icon">🔄</span>
+                        ${icon('autorenew', { className: 'action-icon', size: 24 })}
                         <span>Retry Connection</span>
                     </button>
                 </div>

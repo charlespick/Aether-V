@@ -5,6 +5,7 @@ metadata:
   namespace: aetherv
 data:
   # Application
+  # APP_NAME: "Aether-V Server"  # Default: Aether-V Server
   # DEBUG: "false"  # Default: false (enable for verbose logging)
   # ENVIRONMENT_NAME: "Production Environment"  # Default display name
 
@@ -17,9 +18,11 @@ data:
   OIDC_CLIENT_ID: "<client-id>"
   OIDC_REDIRECT_URI: "https://aetherv.example.com/auth/callback"
   # OIDC_API_AUDIENCE: "api://<client-id>"  # Optional explicit API audience override
+  # OIDC_ADMIN_PERMISSIONS: "Aether.Admin"  # Default: Aether.Admin (optional elevated scope)
   OIDC_READER_PERMISSIONS: "Aether.Reader"
   OIDC_WRITER_PERMISSIONS: "Aether.Writer"
-  OIDC_ADMIN_PERMISSIONS: "Aether.Admin"
+  # OIDC_POST_LOGOUT_REDIRECT_URI: "https://aetherv.example.com/auth/logged-out"  # Optional page to receive users after IdP logout
+  # OIDC_END_SESSION_ENDPOINT: "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/logout"  # Optional explicit IdP logout endpoint
   # OIDC_ROLE_NAME: "vm-admin"  # Legacy fallback role mapping (optional)
   # OIDC_FORCE_HTTPS: "true"  # Default: true (set false only for local HTTP testing)
 
@@ -31,11 +34,15 @@ data:
   # COOKIE_SAMESITE: "lax"  # Default: lax
 
   # Hyper-V hosts
-  HYPERV_HOSTS: "hyperv01.example.com,hyperv02.example.com"
+  # HYPERV_HOSTS: "hyperv01.example.com,hyperv02.example.com"  # Default: (empty; provide hostnames to manage workloads)
 
   # WinRM
   # WINRM_TRANSPORT: "ntlm"  # Default: ntlm (supports ntlm, basic, credssp)
   # WINRM_PORT: "5985"  # Default: 5985
+  # WINRM_OPERATION_TIMEOUT: "15.0"  # Default: 15.0 seconds for WinRM operations
+  # WINRM_CONNECTION_TIMEOUT: "30.0"  # Default: 30.0 second network connect timeout
+  # WINRM_READ_TIMEOUT: "30.0"  # Default: 30.0 second HTTP read timeout
+  # WINRM_POLL_INTERVAL_SECONDS: "1.0"  # Default: 1.0 second polling cadence for runspace status
 
   # Inventory
   # INVENTORY_REFRESH_INTERVAL: "60"  # Default: 60 seconds

@@ -335,24 +335,37 @@ class NotificationService:
             metadata=agent_metadata,
         )
 
-    def _schedule_broadcast(self, notification: Notification, action: str = 'updated') -> None:
+    def _schedule_broadcast(
+        self,
+        notification: Notification,
+        action: str = 'updated',
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
         if not self._websocket_manager:
             return
 
         task = asyncio.create_task(
-            self._broadcast_notification_event(notification, action)
+            self._broadcast_notification_event(notification, action, extra)
         )
         task.add_done_callback(self._handle_broadcast_task_exception)
 
-    async def _broadcast_notification_event(self, notification: Notification, action: str) -> None:
+    async def _broadcast_notification_event(
+        self,
+        notification: Notification,
+        action: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Broadcast a notification event via WebSocket."""
         try:
+            payload = {
+                'type': 'notification',
+                'action': action,
+                'data': self._serialize_notification(notification),
+            }
+            if extra:
+                payload.update(extra)
             await self._websocket_manager.broadcast(
-                {
-                    'type': 'notification',
-                    'action': action,
-                    'data': self._serialize_notification(notification),
-                },
+                payload,
                 topic='notifications',
             )
         except Exception as e:
@@ -521,13 +534,21 @@ class NotificationService:
 
     def mark_all_read(self) -> int:
         """Mark all notifications as read. Returns count of notifications marked."""
-        count = 0
+        updated_notifications: List[Notification] = []
         for notification in self.notifications.values():
             if not notification.read:
                 notification.read = True
-                count += 1
+                updated_notifications.append(notification)
 
+        count = len(updated_notifications)
         if count > 0:
+            unread_count = self.get_unread_count()
+            for notification in updated_notifications:
+                self._schedule_broadcast(
+                    notification,
+                    action='updated',
+                    extra={'unread_count': unread_count},
+                )
             logger.info(f"Marked {count} notifications as read")
 
         return count

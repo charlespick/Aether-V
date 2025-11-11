@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }} — Sign in</title>
+    <link rel="stylesheet" href="/static/login.css">
+</head>
+<body>
+    <div class="login-shell">
+        <section class="login-hero" aria-hidden="true">
+            <div class="login-hero-overlay"></div>
+        </section>
+        <section class="login-panel" aria-labelledby="login-title">
+            <div class="login-panel-content">
+                <header class="login-header">
+                    <p class="login-welcome" id="login-title">Welcome to</p>
+                    <h1 class="login-heading">Aether-V</h1>
+                    <p class="login-subtle">You are accessing the <span>{{ environment_name }}</span> instance.</p>
+                </header>
+
+                <div class="login-action">
+                    <p class="login-support" id="login-message">
+                        Authentication is {% if auth_enabled %}required. You will be redirected to the identity provider.{% else %}disabled for this deployment. Click below to continue.{% endif %}
+                    </p>
+                    <button
+                        id="login-button"
+                        class="login-button"
+                        data-auth-enabled="{{ 'true' if auth_enabled else 'false' }}"
+                        type="button"
+                    >
+                        {% if auth_enabled %}Sign in{% else %}Enter Console{% endif %}
+                    </button>
+                    <p class="login-error" id="login-error" role="alert" hidden></p>
+                </div>
+            </div>
+
+            <footer class="login-footer">
+                <div class="login-footer-left">
+                    <span class="login-wordmark">Aether-V Server</span>
+                    <span class="login-version">Version {{ build_metadata.version }}</span>
+                </div>
+                <nav class="login-footer-links" aria-label="Helpful links">
+                    <a href="{{ github_url }}" target="_blank" rel="noopener" class="login-link">GitHub</a>
+                    <a href="{{ api_reference_url }}" class="login-link">API Reference</a>
+                </nav>
+            </footer>
+        </section>
+    </div>
+
+    <script id="login-config" type="application/json">
+        {
+            "auth_enabled": {{ auth_enabled | tojson }}
+        }
+    </script>
+    <script src="/static/login.js" defer></script>
+</body>
+</html>

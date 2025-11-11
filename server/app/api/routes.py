@@ -1,13 +1,16 @@
 """API route handlers."""
 import asyncio
+import base64
 import json
 import logging
+import secrets
 import uuid
+import zlib
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
 from datetime import datetime
-import secrets
 from dataclasses import dataclass
 
 from ..core.models import (
@@ -35,6 +38,7 @@ from ..core.auth import (
     require_permission,
     validate_oidc_token,
     validate_session_data,
+    get_end_session_endpoint,
 )
 from ..core.config import settings, get_config_validation_result
 from ..core.build_info import build_metadata
@@ -56,6 +60,42 @@ from ..services.websocket_service import websocket_manager
 from ..services.remote_task_service import remote_task_service
 
 logger = logging.getLogger(__name__)
+
+_LOGOUT_TOKEN_PREFIX = "enc:"
+
+
+def _encode_logout_token(id_token: str) -> str:
+    """Compress and encode an ID token for compact session storage.
+
+    Returns the compressed and base64-encoded token with a prefix if it's smaller
+    than the original, otherwise returns the original token unmodified.
+    """
+    compressed = zlib.compress(id_token.encode("utf-8"))
+    encoded = base64.urlsafe_b64encode(compressed).decode("ascii")
+
+    # Only use the encoded representation when it is smaller than the original
+    if len(encoded) + len(_LOGOUT_TOKEN_PREFIX) < len(id_token):
+        return f"{_LOGOUT_TOKEN_PREFIX}{encoded}"
+
+    return id_token
+
+
+def _decode_logout_token(packed_token: Optional[str]) -> Optional[str]:
+    """Decode a previously encoded logout token, handling legacy formats."""
+
+    if not packed_token:
+        return None
+
+    if packed_token.startswith(_LOGOUT_TOKEN_PREFIX):
+        payload = packed_token[len(_LOGOUT_TOKEN_PREFIX) :]
+        try:
+            compressed = base64.urlsafe_b64decode(payload.encode("ascii"))
+            return zlib.decompress(compressed).decode("utf-8")
+        except (ValueError, zlib.error, UnicodeDecodeError):
+            logger.warning("Failed to decode stored logout token")
+            return None
+
+    return packed_token
 router = APIRouter()
 
 
@@ -173,6 +213,84 @@ def _current_build_info() -> BuildInfo:
         build_time=build_metadata.build_time,
         build_host=build_metadata.build_host,
     )
+
+
+def _application_base_url(request: Request) -> str:
+    """Construct the base application URL respecting HTTPS enforcement settings."""
+
+    scheme = "https" if settings.oidc_force_https else request.url.scheme
+    host_header = request.headers.get("host")
+    if host_header:
+        return f"{scheme}://{host_header.rstrip('/')}"
+
+    base_url = str(request.base_url).rstrip("/")
+    if settings.oidc_force_https and base_url.startswith("http://"):
+        parts = urlsplit(base_url)
+        return urlunsplit(("https", parts.netloc, "", "", ""))
+    return base_url
+
+
+def _ensure_absolute_url(request: Request, target: Optional[str]) -> str:
+    """Ensure the provided URL is absolute by using the current request context."""
+
+    if not target:
+        return f"{_application_base_url(request)}/"
+
+    parsed = urlsplit(target)
+    if parsed.scheme and parsed.netloc:
+        return target
+
+    base_url = _application_base_url(request)
+    if target.startswith("/"):
+        return f"{base_url}{target}"
+
+    return f"{base_url}/{target}"
+
+
+def _build_post_logout_redirect_url(request: Request) -> str:
+    """Determine where users should be sent after a logout completes."""
+
+    configured = settings.oidc_post_logout_redirect_uri
+    if configured:
+        return _ensure_absolute_url(request, configured)
+
+    return f"{_application_base_url(request)}/"
+
+
+def _build_idp_logout_url(
+    request: Request,
+    logout_context: Optional[Dict[str, str]],
+    post_logout_redirect: str,
+) -> Optional[str]:
+    """Construct an IdP logout URL when single logout is supported."""
+
+    context = logout_context or {}
+    endpoint = context.get("end_session_endpoint") or get_end_session_endpoint()
+    if not endpoint:
+        return None
+
+    params: Dict[str, str] = {}
+    id_token_hint = _decode_logout_token(context.get("id_token"))
+    if not id_token_hint:
+        legacy_value = context.get("id_token_ref")
+        if legacy_value:
+            id_token_hint = _decode_logout_token(legacy_value)
+    if id_token_hint:
+        params["id_token_hint"] = id_token_hint
+
+    if post_logout_redirect:
+        params["post_logout_redirect_uri"] = post_logout_redirect
+
+    # Reuse any stored logout state where available to appease strict providers
+    state = context.get("state") or context.get("session_state")
+    if state:
+        params["state"] = state
+
+    if not params:
+        return endpoint
+
+    separator = "&" if "?" in endpoint else "?"
+    return f"{endpoint}{separator}{urlencode(params)}"
 
 
 @router.get("/healthz", response_model=HealthResponse, tags=["Health"])
@@ -559,6 +677,43 @@ async def delete_notification(
 
 
 # OIDC Authentication routes
+@router.post("/auth/direct-login", tags=["Authentication"])
+async def direct_login(request: Request):
+    """Create a local session when authentication is disabled."""
+
+    if settings.auth_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Authentication is enabled; use the identity provider",
+        )
+
+    if not settings.allow_dev_auth:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Development authentication is not permitted",
+        )
+
+    dev_user = get_dev_user()
+    now_iso = datetime.now().isoformat()
+
+    request.session["user_info"] = {
+        "preferred_username": dev_user.get("preferred_username", "dev-user"),
+        "sub": dev_user.get("sub", "dev-user"),
+        "name": dev_user.get("preferred_username", "dev-user"),
+        "email": dev_user.get("email"),
+        "roles": dev_user.get("roles", []),
+        "permissions": dev_user.get("permissions", []),
+        "identity_type": dev_user.get("identity_type", "user"),
+        "auth_type": dev_user.get("auth_type", "dev"),
+        "authenticated": True,
+        "auth_timestamp": now_iso,
+    }
+
+    logger.info("Direct login session established for development access")
+
+    return {"authenticated": True}
+
+
 @router.get("/auth/login", tags=["Authentication"])
 async def login(request: Request):
     """Initiate OIDC login flow."""
@@ -705,6 +860,22 @@ async def auth_callback(request: Request):
             "auth_timestamp": datetime.now().isoformat()
         }
 
+        logout_context: Dict[str, str] = {}
+        end_session_endpoint = get_end_session_endpoint()
+        if end_session_endpoint:
+            logout_context["end_session_endpoint"] = end_session_endpoint
+        if id_token:
+            logout_context["id_token"] = _encode_logout_token(id_token)
+
+        session_state = token.get("session_state")
+        if session_state:
+            logout_context["session_state"] = session_state
+
+        if logout_context:
+            request.session["oidc_logout"] = logout_context
+        else:
+            request.session.pop("oidc_logout", None)
+
         username = user_info.get("preferred_username",
                                  user_info.get("sub", "unknown"))
         logger.info(f"Authentication successful for user: {username}")
@@ -795,13 +966,34 @@ async def get_auth_token(request: Request):
     return response
 
 
-@router.post("/auth/logout", tags=["Authentication"])
+@router.api_route("/auth/logout", methods=["POST", "GET"], tags=["Authentication"])
 async def logout(request: Request):
-    """Logout and clear session."""
-    # Clear session data
+    """Logout the current session and optionally initiate IdP single logout."""
+
+    logout_context = request.session.get("oidc_logout")
+    post_logout_redirect = _build_post_logout_redirect_url(request)
+
+    idp_logout_url: Optional[str] = None
+    if request.method == "POST":
+        idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+    elif logout_context:
+        # Treat GET requests with stored logout context as user-initiated logouts.
+        idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+
+    # Clear session data regardless of logout method
     request.session.clear()
 
-    return {"message": "Logged out successfully"}
+    if request.method == "GET":
+        target = idp_logout_url or post_logout_redirect
+        return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
+
+    payload = {"message": "Logged out successfully"}
+    if post_logout_redirect:
+        payload["redirect_url"] = post_logout_redirect
+    if idp_logout_url:
+        payload["idp_logout_url"] = idp_logout_url
+
+    return JSONResponse(payload)
 
 
 @router.websocket("/ws")

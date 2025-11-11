@@ -9,6 +9,7 @@ from pathlib import Path
 import secrets
 import uvicorn
 from fastapi import FastAPI, Request, status
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -39,6 +40,9 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+PROJECT_GITHUB_URL = "https://github.com/aether-v/Aether-V"
+API_REFERENCE_URL = "/docs"
 
 
 def _build_metadata_payload() -> dict:
@@ -147,12 +151,14 @@ async def lifespan(app: FastAPI):
         logger.info("Application stopped")
 
 
-# Create FastAPI app
+# Create FastAPI app with docs disabled (we'll serve them with local assets)
 app = FastAPI(
     title=settings.app_name,
     version=build_metadata.version,
     description="Lightweight orchestration service for Hyper-V virtual machines",
     lifespan=lifespan,
+    docs_url=None,  # Disable default docs
+    redoc_url=None,  # Disable default redoc
 )
 
 static_dir = Path("app/static")
@@ -296,6 +302,18 @@ app.add_middleware(
 # Include API routes
 app.include_router(router)
 
+# Custom Swagger UI endpoint using local assets to avoid CSP issues
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    """Serve Swagger UI with local assets instead of CDN."""
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - API Documentation",
+        swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger-ui/swagger-ui.css",
+        swagger_favicon_url="/static/swagger-ui/favicon-32x32.png",
+    )
+
 # Setup templates
 templates = Jinja2Templates(directory="app/templates")
 
@@ -333,30 +351,47 @@ async def root(request: Request):
                     "Startup configuration warnings detected, but proceeding with standard UI."
                 )
 
-            # Check authentication status for logging purposes only
+            # Check authentication status to determine which view to render
             session_user = request.session.get("user_info")
+            is_authenticated = bool(session_user and session_user.get("authenticated"))
 
-            if session_user and session_user.get("authenticated"):
+            if not is_authenticated:
+                logger.info("Unauthenticated request for UI; rendering login page")
+                response = templates.TemplateResponse(
+                    "login.html",
+                    {
+                        "request": request,
+                        "auth_enabled": settings.auth_enabled,
+                        "environment_name": environment_name,
+                        "app_name": settings.app_name,
+                        "build_metadata": build_metadata,
+                        "build_metadata_payload": _build_metadata_payload(),
+                        "github_url": PROJECT_GITHUB_URL,
+                        "api_reference_url": API_REFERENCE_URL,
+                    },
+                    status_code=status.HTTP_200_OK,
+                )
+            else:
                 username = session_user.get("preferred_username", "unknown")
                 logger.info(f"Authenticated request from user: {username}")
 
-            response = templates.TemplateResponse(
-                "index.html",
-                {
-                    "request": request,
-                    "auth_enabled": settings.auth_enabled,
-                    "environment_name": environment_name,
-                    # Convert to milliseconds
-                    "websocket_refresh_time": settings.websocket_refresh_time * 1000,
-                    # Convert to milliseconds
-                    "websocket_ping_interval": settings.websocket_ping_interval * 1000,
-                    "job_schema": get_job_schema(),
-                    "agent_deployment": host_deployment_service.get_startup_summary(),
-                    "build_metadata": build_metadata,
-                    "build_metadata_payload": _build_metadata_payload(),
-                    "app_name": settings.app_name,
-                },
-            )
+                response = templates.TemplateResponse(
+                    "index.html",
+                    {
+                        "request": request,
+                        "auth_enabled": settings.auth_enabled,
+                        "environment_name": environment_name,
+                        # Convert to milliseconds
+                        "websocket_refresh_time": settings.websocket_refresh_time * 1000,
+                        # Convert to milliseconds
+                        "websocket_ping_interval": settings.websocket_ping_interval * 1000,
+                        "job_schema": get_job_schema(),
+                        "agent_deployment": host_deployment_service.get_startup_summary(),
+                        "build_metadata": build_metadata,
+                        "build_metadata_payload": _build_metadata_payload(),
+                        "app_name": settings.app_name,
+                    },
+                )
 
         # Add cache headers to prevent caching issues
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"

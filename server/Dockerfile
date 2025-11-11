@@ -25,7 +25,26 @@ RUN apt-get update && \
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Stage 3: Capture build metadata
+# Stage 3: Build icon assets from Material Design SVG package and extract Swagger UI assets
+FROM base AS icon-build
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends nodejs npm && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src/server
+
+COPY server/package.json server/package-lock.json ./
+RUN npm install --omit=dev
+
+COPY server/icons.json ./icons.json
+COPY server/scripts ./scripts
+RUN python scripts/extract_icons.py
+
+# Extract Swagger UI static assets from node_modules
+RUN python scripts/extract_swagger_ui.py
+
+# Stage 4: Capture build metadata
 FROM base AS build-info
 
 WORKDIR /src
@@ -90,7 +109,7 @@ output_path = Path("/out/build-info.json")
 output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 PY
 
-# Stage 4: Collect agent artifacts (scripts, ISOs, version)
+# Stage 5: Collect agent artifacts (scripts, ISOs, version)
 FROM base AS agent-artifacts
 
 WORKDIR /src
@@ -124,7 +143,7 @@ RUN set -eux; \
     fi; \
     find ./ISOs -maxdepth 1 -type f -name '*.iso' -exec cp {} /artifacts/ \;
 
-# Stage 4: Application
+# Stage 6: Application
 FROM base AS application
 
 # Copy Python dependencies from previous stage
@@ -133,6 +152,8 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 
 # Copy application code and schema definitions
 COPY server/app /app/app
+COPY --from=icon-build /src/server/app/static/icons /app/app/static/icons
+COPY --from=icon-build /src/server/app/static/swagger-ui /app/app/static/swagger-ui
 COPY Schemas /app/Schemas
 
 # Prepare unified agent artifact directory
