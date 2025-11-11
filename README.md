@@ -66,7 +66,19 @@ All settings are managed via environment variables (ConfigMap/Secrets):
 - `HOST_INSTALL_DIRECTORY`
 - `AGENT_DOWNLOAD_BASE_URL`
 
-See [Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details, plus
+**Important:** Aether-V requires Kerberos authentication for WinRM to support:
+- Secure double-hop operations for cluster management
+- Credential delegation to shared storage and cluster resources
+- Enhanced security over legacy NTLM/Basic/CredSSP
+
+**See [Docs/Kerberos-Authentication.md](Docs/Kerberos-Authentication.md)** for complete setup instructions including:
+- Keytab generation
+- Resource-Based Constrained Delegation (RBCD) configuration
+- Migration from legacy authentication
+- Security best practices
+
+Also see [Docs/Configuration.md](Docs/Configuration.md) for all environment variables,
+[Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details, plus
 [Docs/vm-provisioning-service.md](Docs/vm-provisioning-service.md) and
 [Docs/vm-deletion-service.md](Docs/vm-deletion-service.md) for end-to-end job
 workflows.

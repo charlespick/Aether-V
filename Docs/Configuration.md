@@ -4,6 +4,17 @@ This document describes all configuration inputs that the Aether-V Server reads
 from environment variables. Values can be provided by a local `.env` file, Docker
 runtime configuration, or Kubernetes ConfigMap/Secret objects.
 
+## Kerberos Authentication
+
+Aether-V requires Kerberos authentication for WinRM connectivity to support secure double-hop operations and Hyper-V cluster management. 
+
+**For comprehensive Kerberos setup instructions, see [Kerberos-Authentication.md](Kerberos-Authentication.md)** which covers:
+- Why Kerberos is required (double-hop, cluster operations, security)
+- Keytab generation procedures
+- Resource-Based Constrained Delegation (RBCD) configuration
+- Migration from legacy NTLM/Basic/CredSSP authentication
+- Security advisories and best practices
+
 ## Non-secret settings
 
 These values normally live in `server/k8s/configmap.yaml` or `.env` files. The
