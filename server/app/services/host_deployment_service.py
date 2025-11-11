@@ -104,8 +104,8 @@ class HostDeploymentService:
 
         # Cache bound method objects so identity checks in tests that stub
         # `_run_winrm_call` receive the same callable instances every time.
-        self._get_host_version = self._get_host_version  # type: ignore[assignment]
-        self._deploy_to_host = self._deploy_to_host  # type: ignore[assignment]
+        self._get_host_version = HostDeploymentService._get_host_version.__get__(self)
+        self._deploy_to_host = HostDeploymentService._deploy_to_host.__get__(self)
 
     def _initialize_agent_download_base_url(self) -> bool:
         """Resolve and cache the agent download base URL if configured."""

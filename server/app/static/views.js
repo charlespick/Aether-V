@@ -72,7 +72,55 @@ class ViewManager {
             if (window.CSS && typeof window.CSS.escape === 'function') {
                 return window.CSS.escape(value);
             }
-            return value.replace(/(["'\\\[\]])/g, '\\$1');
+            // Polyfill for CSS.escape from https://developer.mozilla.org/en-US/docs/Web/API/CSS/escape#polyfill
+            // This polyfill escapes all characters that could cause issues in CSS selectors.
+            // Copyright Mathias Bynens <https://mathiasbynens.be/>
+            // Licensed under the MIT license.
+            var string = String(value);
+            var length = string.length;
+            var index = -1;
+            var codeUnit;
+            var result = '';
+            var firstCodeUnit = string.charCodeAt(0);
+            while (++index < length) {
+                codeUnit = string.charCodeAt(index);
+                // Note: there’s no need to special-case astral symbols, surrogate
+                // pairs, or lone surrogates.
+                if (
+                    // If the character is NULL (U+0000), then the REPLACEMENT CHARACTER (U+FFFD).
+                    codeUnit == 0x0000
+                ) {
+                    result += '\uFFFD';
+                    continue;
+                }
+                if (
+                    // If the character is in the range [1-31] (U+0001 to U+001F) or U+007F, escape.
+                    (codeUnit >= 0x0001 && codeUnit <= 0x001F) ||
+                    codeUnit == 0x007F ||
+                    // If the character is the first character and is a digit, escape.
+                    (index == 0 && codeUnit >= 0x0030 && codeUnit <= 0x0039) ||
+                    // If the character is the second character and is a digit and the first character is a hyphen, escape.
+                    (index == 1 && codeUnit >= 0x0030 && codeUnit <= 0x0039 && firstCodeUnit == 0x002D)
+                ) {
+                    result += '\\' + codeUnit.toString(16) + ' ';
+                    continue;
+                }
+                if (
+                    // If the character is ASCII and not a letter, digit, or underscore, escape.
+                    codeUnit >= 0x0080 ||
+                    codeUnit == 0x002D || // hyphen
+                    codeUnit == 0x005F || // underscore
+                    (codeUnit >= 0x0030 && codeUnit <= 0x0039) || // 0-9
+                    (codeUnit >= 0x0041 && codeUnit <= 0x005A) || // A-Z
+                    (codeUnit >= 0x0061 && codeUnit <= 0x007A)    // a-z
+                ) {
+                    // No need to escape
+                    result += string.charAt(index);
+                } else {
+                    result += '\\' + string.charAt(index);
+                }
+            }
+            return result;
         };
 
         let navItem = null;
