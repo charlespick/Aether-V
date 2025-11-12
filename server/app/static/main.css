@@ -1777,7 +1777,6 @@ tbody tr:last-child td {
     pointer-events: none;
     transform: translateY(-10px);
     transition: opacity 0.2s ease, transform 0.2s ease;
-    --notification-anchor-offset: calc(40px + 4px + 20px);
 }
 
 .notifications-overlay.open {
@@ -1788,6 +1787,7 @@ tbody tr:last-child td {
 
 .notifications-card {
     position: relative;
+    --notification-anchor-offset: calc(40px + 4px + 20px);
     background: var(--panel-bg);
     border-radius: 12px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
@@ -1812,7 +1812,7 @@ tbody tr:last-child td {
     right: var(--notification-anchor-offset);
     width: 16px;
     height: 16px;
-    background: var(--panel-bg);
+    background: var(--muted);
     border-top: 1px solid var(--border-color);
     border-left: 1px solid var(--border-color);
     transform: rotate(45deg);

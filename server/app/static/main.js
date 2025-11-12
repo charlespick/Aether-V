@@ -1652,6 +1652,7 @@ async function openNotifications(options = {}) {
         setProfileOverlayVisibility(false);
         updateNotificationsArrowOffset();
         overlay.classList.add('open');
+        requestAnimationFrame(() => updateNotificationsArrowOffset());
         // Load notifications when panel is opened
         const data = await loadNotifications();
         if (options.highlightId) {
@@ -1676,15 +1677,31 @@ function updateNotificationsArrowOffset() {
         return;
     }
 
+    const card = overlay.querySelector('.notifications-card');
+    if (!card) {
+        return;
+    }
+
     const arrowSize = 16;
-    const styles = window.getComputedStyle(overlay);
-    const rightSpacing = parseFloat(styles.right) || 0;
+    const cardRect = card.getBoundingClientRect();
+    if (!cardRect || cardRect.width === 0) {
+        return;
+    }
+
     const buttonRect = button.getBoundingClientRect();
     const buttonCenter = buttonRect.left + buttonRect.width / 2;
-    const overlayRightEdge = window.innerWidth - rightSpacing;
-    const distance = overlayRightEdge - buttonCenter;
-    const offset = Math.max(0, distance - arrowSize / 2);
-    overlay.style.setProperty('--notification-anchor-offset', `${offset}px`);
+    const cardRightEdge = cardRect.right;
+
+    let offset = cardRightEdge - buttonCenter - arrowSize / 2;
+    if (!Number.isFinite(offset)) {
+        return;
+    }
+
+    const minOffset = 12;
+    const maxOffset = Math.max(minOffset, cardRect.width - arrowSize - 12);
+    offset = Math.min(Math.max(offset, minOffset), maxOffset);
+
+    card.style.setProperty('--notification-anchor-offset', `${offset}px`);
 }
 
 function handleOverlayAnchorResize() {
