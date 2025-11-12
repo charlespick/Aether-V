@@ -170,25 +170,22 @@ class SettingsOverlay extends BaseOverlay {
             { label: 'Source Control', value: build.source_control },
             { label: 'Built', value: this.formatBuildTime(build.build_time) },
             { label: 'Build Host', value: build.build_host },
-        ].filter(item => item.value);
+        ].filter((item) => item.value);
 
-        const keyDetailLabels = new Set(['Version', 'Source', 'Commit', 'Built']);
-        const keyDetails = [];
-        const otherDetails = [];
+        const hiddenLabels = new Set([
+            'Source',
+            'Commit',
+            'Repository State',
+            'Source Control',
+            'Built',
+            'Build Host',
+        ]);
 
-        details.forEach((item) => {
-            if (keyDetailLabels.has(item.label)) {
-                keyDetails.push(item);
-            } else {
-                otherDetails.push(item);
-            }
-        });
-
-        let summaryDetails = keyDetails;
-        let moreDetails = otherDetails;
+        let summaryDetails = details.filter((item) => !hiddenLabels.has(item.label));
+        let moreDetails = details.filter((item) => hiddenLabels.has(item.label));
 
         if (!summaryDetails.length && details.length) {
-            summaryDetails = details.slice(0, Math.min(3, details.length));
+            summaryDetails = [details[0]];
             const summaryLabels = new Set(summaryDetails.map((item) => item.label));
             moreDetails = details.filter((item) => !summaryLabels.has(item.label));
         }

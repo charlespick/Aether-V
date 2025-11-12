@@ -169,14 +169,27 @@ else:  # pragma: no cover - filesystem dependent
         "Static assets directory '%s' not found; static routes disabled", static_dir
     )
 
-assets_dir = Path(__file__).resolve().parent.parent.parent / "Assets"
-if assets_dir.is_dir():
+def resolve_assets_dir() -> Path | None:
+    """Resolve the assets directory when running from source or a packaged build."""
+
+    resolved_file = Path(__file__).resolve()
+    for parent in resolved_file.parents:
+        candidate = parent / "Assets"
+        if candidate.is_dir():
+            return candidate
+
+    candidate = Path.cwd() / "Assets"
+    if candidate.is_dir():
+        return candidate
+
+    return None
+
+
+assets_dir = resolve_assets_dir()
+if assets_dir is not None:
     app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 else:  # pragma: no cover - filesystem dependent
-    logger.warning(
-        "Assets directory '%s' not found; asset routes disabled",
-        assets_dir,
-    )
+    logger.warning("Assets directory not found; asset routes disabled")
 
 if AGENT_ARTIFACTS_DIR.is_dir():
     app.mount(
