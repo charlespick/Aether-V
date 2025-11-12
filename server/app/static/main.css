@@ -1461,12 +1461,25 @@ tbody tr:last-child td {
 
 .about-grid--more {
     margin-top: 12px;
+    display: none;
+}
+
+.about-grid--more.is-expanded {
+    display: grid;
 }
 
 .about-actions {
     margin-top: 4px;
     display: flex;
     gap: 8px;
+}
+
+.diagnostics-section {
+    display: none;
+}
+
+.diagnostics-section.is-expanded {
+    display: block;
 }
 
 .see-more-btn {
