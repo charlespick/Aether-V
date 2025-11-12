@@ -526,6 +526,7 @@ class HostView extends BaseView {
         const displayHostname = sanitizeHtml(shortHostname);
         const fullHostname = sanitizeHtml(resolvedHostname);
         const hostVMs = inventory.vms.filter(vm => vm.host === hostname);
+        const managingCluster = this.buildManagingClusterValue(host);
 
         return `
             <h1 class="page-title">${displayHostname}</h1>
@@ -553,6 +554,10 @@ class HostView extends BaseView {
                         <span class="vm-overview-label">VM Count</span>
                         <span class="vm-overview-value">${hostVMs.length}</span>
                     </div>
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Managing Cluster</span>
+                        <span class="vm-overview-value">${managingCluster}</span>
+                    </div>
                 </div>
             </div>
 
@@ -563,6 +568,22 @@ class HostView extends BaseView {
                 </div>
             </div>
         `;
+    }
+
+    buildManagingClusterValue(host) {
+        const clusterName = host && typeof host.cluster !== 'undefined' ? host.cluster : null;
+        if (clusterName === null || typeof clusterName === 'undefined') {
+            return '—';
+        }
+
+        const text = String(clusterName).trim();
+        if (!text) {
+            return '—';
+        }
+
+        const safeClusterName = sanitizeHtml(text);
+        const clusterNameJs = escapeJsString(text);
+        return `<a href="#" class="vm-link" onclick="viewManager.switchView('cluster', { name: '${clusterNameJs}' }); return false;">${safeClusterName}</a>`;
     }
 
     renderVmTable(vms, fallbackHost = '') {
@@ -642,11 +663,13 @@ class VMView extends BaseView {
         const meta = getVmStateMeta(vm.state);
         const osName = this.formatOsFamily(vm);
         const hostInfo = this.findHost(inventory, vm.host);
+        const hostOverview = this.buildHostOverviewValue(vm.host);
+        const clusterOverview = this.buildClusterOverviewValue(vm, hostInfo);
         const overviewItems = [
-            { label: 'Hyper-V Host', value: this.formatHostname(vm.host) },
+            { label: 'Hyper-V Host', value: hostOverview.value, isHtml: hostOverview.isHtml },
             { label: 'IP Address(es)', value: this.extractIpAddresses(vm) },
             { label: 'Operating System', value: osName },
-            { label: 'Clustered', value: this.formatClusterState(vm, hostInfo) },
+            { label: 'Clustered', value: clusterOverview.value, isHtml: clusterOverview.isHtml },
             { label: 'Created', value: this.formatDate(vm.created_at) }
         ];
 
@@ -719,7 +742,7 @@ class VMView extends BaseView {
                     ${overviewItems.map(item => `
                         <div class="vm-overview-item">
                             <span class="vm-overview-label">${item.label}</span>
-                            <span class="vm-overview-value">${this.escapeHtml(item.value)}</span>
+                            <span class="vm-overview-value">${item.isHtml ? item.value : this.escapeHtml(item.value)}</span>
                         </div>
                     `).join('')}
                 </div>
@@ -1612,6 +1635,75 @@ class VMView extends BaseView {
         return dotIndex === -1 ? hostText : hostText.slice(0, dotIndex);
     }
 
+    buildHostOverviewValue(hostname) {
+        const displayName = this.formatHostname(hostname);
+        if (!hostname) {
+            return { value: displayName, isHtml: false };
+        }
+
+        const safeHostname = escapeJsString(String(hostname));
+        const safeDisplayName = this.escapeHtml(displayName);
+
+        return {
+            value: `<a href="#" class="vm-link" onclick="viewManager.switchView('host', { hostname: '${safeHostname}' }); return false;">${safeDisplayName}</a>`,
+            isHtml: true
+        };
+    }
+
+    getClusterStatus(vm, hostInfo) {
+        const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
+        const hostCluster = hostInfo && hostInfo.cluster ? String(hostInfo.cluster).trim() : '';
+        const clusterName = hostCluster || null;
+
+        if (typeof rawClustered !== 'undefined' && rawClustered !== null) {
+            if (typeof rawClustered === 'boolean') {
+                if (rawClustered) {
+                    return { label: 'Yes', clusterName, isClustered: true };
+                }
+                return { label: 'No', clusterName: null, isClustered: false };
+            }
+
+            const normalized = String(rawClustered).trim();
+            if (normalized.length > 0) {
+                const normalizedLower = normalized.toLowerCase();
+                if (['yes', 'true', '1'].includes(normalizedLower)) {
+                    return { label: 'Yes', clusterName, isClustered: true };
+                }
+                if (['no', 'false', '0'].includes(normalizedLower)) {
+                    return { label: 'No', clusterName: null, isClustered: false };
+                }
+                return { label: this.formatValue(rawClustered, 'Unknown'), clusterName: null, isClustered: null };
+            }
+        }
+
+        if (hostInfo && clusterName) {
+            return { label: 'Yes', clusterName, isClustered: true };
+        }
+        if (hostInfo) {
+            return { label: 'No', clusterName: null, isClustered: false };
+        }
+        return { label: 'Unknown', clusterName: null, isClustered: null };
+    }
+
+    buildClusterOverviewValue(vm, hostInfo) {
+        const status = this.getClusterStatus(vm, hostInfo);
+        if (status.isClustered && status.clusterName) {
+            const safeStatus = this.escapeHtml(status.label);
+            const safeClusterName = this.escapeHtml(status.clusterName);
+            const clusterNameJs = escapeJsString(status.clusterName);
+            const clusterLink = `<a href="#" class="vm-link" onclick="viewManager.switchView('cluster', { name: '${clusterNameJs}' }); return false;">${safeClusterName}</a>`;
+            return {
+                value: `${safeStatus} (${clusterLink})`,
+                isHtml: true
+            };
+        }
+
+        const labelText = status.clusterName
+            ? `${status.label} (${status.clusterName})`
+            : status.label;
+        return { value: labelText, isHtml: false };
+    }
+
     findVm(inventory, vmName, requestedHost) {
         if (!inventory) {
             return null;
@@ -1656,36 +1748,11 @@ class VMView extends BaseView {
     }
 
     formatClusterState(vm, hostInfo) {
-        const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
-        if (typeof rawClustered !== 'undefined' && rawClustered !== null) {
-            if (typeof rawClustered === 'boolean') {
-                if (rawClustered) {
-                    const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
-                    return `Yes${clusterName}`;
-                }
-                return 'No';
-            }
-
-            const normalized = String(rawClustered).trim().toLowerCase();
-            if (['yes', 'true', '1'].includes(normalized)) {
-                const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
-                return `Yes${clusterName}`;
-            }
-            if (['no', 'false', '0'].includes(normalized)) {
-                return 'No';
-            }
-            if (normalized.length > 0) {
-                return this.formatValue(rawClustered, 'Unknown');
-            }
+        const status = this.getClusterStatus(vm, hostInfo);
+        if (status.clusterName) {
+            return `${status.label} (${status.clusterName})`;
         }
-
-        if (hostInfo && hostInfo.cluster) {
-            return `Yes (${hostInfo.cluster})`;
-        }
-        if (hostInfo) {
-            return 'No';
-        }
-        return 'Unknown';
+        return status.label;
     }
 
     extractIpAddresses(vm) {
