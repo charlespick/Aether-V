@@ -4,6 +4,13 @@ window.appConfig = configData;
 window.jobSchema = configData.job_schema || null;
 const authEnabled = configData.auth_enabled;
 
+if (window.viewManager && typeof window.viewManager.setAppName === 'function') {
+    const envName = configData.environment_name;
+    const fallbackAppName = configData.app_name;
+    const effectiveName = typeof envName === 'string' && envName.trim() ? envName : fallbackAppName;
+    window.viewManager.setAppName(effectiveName);
+}
+
 const { DEFAULT_STYLE, applyIcon, renderDefaultIcon } = window.iconUtils;
 const ICON_STYLE = DEFAULT_STYLE;
 
@@ -1497,7 +1504,7 @@ function applyTheme(themeMode) {
 function initializeTheme() {
     const themeMode = localStorage.getItem('setting.themeMode') || 'system';
     applyTheme(themeMode);
-    
+
     // Listen for system theme changes if in system mode
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
         const currentMode = localStorage.getItem('setting.themeMode') || 'system';
@@ -1507,11 +1514,50 @@ function initializeTheme() {
     });
 }
 
+function getRouteFromLocation() {
+    if (typeof viewManager?.resolveRouteFromLocation === 'function') {
+        try {
+            return viewManager.resolveRouteFromLocation(window.location);
+        } catch (error) {
+            console.error('Failed to resolve route from location:', error);
+        }
+    }
+    return { viewName: 'overview', data: {}, matched: true };
+}
+
+async function navigateToCurrentLocation(options = {}) {
+    if (!viewManager || typeof viewManager.switchView !== 'function') {
+        return null;
+    }
+
+    const route = getRouteFromLocation();
+    const navigationOptions = { replaceHistory: true, ...options };
+    await viewManager.switchView(route.viewName, route.data, navigationOptions);
+    return route;
+}
+
+function handlePopState(event) {
+    if (!viewManager || typeof viewManager.switchView !== 'function' || !viewManager.viewContainer) {
+        return;
+    }
+
+    const state = event?.state;
+    if (state && state.viewName) {
+        viewManager.switchView(state.viewName, state.data || {}, { skipHistory: true });
+        return;
+    }
+
+    if (typeof viewManager.resolveRouteFromLocation === 'function') {
+        const route = viewManager.resolveRouteFromLocation(window.location);
+        viewManager.switchView(route.viewName, route.data, { skipHistory: true });
+    }
+}
+
 // Call initializeAuth when page loads
 document.addEventListener('DOMContentLoaded', async () => {
     // Initialize theme first
     initializeTheme();
-    
+
     // Initialize systems
     overlayManager.init();
     viewManager.init('view-container');
@@ -1528,12 +1574,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Load initial notifications (will also come via WebSocket)
     await loadNotifications();
-    
+
     // Setup navigation handlers
     setupNavigation();
-    
-    // Show default view
-    await viewManager.switchView('overview');
+
+    window.addEventListener('popstate', handlePopState);
+
+    // Render the view corresponding to the current URL
+    await navigateToCurrentLocation();
 });
 
 // Setup navigation event handlers
@@ -1658,7 +1706,7 @@ async function refreshInventory() {
         const currentViewName = [...viewManager.views.entries()]
             .find(([, ViewClass]) => viewManager.currentView instanceof ViewClass)?.[0];
         if (currentViewName) {
-            await viewManager.switchView(currentViewName, viewManager.currentView.data);
+            await viewManager.switchView(currentViewName, viewManager.currentView.data, { skipHistory: true });
         }
     }
 }

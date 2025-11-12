@@ -409,6 +409,33 @@ async def root(request: Request):
         )
 
 
+@app.get("/cluster/{cluster_name}", response_class=HTMLResponse, tags=["UI"])
+async def cluster_page(cluster_name: str, request: Request):
+    """Serve the main UI for cluster-specific routes."""
+    del cluster_name  # Path parameter is used for routing only
+    return await root(request)
+
+
+@app.get("/host/{hostname}", response_class=HTMLResponse, tags=["UI"])
+async def host_page(hostname: str, request: Request):
+    """Serve the main UI for host-specific routes."""
+    del hostname  # Path parameter is used for routing only
+    return await root(request)
+
+
+@app.get("/virtual-machine/{vm_name}", response_class=HTMLResponse, tags=["UI"])
+async def vm_page(vm_name: str, request: Request):
+    """Serve the main UI for VM-specific routes."""
+    del vm_name  # Path parameter is used for routing only
+    return await root(request)
+
+
+@app.get("/disconnected-hosts", response_class=HTMLResponse, tags=["UI"])
+async def disconnected_hosts_page(request: Request):
+    """Serve the main UI for the disconnected hosts section."""
+    return await root(request)
+
+
 @app.get("/ui", response_class=HTMLResponse, tags=["UI"])
 async def ui(request: Request):
     """Serve the web UI."""
