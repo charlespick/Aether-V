@@ -32,6 +32,8 @@ RUN apt-get update \
         genisoimage \
         nodejs \
         powershell \
+        python3 \
+        python3-pip \
         xorriso \
     && corepack enable \
     && rm -rf /var/lib/apt/lists/*
