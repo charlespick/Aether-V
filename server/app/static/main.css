@@ -2830,6 +2830,23 @@ tbody tr:last-child td {
     color: var(--primary-color);
 }
 
+.vm-link {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.vm-link:hover,
+.vm-link:focus {
+    text-decoration: underline;
+}
+
+.vm-link:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
 .vm-table-link {
     display: flex;
     align-items: center;
