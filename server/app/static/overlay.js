@@ -337,6 +337,17 @@ class SettingsOverlay extends BaseOverlay {
             if (response.ok) {
                 return await response.json();
             }
+            if (response.status === 403) {
+                return {
+                    errorMessage:
+                        'Service diagnostics are unavailable because your account lacks the required permissions.',
+                };
+            }
+            console.error(
+                'Failed to load diagnostics information',
+                response.status,
+                response.statusText
+            );
         } catch (error) {
             console.error('Failed to load diagnostics information', error);
         }
@@ -409,6 +420,10 @@ class SettingsOverlay extends BaseOverlay {
     renderDiagnosticsMarkup(data) {
         if (!data) {
             return '<p class="empty">Diagnostics unavailable.</p>';
+        }
+
+        if (data.errorMessage) {
+            return `<p class="empty">${this.escapeHtml(data.errorMessage)}</p>`;
         }
 
         const remote = data.remote_tasks || {};
