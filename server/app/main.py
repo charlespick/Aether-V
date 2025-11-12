@@ -174,13 +174,18 @@ else:  # pragma: no cover - filesystem dependent
         static_dir,
     )
 
-assets_dir = PROJECT_ROOT / "Assets"
-if assets_dir.is_dir():
+asset_candidates = [
+    SERVER_DIR / "Assets",  # Container layout: /app/Assets
+    PROJECT_ROOT / "Assets",  # Source checkout layout: <repo>/Assets
+]
+assets_dir = next((path for path in asset_candidates if path.is_dir()), None)
+
+if assets_dir:
     app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 else:  # pragma: no cover - filesystem dependent
     logger.warning(
-        "Assets directory '%s' not found; asset routes disabled",
-        assets_dir,
+        "Assets directory not found in expected locations %s; asset routes disabled",
+        asset_candidates,
     )
 
 if AGENT_ARTIFACTS_DIR.is_dir():
