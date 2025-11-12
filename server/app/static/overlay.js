@@ -172,22 +172,11 @@ class SettingsOverlay extends BaseOverlay {
             { label: 'Build Host', value: build.build_host },
         ].filter((item) => item.value);
 
-        const hiddenLabels = new Set([
-            'Source',
-            'Commit',
-            'Repository State',
-            'Source Control',
-            'Built',
-            'Build Host',
-        ]);
+        let summaryDetails = [];
+        let moreDetails = [];
 
-        let summaryDetails = details.filter((item) => !hiddenLabels.has(item.label));
-        let moreDetails = details.filter((item) => hiddenLabels.has(item.label));
-
-        if (!summaryDetails.length && details.length) {
-            summaryDetails = [details[0]];
-            const summaryLabels = new Set(summaryDetails.map((item) => item.label));
-            moreDetails = details.filter((item) => !summaryLabels.has(item.label));
+        if (details.length) {
+            [summaryDetails, moreDetails] = [[details[0]], details.slice(1)];
         }
 
         const renderDetailItems = (items) => items
@@ -219,24 +208,27 @@ class SettingsOverlay extends BaseOverlay {
             : '';
 
         const diagnosticsMarkup = this.renderDiagnosticsMarkup(diagnostics);
-        const toggleTargets = ['diagnostics-section'];
+        const toggleTargets = [];
         if (moreDetails.length) {
-            toggleTargets.unshift('about-more-details');
+            toggleTargets.push('about-more-details');
         }
+        toggleTargets.push('diagnostics-section');
         const ariaControls = toggleTargets.join(' ');
-        const seeMoreButtonMarkup = `
-            <div class="about-actions">
-                <button
-                    type="button"
-                    class="see-more-btn"
-                    id="about-see-more"
-                    aria-expanded="false"
-                    aria-controls="${this.escapeHtml(ariaControls)}"
-                >
-                    See more
-                </button>
-            </div>
-        `;
+        const seeMoreButtonMarkup = toggleTargets.length
+            ? `
+                <div class="about-actions">
+                    <button
+                        type="button"
+                        class="see-more-btn"
+                        id="about-see-more"
+                        aria-expanded="false"
+                        aria-controls="${this.escapeHtml(ariaControls)}"
+                    >
+                        See more
+                    </button>
+                </div>
+            `
+            : '';
 
         return `
             <div class="settings-section">
@@ -409,20 +401,12 @@ class SettingsOverlay extends BaseOverlay {
 
         const extraDetails = document.getElementById('about-more-details');
         if (extraDetails) {
-            if (expanded) {
-                extraDetails.removeAttribute('hidden');
-            } else {
-                extraDetails.setAttribute('hidden', '');
-            }
+            extraDetails.hidden = !expanded;
         }
 
         const diagnosticsSection = document.getElementById('diagnostics-section');
         if (diagnosticsSection) {
-            if (expanded) {
-                diagnosticsSection.removeAttribute('hidden');
-            } else {
-                diagnosticsSection.setAttribute('hidden', '');
-            }
+            diagnosticsSection.hidden = !expanded;
         }
     }
 
