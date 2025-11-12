@@ -78,32 +78,24 @@ jobs:
             type=ref,event=pr,prefix=pr-
             type=sha,format=short,prefix=sha-
     
-    - name: Build Docker image for smoke tests
+    - name: Build and conditionally push Docker image
+      id: build
       uses: docker/build-push-action@v5
       with:
         context: .
         file: ./server/Dockerfile
-        push: false
+        push: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devel' }}
         load: true
-        tags: ${{ env.SMOKE_IMAGE_TAG }}
+        tags: |
+          ${{ env.SMOKE_IMAGE_TAG }}
+          ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
     - name: Run server smoke tests
       run: |
         bash Scripts/server-smoke-test.sh "${SMOKE_IMAGE_TAG}"
-
-    - name: Build and push Docker image
-      if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/devel'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./server/Dockerfile
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
     
     - name: Comment on PR with image info
       if: github.event_name == 'pull_request'
