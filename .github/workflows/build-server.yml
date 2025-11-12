@@ -34,24 +34,22 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: aetherv-server
   SMOKE_IMAGE_TAG: ${{ format('aetherv-server:ci-smoke-{0}', github.run_id) }}
+  BUILD_TOOLS_IMAGE: ${{ format('ghcr.io/{0}/aetherv-build-tools:latest', github.repository_owner) }}
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    container:
+      image: ${{ env.BUILD_TOOLS_IMAGE }}
     permissions:
       contents: read
       packages: write
       pull-requests: write
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-    
-    - name: Install ISO creation tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y xorriso genisoimage
-    
+
     - name: Build ISOs
       run: |
         pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs
