@@ -1973,7 +1973,9 @@ class SearchOverlay {
             html += '<ul class="search-results-list">';
             hosts.forEach(host => {
                 const shortName = host.hostname.split('.')[0];
-                const iconClass = host.status === 'connected' ? 'status-icon--online' : 'status-icon--offline';
+                const isConnected = Boolean(host.connected);
+                const iconClass = isConnected ? 'status-icon--online' : 'status-icon--offline';
+                const statusLabel = isConnected ? 'Connected' : 'Disconnected';
                 const hostIcon = icon('host', {
                     className: ['search-result-icon', iconClass].join(' '),
                 });
@@ -1982,7 +1984,7 @@ class SearchOverlay {
                         ${hostIcon}
                         <div class="search-result-details">
                             <div class="search-result-title">${shortName}</div>
-                            <div class="search-result-subtitle">${host.cluster || 'Default'} • ${host.status}</div>
+                            <div class="search-result-subtitle">${host.cluster || 'Default'} • ${statusLabel}</div>
                         </div>
                     </li>
                 `;
