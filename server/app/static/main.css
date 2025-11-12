@@ -161,6 +161,7 @@ body {
 }
 
 .profile-overlay {
+    --profile-anchor-offset: calc(8px + 12px);
     position: absolute;
     top: calc(100% + 12px);
     right: 0;
@@ -181,7 +182,7 @@ body {
     content: '';
     position: absolute;
     top: -8px;
-    right: 20px;
+    right: var(--profile-anchor-offset);
     width: 16px;
     height: 16px;
     background: var(--panel-bg);
@@ -189,6 +190,10 @@ body {
     border-left: 1px solid var(--border-color);
     transform: rotate(45deg);
     box-shadow: -4px -4px 8px rgba(15, 23, 42, 0.07);
+}
+
+[data-theme="dark"] .profile-overlay::before {
+    box-shadow: -4px -4px 8px rgba(0, 0, 0, 0.45);
 }
 
 .profile-overlay.open {
@@ -286,27 +291,45 @@ body {
 
 .profile-logout-btn {
     align-self: flex-start;
-    padding: 10px 16px;
-    border-radius: 999px;
-    border: none;
-    background: linear-gradient(135deg, #ef4444, #f97316);
-    color: white;
+    padding: 10px 18px;
+    border-radius: 10px;
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    background: var(--bg);
+    color: #b91c1c;
     font-weight: 600;
     cursor: pointer;
-    transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+    transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
 
 .profile-logout-btn:hover:not([disabled]) {
+    background: var(--muted);
+    border-color: rgba(239, 68, 68, 0.4);
     transform: translateY(-1px);
-    box-shadow: 0 8px 16px rgba(239, 68, 68, 0.35);
 }
 
 .profile-logout-btn:disabled {
     cursor: not-allowed;
     opacity: 0.6;
-    background: var(--surface-subtle);
+    background: var(--muted);
     color: var(--muted-ink);
-    box-shadow: none;
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] .profile-logout-btn {
+    background: var(--panel-bg);
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.35);
+}
+
+[data-theme="dark"] .profile-logout-btn:hover:not([disabled]) {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.5);
+}
+
+[data-theme="dark"] .profile-logout-btn:disabled {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(226, 232, 240, 0.5);
+    border-color: rgba(255, 255, 255, 0.08);
 }
 
 /* Decorative square gradient */
@@ -1391,10 +1414,42 @@ tbody tr:last-child td {
     background: var(--muted);
     border-radius: 8px;
     font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .about-info p {
-    margin: 4px 0;
+    margin: 0;
+}
+
+.about-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.about-logo {
+    width: 48px;
+    height: auto;
+    flex-shrink: 0;
+}
+
+.about-brand-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.about-name {
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--ink);
+}
+
+.about-description {
+    color: var(--muted-ink);
+    line-height: 1.4;
 }
 
 .about-grid {
@@ -1402,6 +1457,51 @@ tbody tr:last-child td {
     grid-template-columns: minmax(140px, 200px) 1fr;
     gap: 8px 16px;
     margin-top: 12px;
+}
+
+.about-grid--more {
+    margin-top: 12px;
+}
+
+.about-actions {
+    margin-top: 4px;
+    display: flex;
+    gap: 8px;
+}
+
+.see-more-btn {
+    border: 1px solid var(--border-color);
+    background: var(--bg);
+    color: var(--muted-ink);
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.see-more-btn:hover,
+.see-more-btn:focus-visible {
+    background: var(--muted);
+    color: var(--ink);
+    border-color: rgba(0, 0, 0, 0.15);
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+[data-theme="dark"] .see-more-btn {
+    background: var(--card-bg);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: rgba(226, 232, 240, 0.85);
+}
+
+[data-theme="dark"] .see-more-btn:hover,
+[data-theme="dark"] .see-more-btn:focus-visible {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.16);
+    color: #f8fafc;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3);
 }
 
 .about-item {
@@ -1670,13 +1770,14 @@ tbody tr:last-child td {
 /* Notifications Overlay Styles */
 .notifications-overlay {
     position: fixed;
-    top: var(--topbar-h);
+    top: calc(var(--topbar-h) + 12px);
     right: 16px;
     z-index: 1000;
     opacity: 0;
     pointer-events: none;
     transform: translateY(-10px);
     transition: opacity 0.2s ease, transform 0.2s ease;
+    --notification-anchor-offset: calc(40px + 4px + 20px);
 }
 
 .notifications-overlay.open {
@@ -1686,17 +1787,36 @@ tbody tr:last-child td {
 }
 
 .notifications-card {
-    background: var(--bg);
+    position: relative;
+    background: var(--panel-bg);
     border-radius: 12px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     border: 1px solid var(--border-color);
     width: 360px;
     max-height: 480px;
-    overflow: hidden;
+    overflow: visible;
 }
 
 [data-theme="dark"] .notifications-card {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .notifications-card::before {
+    box-shadow: -4px -4px 8px rgba(0, 0, 0, 0.45);
+}
+
+.notifications-card::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    right: var(--notification-anchor-offset);
+    width: 16px;
+    height: 16px;
+    background: var(--panel-bg);
+    border-top: 1px solid var(--border-color);
+    border-left: 1px solid var(--border-color);
+    transform: rotate(45deg);
+    box-shadow: -4px -4px 8px rgba(15, 23, 42, 0.07);
 }
 
 .notifications-header {

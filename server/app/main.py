@@ -169,6 +169,15 @@ else:  # pragma: no cover - filesystem dependent
         "Static assets directory '%s' not found; static routes disabled", static_dir
     )
 
+assets_dir = Path(__file__).resolve().parent.parent.parent / "Assets"
+if assets_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+else:  # pragma: no cover - filesystem dependent
+    logger.warning(
+        "Assets directory '%s' not found; asset routes disabled",
+        assets_dir,
+    )
+
 if AGENT_ARTIFACTS_DIR.is_dir():
     app.mount(
         AGENT_HTTP_MOUNT_PATH,

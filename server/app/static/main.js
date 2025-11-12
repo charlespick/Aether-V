@@ -174,9 +174,30 @@ function setProfileOverlayVisibility(visible) {
         return;
     }
 
+    if (visible) {
+        updateProfileArrowOffset();
+    }
+
+    if (visible && typeof closeNotifications === 'function') {
+        closeNotifications();
+    }
+
     overlay.classList.toggle('open', profileOverlayVisible);
     overlay.setAttribute('aria-hidden', profileOverlayVisible ? 'false' : 'true');
     button.setAttribute('aria-expanded', profileOverlayVisible ? 'true' : 'false');
+}
+
+function updateProfileArrowOffset() {
+    const overlay = document.getElementById('profile-overlay');
+    const button = document.getElementById('profile-btn');
+    if (!overlay || !button) {
+        return;
+    }
+
+    const arrowSize = 16;
+    const buttonWidth = button.offsetWidth || 0;
+    const offset = Math.max(0, buttonWidth / 2 - arrowSize / 2);
+    overlay.style.setProperty('--profile-anchor-offset', `${offset}px`);
 }
 
 function deriveDisplayEmail(user) {
@@ -245,6 +266,9 @@ function setupProfileMenu() {
         if (profileOverlayVisible) {
             setProfileOverlayVisibility(false);
         } else {
+            if (typeof closeNotifications === 'function') {
+                closeNotifications();
+            }
             updateProfileOverlayContent(userInfo);
             setProfileOverlayVisibility(true);
         }
@@ -282,6 +306,7 @@ function setupProfileMenu() {
     });
 
     updateProfileOverlayContent(userInfo);
+    updateProfileArrowOffset();
 }
 
 // Job streaming listeners
@@ -1534,6 +1559,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Show default view
     await viewManager.switchView('overview');
+
+    window.addEventListener('resize', handleOverlayAnchorResize);
 });
 
 // Setup navigation event handlers
@@ -1612,6 +1639,8 @@ async function toggleNotifications() {
         if (overlay.classList.contains('open')) {
             closeNotifications();
         } else {
+            setProfileOverlayVisibility(false);
+            updateNotificationsArrowOffset();
             await openNotifications();
         }
     }
@@ -1620,6 +1649,8 @@ async function toggleNotifications() {
 async function openNotifications(options = {}) {
     const overlay = document.getElementById('notifications-overlay');
     if (overlay) {
+        setProfileOverlayVisibility(false);
+        updateNotificationsArrowOffset();
         overlay.classList.add('open');
         // Load notifications when panel is opened
         const data = await loadNotifications();
@@ -1635,6 +1666,35 @@ function closeNotifications() {
     const overlay = document.getElementById('notifications-overlay');
     if (overlay) {
         overlay.classList.remove('open');
+    }
+}
+
+function updateNotificationsArrowOffset() {
+    const overlay = document.getElementById('notifications-overlay');
+    const button = document.getElementById('notifications-btn');
+    if (!overlay || !button) {
+        return;
+    }
+
+    const arrowSize = 16;
+    const styles = window.getComputedStyle(overlay);
+    const rightSpacing = parseFloat(styles.right) || 0;
+    const buttonRect = button.getBoundingClientRect();
+    const buttonCenter = buttonRect.left + buttonRect.width / 2;
+    const overlayRightEdge = window.innerWidth - rightSpacing;
+    const distance = overlayRightEdge - buttonCenter;
+    const offset = Math.max(0, distance - arrowSize / 2);
+    overlay.style.setProperty('--notification-anchor-offset', `${offset}px`);
+}
+
+function handleOverlayAnchorResize() {
+    if (profileOverlayVisible) {
+        updateProfileArrowOffset();
+    }
+
+    const notificationsOverlay = document.getElementById('notifications-overlay');
+    if (notificationsOverlay && notificationsOverlay.classList.contains('open')) {
+        updateNotificationsArrowOffset();
     }
 }
 
