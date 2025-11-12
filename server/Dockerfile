@@ -155,6 +155,7 @@ COPY server/app /app/app
 COPY --from=icon-build /src/server/app/static/icons /app/app/static/icons
 COPY --from=icon-build /src/server/app/static/swagger-ui /app/app/static/swagger-ui
 COPY Schemas /app/Schemas
+COPY Assets /app/Assets
 
 # Prepare unified agent artifact directory
 RUN mkdir -p /app/agent

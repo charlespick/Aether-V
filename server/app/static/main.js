@@ -181,9 +181,30 @@ function setProfileOverlayVisibility(visible) {
         return;
     }
 
+    if (visible) {
+        updateProfileArrowOffset();
+    }
+
+    if (visible && typeof closeNotifications === 'function') {
+        closeNotifications();
+    }
+
     overlay.classList.toggle('open', profileOverlayVisible);
     overlay.setAttribute('aria-hidden', profileOverlayVisible ? 'false' : 'true');
     button.setAttribute('aria-expanded', profileOverlayVisible ? 'true' : 'false');
+}
+
+function updateProfileArrowOffset() {
+    const overlay = document.getElementById('profile-overlay');
+    const button = document.getElementById('profile-btn');
+    if (!overlay || !button) {
+        return;
+    }
+
+    const arrowSize = 16;
+    const buttonWidth = button.offsetWidth || 0;
+    const offset = Math.max(0, buttonWidth / 2 - arrowSize / 2);
+    overlay.style.setProperty('--profile-anchor-offset', `${offset}px`);
 }
 
 function deriveDisplayEmail(user) {
@@ -252,6 +273,9 @@ function setupProfileMenu() {
         if (profileOverlayVisible) {
             setProfileOverlayVisibility(false);
         } else {
+            if (typeof closeNotifications === 'function') {
+                closeNotifications();
+            }
             updateProfileOverlayContent(userInfo);
             setProfileOverlayVisibility(true);
         }
@@ -289,6 +313,7 @@ function setupProfileMenu() {
     });
 
     updateProfileOverlayContent(userInfo);
+    updateProfileArrowOffset();
 }
 
 // Job streaming listeners
@@ -1578,10 +1603,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Setup navigation handlers
     setupNavigation();
 
+    window.addEventListener('resize', handleOverlayAnchorResize);
     window.addEventListener('popstate', handlePopState);
 
-    // Render the view corresponding to the current URL
     await navigateToCurrentLocation();
+
 });
 
 // Setup navigation event handlers
@@ -1660,6 +1686,8 @@ async function toggleNotifications() {
         if (overlay.classList.contains('open')) {
             closeNotifications();
         } else {
+            setProfileOverlayVisibility(false);
+            updateNotificationsArrowOffset();
             await openNotifications();
         }
     }
@@ -1668,7 +1696,10 @@ async function toggleNotifications() {
 async function openNotifications(options = {}) {
     const overlay = document.getElementById('notifications-overlay');
     if (overlay) {
+        setProfileOverlayVisibility(false);
+        updateNotificationsArrowOffset();
         overlay.classList.add('open');
+        requestAnimationFrame(() => updateNotificationsArrowOffset());
         // Load notifications when panel is opened
         const data = await loadNotifications();
         if (options.highlightId) {
@@ -1683,6 +1714,51 @@ function closeNotifications() {
     const overlay = document.getElementById('notifications-overlay');
     if (overlay) {
         overlay.classList.remove('open');
+    }
+}
+
+function updateNotificationsArrowOffset() {
+    const overlay = document.getElementById('notifications-overlay');
+    const button = document.getElementById('notifications-btn');
+    if (!overlay || !button) {
+        return;
+    }
+
+    const card = overlay.querySelector('.notifications-card');
+    if (!card) {
+        return;
+    }
+
+    const arrowSize = 16;
+    const cardRect = card.getBoundingClientRect();
+    if (!cardRect || cardRect.width === 0) {
+        return;
+    }
+
+    const buttonRect = button.getBoundingClientRect();
+    const buttonCenter = buttonRect.left + buttonRect.width / 2;
+    const cardRightEdge = cardRect.right;
+
+    let offset = cardRightEdge - buttonCenter - arrowSize / 2;
+    if (!Number.isFinite(offset)) {
+        return;
+    }
+
+    const minOffset = 12;
+    const maxOffset = Math.max(minOffset, cardRect.width - arrowSize - 12);
+    offset = Math.min(Math.max(offset, minOffset), maxOffset);
+
+    card.style.setProperty('--notification-anchor-offset', `${offset}px`);
+}
+
+function handleOverlayAnchorResize() {
+    if (profileOverlayVisible) {
+        updateProfileArrowOffset();
+    }
+
+    const notificationsOverlay = document.getElementById('notifications-overlay');
+    if (notificationsOverlay && notificationsOverlay.classList.contains('open')) {
+        updateNotificationsArrowOffset();
     }
 }
 

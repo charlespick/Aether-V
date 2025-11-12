@@ -161,12 +161,31 @@ app = FastAPI(
     redoc_url=None,  # Disable default redoc
 )
 
-static_dir = Path("app/static")
+APP_DIR = Path(__file__).resolve().parent
+SERVER_DIR = APP_DIR.parent
+PROJECT_ROOT = SERVER_DIR.parent
+
+static_dir = APP_DIR / "static"
 if static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 else:  # pragma: no cover - filesystem dependent
     logger.warning(
-        "Static assets directory '%s' not found; static routes disabled", static_dir
+        "Static assets directory '%s' not found; static routes disabled",
+        static_dir,
+    )
+
+asset_candidates = [
+    SERVER_DIR / "Assets",  # Container layout: /app/Assets
+    PROJECT_ROOT / "Assets",  # Source checkout layout: <repo>/Assets
+]
+assets_dir = next((path for path in asset_candidates if path.is_dir()), None)
+
+if assets_dir:
+    app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+else:  # pragma: no cover - filesystem dependent
+    logger.warning(
+        "Assets directory not found in expected locations %s; asset routes disabled",
+        asset_candidates,
     )
 
 if AGENT_ARTIFACTS_DIR.is_dir():
@@ -315,7 +334,7 @@ async def custom_swagger_ui_html():
     )
 
 # Setup templates
-templates = Jinja2Templates(directory="app/templates")
+templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 
 @app.get("/", response_class=HTMLResponse, tags=["UI"])
