@@ -522,6 +522,7 @@ class HostView extends BaseView {
         const inventory = await this.fetchInventory();
         const host = inventory.hosts.find(h => h.hostname === hostname);
         const hostVMs = inventory.vms.filter(vm => vm.host === hostname);
+        const managingCluster = this.buildManagingClusterValue(host);
 
         return `
             <h1 class="page-title">${hostname}</h1>
@@ -545,6 +546,10 @@ class HostView extends BaseView {
                         <span class="vm-overview-label">VM Count</span>
                         <span class="vm-overview-value">${hostVMs.length}</span>
                     </div>
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Managing Cluster</span>
+                        <span class="vm-overview-value">${managingCluster}</span>
+                    </div>
                 </div>
             </div>
 
@@ -555,6 +560,22 @@ class HostView extends BaseView {
                 </div>
             </div>
         `;
+    }
+
+    buildManagingClusterValue(host) {
+        const clusterName = host && typeof host.cluster !== 'undefined' ? host.cluster : null;
+        if (clusterName === null || typeof clusterName === 'undefined') {
+            return '—';
+        }
+
+        const text = String(clusterName).trim();
+        if (!text) {
+            return '—';
+        }
+
+        const safeClusterName = sanitizeHtml(text);
+        const clusterNameJs = escapeJsString(text);
+        return `<a href="#" class="vm-link" onclick="viewManager.switchView('cluster', { name: '${clusterNameJs}' }); return false;">${safeClusterName}</a>`;
     }
 
     renderVmTable(vms, fallbackHost = '') {
