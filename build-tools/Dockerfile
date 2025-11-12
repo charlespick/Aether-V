@@ -31,7 +31,6 @@ RUN apt-get update \
         docker-compose-plugin \
         genisoimage \
         nodejs \
-        npm \
         powershell \
         python3 \
         python3-pip \
