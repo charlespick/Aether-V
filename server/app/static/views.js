@@ -521,16 +521,24 @@ class HostView extends BaseView {
         const hostname = this.data.hostname || 'Unknown Host';
         const inventory = await this.fetchInventory();
         const host = inventory.hosts.find(h => h.hostname === hostname);
+        const resolvedHostname = host?.hostname || hostname;
+        const shortHostname = formatHostnamePrefix(resolvedHostname) || resolvedHostname;
+        const displayHostname = sanitizeHtml(shortHostname);
+        const fullHostname = sanitizeHtml(resolvedHostname);
         const hostVMs = inventory.vms.filter(vm => vm.host === hostname);
 
         return `
-            <h1 class="page-title">${hostname}</h1>
+            <h1 class="page-title">${displayHostname}</h1>
 
             <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Host Information</h2>
                 </div>
                 <div class="vm-overview-grid host-info-grid">
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Full Host Name</span>
+                        <span class="vm-overview-value">${fullHostname}</span>
+                    </div>
                     <div class="vm-overview-item">
                         <span class="vm-overview-label">Status</span>
                         <span class="status ${host?.connected ? 'connected' : 'disconnected'}">
