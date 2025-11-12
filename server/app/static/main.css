@@ -2312,12 +2312,14 @@ tbody tr:last-child td {
     font-size: 14px;
     font-weight: 500;
     transition: all 0.2s;
+    color: var(--ink);
 }
 
 [data-theme="dark"] .quick-actions .action-btn {
-    background: var(--card-bg);
-    border-color: rgba(255, 255, 255, 0.08);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    color: #f7f7f7;
 }
 
 .action-btn:hover:not(.disabled) {
@@ -2325,9 +2327,16 @@ tbody tr:last-child td {
     transform: translateY(-1px);
 }
 
+[data-theme="dark"] .quick-actions .action-btn:focus-visible,
+.quick-actions .action-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
 [data-theme="dark"] .quick-actions .action-btn:hover:not(.disabled) {
-    background: #2f2f2f;
-    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .action-btn.disabled {
@@ -2779,7 +2788,7 @@ tbody tr:last-child td {
 
 .vm-overview-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 12px 24px;
 }
 
@@ -2809,6 +2818,8 @@ tbody tr:last-child td {
     font-size: 16px;
     font-weight: 600;
     color: var(--ink);
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .vm-detail-tabs {
@@ -2958,6 +2969,23 @@ tbody tr:last-child td {
     color: var(--primary-color);
 }
 
+.vm-link {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.vm-link:hover,
+.vm-link:focus {
+    text-decoration: underline;
+}
+
+.vm-link:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
 .vm-table-link {
     display: flex;
     align-items: center;
@@ -3046,7 +3074,7 @@ tbody tr:last-child td {
     }
 
     .vm-overview-grid {
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        grid-template-columns: minmax(0, 1fr);
     }
 }
 

@@ -441,6 +441,17 @@ class SettingsOverlay extends BaseOverlay {
             if (response.ok) {
                 return await response.json();
             }
+            if (response.status === 403) {
+                return {
+                    errorMessage:
+                        'Service diagnostics are unavailable because your account lacks the required permissions.',
+                };
+            }
+            console.error(
+                'Failed to load diagnostics information',
+                response.status,
+                response.statusText
+            );
         } catch (error) {
             console.error('Failed to load diagnostics information', error);
         }
@@ -513,6 +524,10 @@ class SettingsOverlay extends BaseOverlay {
     renderDiagnosticsMarkup(data) {
         if (!data) {
             return '<p class="empty">Diagnostics unavailable.</p>';
+        }
+
+        if (data.errorMessage) {
+            return `<p class="empty">${this.escapeHtml(data.errorMessage)}</p>`;
         }
 
         const remote = data.remote_tasks || {};
@@ -1305,7 +1320,10 @@ class JobDetailsOverlay extends BaseOverlay {
     }
 
     getTitle() {
-        const job = this.job;
+        return 'Job Details';
+    }
+
+    getJobSummaryTitle(job = this.job) {
         if (!job) {
             return 'Job Details';
         }
@@ -1329,12 +1347,13 @@ class JobDetailsOverlay extends BaseOverlay {
         const imageName = this.extractField(job, ['image_name', 'image']) || '—';
         const logText = this.logLines.length ? this.logLines.join('\n') : 'Waiting for output...';
         const details = job.parameters ? JSON.stringify(job.parameters, null, 2) : '{}';
+        const jobSummaryTitle = this.getJobSummaryTitle(job);
 
         return `
             <div class='job-details' data-job-id='${this.escapeHtml(jobId)}'>
                 <div class='job-header'>
                     <div class='job-header-text'>
-                        <div class='job-title'>${this.escapeHtml(this.getTitle())}</div>
+                        <div class='job-title'>${this.escapeHtml(jobSummaryTitle)}</div>
                         <div class='job-id'>Job ID: <span data-field='job-id'>${this.escapeHtml(jobId)}</span></div>
                     </div>
                     <span class='job-status-badge ${statusClass}' data-field='status-badge'>${this.escapeHtml(statusLabel)}</span>
