@@ -12,6 +12,16 @@ class ViewManager {
         this.state = {};
         this.currentViewName = null;
         this.currentViewData = {};
+        this.historyInitialized = false;
+        this.currentRouteUrl =
+            typeof window !== 'undefined' && window.location
+                ? `${window.location.pathname}${window.location.search}`
+                : '/';
+        this.baseDocumentTitle =
+            typeof document !== 'undefined' && document.title
+                ? document.title
+                : 'Aether-V — Dashboard';
+        this.appName = this.extractAppName(this.baseDocumentTitle);
     }
 
     init(containerId) {
@@ -27,7 +37,238 @@ class ViewManager {
         this.views.set(name, viewClass);
     }
 
-    async switchView(viewName, data = {}) {
+    extractAppName(title) {
+        if (!title) {
+            return 'Aether-V';
+        }
+        const text = String(title);
+        const parts = text.split('—');
+        if (parts.length > 1) {
+            const candidate = parts[0].trim();
+            return candidate || 'Aether-V';
+        }
+        const trimmed = text.trim();
+        return trimmed || 'Aether-V';
+    }
+
+    setAppName(name) {
+        if (!name) {
+            return;
+        }
+        const trimmed = String(name).trim();
+        if (!trimmed) {
+            return;
+        }
+        this.appName = trimmed;
+        if (typeof document === 'undefined') {
+            return;
+        }
+
+        if (this.currentViewName) {
+            const updatedTitle = this.buildViewTitle(this.currentViewName, this.currentViewData);
+            if (updatedTitle) {
+                document.title = updatedTitle;
+            }
+        } else {
+            document.title = `${this.appName} — Dashboard`;
+        }
+    }
+
+    buildViewUrl(viewName, viewData = {}) {
+        switch (viewName) {
+            case 'overview':
+                return '/';
+            case 'cluster': {
+                const clusterName = viewData && viewData.name ? String(viewData.name) : '';
+                if (!clusterName) {
+                    return null;
+                }
+                return `/cluster/${encodeURIComponent(clusterName)}`;
+            }
+            case 'host': {
+                const hostname = viewData && viewData.hostname ? String(viewData.hostname) : '';
+                if (!hostname) {
+                    return null;
+                }
+                return `/host/${encodeURIComponent(hostname)}`;
+            }
+            case 'vm': {
+                const vmName = viewData && viewData.name ? String(viewData.name) : '';
+                if (!vmName) {
+                    return null;
+                }
+                let url = `/virtual-machine/${encodeURIComponent(vmName)}`;
+                if (viewData && viewData.host) {
+                    const params = new URLSearchParams();
+                    params.set('host', String(viewData.host));
+                    const query = params.toString();
+                    if (query) {
+                        url += `?${query}`;
+                    }
+                }
+                return url;
+            }
+            case 'disconnected-hosts':
+                return '/disconnected-hosts';
+            default:
+                return '/';
+        }
+    }
+
+    buildViewTitle(viewName, viewData = {}) {
+        const appName = this.appName || 'Aether-V';
+        switch (viewName) {
+            case 'cluster': {
+                const clusterName = viewData && viewData.name ? String(viewData.name) : '';
+                return clusterName
+                    ? `${appName} — Cluster: ${clusterName}`
+                    : `${appName} — Cluster`;
+            }
+            case 'host': {
+                const hostname = viewData && viewData.hostname ? String(viewData.hostname) : '';
+                const shortName = formatHostnamePrefix(hostname) || hostname;
+                return hostname
+                    ? `${appName} — Host: ${shortName}`
+                    : `${appName} — Host`;
+            }
+            case 'vm': {
+                const vmName = viewData && viewData.name ? String(viewData.name) : '';
+                return vmName ? `${appName} — VM: ${vmName}` : `${appName} — Virtual Machine`;
+            }
+            case 'disconnected-hosts':
+                return `${appName} — Disconnected Hosts`;
+            case 'overview':
+                return `${appName} — Overview`;
+            default:
+                return `${appName} — Dashboard`;
+        }
+    }
+
+    updatePageMetadata(viewName, viewData = {}, options = {}) {
+        const { skipHistory = false, replaceHistory = false } = options || {};
+
+        if (typeof document !== 'undefined') {
+            const nextTitle = this.buildViewTitle(viewName, viewData);
+            if (nextTitle) {
+                document.title = nextTitle;
+            }
+        }
+
+        if (
+            skipHistory ||
+            typeof window === 'undefined' ||
+            !window.history ||
+            typeof window.history.pushState !== 'function'
+        ) {
+            return;
+        }
+
+        const url = this.buildViewUrl(viewName, viewData);
+        if (!url) {
+            return;
+        }
+
+        const currentUrl = `${window.location.pathname}${window.location.search}`;
+        const state = { viewName, data: { ...viewData } };
+
+        if (replaceHistory || !this.historyInitialized) {
+            window.history.replaceState(state, '', url);
+            this.historyInitialized = true;
+        } else if (url !== currentUrl) {
+            window.history.pushState(state, '', url);
+        } else {
+            window.history.replaceState(state, '', url);
+        }
+
+        this.currentRouteUrl = url;
+    }
+
+    safeDecode(value) {
+        if (typeof value !== 'string') {
+            return value;
+        }
+        try {
+            return decodeURIComponent(value);
+        } catch (error) {
+            console.warn('Failed to decode route segment:', value, error);
+            return value;
+        }
+    }
+
+    resolveRouteFromLocation(locationLike) {
+        const location = locationLike || (typeof window !== 'undefined' ? window.location : null);
+        if (!location) {
+            return { viewName: 'overview', data: {}, matched: true };
+        }
+
+        const pathname = location.pathname || '/';
+        const search = location.search || '';
+        const cleaned = pathname.replace(/^\/+|\/+$/g, '');
+        const segments = cleaned ? cleaned.split('/') : [];
+        const params = new URLSearchParams(search);
+
+        if (segments.length === 0) {
+            return { viewName: 'overview', data: {}, matched: true };
+        }
+
+        const [section, ...rest] = segments;
+        const remainder = rest.length > 0 ? rest.join('/') : '';
+
+        if (section === 'cluster' && remainder) {
+            return {
+                viewName: 'cluster',
+                data: { name: this.safeDecode(remainder) },
+                matched: true,
+            };
+        }
+
+        if (section === 'host' && remainder) {
+            return {
+                viewName: 'host',
+                data: { hostname: this.safeDecode(remainder) },
+                matched: true,
+            };
+        }
+
+        if (section === 'virtual-machine' && remainder) {
+            const data = { name: this.safeDecode(remainder) };
+            const hostParam = params.get('host');
+            if (hostParam) {
+                data.host = hostParam;
+            }
+            return { viewName: 'vm', data, matched: true };
+        }
+
+        if (section === 'disconnected-hosts') {
+            return { viewName: 'disconnected-hosts', data: {}, matched: true };
+        }
+
+        return { viewName: 'overview', data: {}, matched: false };
+    }
+
+    handleAnchorNavigation(event, viewName, data = {}) {
+        if (!event) {
+            this.switchView(viewName, data);
+            return false;
+        }
+
+        if (event.defaultPrevented) {
+            return false;
+        }
+
+        const isModifiedClick =
+            event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button === 1;
+
+        if (isModifiedClick) {
+            return true;
+        }
+
+        event.preventDefault();
+        this.switchView(viewName, data);
+        return false;
+    }
+
+    async switchView(viewName, data = {}, options = {}) {
         const ViewClass = this.views.get(viewName);
         if (!ViewClass) {
             console.error('View not found:', viewName);
@@ -57,6 +298,9 @@ class ViewManager {
         if (typeof window.applyProvisioningAvailability === 'function') {
             window.applyProvisioningAvailability(window.agentDeploymentState);
         }
+
+        this.updatePageMetadata(viewName, this.currentViewData, options);
+        return this.currentView;
     }
 
     updateNavigation(viewName, viewData = {}) {
@@ -521,16 +765,25 @@ class HostView extends BaseView {
         const hostname = this.data.hostname || 'Unknown Host';
         const inventory = await this.fetchInventory();
         const host = inventory.hosts.find(h => h.hostname === hostname);
+        const resolvedHostname = host?.hostname || hostname;
+        const shortHostname = formatHostnamePrefix(resolvedHostname) || resolvedHostname;
+        const displayHostname = sanitizeHtml(shortHostname);
+        const fullHostname = sanitizeHtml(resolvedHostname);
         const hostVMs = inventory.vms.filter(vm => vm.host === hostname);
+        const managingCluster = this.buildManagingClusterValue(host);
 
         return `
-            <h1 class="page-title">${hostname}</h1>
+            <h1 class="page-title">${displayHostname}</h1>
 
             <div class="view-section surface-card">
                 <div class="section-header">
                     <h2>Host Information</h2>
                 </div>
                 <div class="vm-overview-grid host-info-grid">
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Full Host Name</span>
+                        <span class="vm-overview-value">${fullHostname}</span>
+                    </div>
                     <div class="vm-overview-item">
                         <span class="vm-overview-label">Status</span>
                         <span class="status ${host?.connected ? 'connected' : 'disconnected'}">
@@ -545,6 +798,10 @@ class HostView extends BaseView {
                         <span class="vm-overview-label">VM Count</span>
                         <span class="vm-overview-value">${hostVMs.length}</span>
                     </div>
+                    <div class="vm-overview-item">
+                        <span class="vm-overview-label">Managing Cluster</span>
+                        <span class="vm-overview-value">${managingCluster}</span>
+                    </div>
                 </div>
             </div>
 
@@ -555,6 +812,23 @@ class HostView extends BaseView {
                 </div>
             </div>
         `;
+    }
+
+    buildManagingClusterValue(host) {
+        const clusterName = host && typeof host.cluster !== 'undefined' ? host.cluster : null;
+        if (clusterName === null || typeof clusterName === 'undefined') {
+            return '—';
+        }
+
+        const text = String(clusterName).trim();
+        if (!text) {
+            return '—';
+        }
+
+        const safeClusterName = sanitizeHtml(text);
+        const clusterNameJs = escapeJsString(text);
+        const clusterHref = `/cluster/${encodeURIComponent(text)}`;
+        return `<a href="${clusterHref}" class="vm-link" onclick="return viewManager.handleAnchorNavigation(event, 'cluster', { name: '${clusterNameJs}' });">${safeClusterName}</a>`;
     }
 
     renderVmTable(vms, fallbackHost = '') {
@@ -634,11 +908,13 @@ class VMView extends BaseView {
         const meta = getVmStateMeta(vm.state);
         const osName = this.formatOsFamily(vm);
         const hostInfo = this.findHost(inventory, vm.host);
+        const hostOverview = this.buildHostOverviewValue(vm.host);
+        const clusterOverview = this.buildClusterOverviewValue(vm, hostInfo);
         const overviewItems = [
-            { label: 'Hyper-V Host', value: this.formatHostname(vm.host) },
+            { label: 'Hyper-V Host', value: hostOverview.value, isHtml: hostOverview.isHtml },
             { label: 'IP Address(es)', value: this.extractIpAddresses(vm) },
             { label: 'Operating System', value: osName },
-            { label: 'Clustered', value: this.formatClusterState(vm, hostInfo) },
+            { label: 'Clustered', value: clusterOverview.value, isHtml: clusterOverview.isHtml },
             { label: 'Created', value: this.formatDate(vm.created_at) }
         ];
 
@@ -711,7 +987,7 @@ class VMView extends BaseView {
                     ${overviewItems.map(item => `
                         <div class="vm-overview-item">
                             <span class="vm-overview-label">${item.label}</span>
-                            <span class="vm-overview-value">${this.escapeHtml(item.value)}</span>
+                            <span class="vm-overview-value">${item.isHtml ? item.value : this.escapeHtml(item.value)}</span>
                         </div>
                     `).join('')}
                 </div>
@@ -1464,7 +1740,7 @@ class VMView extends BaseView {
                 this.updateActionButtonStates();
 
                 setTimeout(() => {
-                    viewManager.switchView('vm', { name: this.vmData.name, host });
+                    viewManager.switchView('vm', { name: this.vmData.name, host }, { skipHistory: true });
                 }, 400);
             } else {
                 const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
@@ -1530,7 +1806,7 @@ class VMView extends BaseView {
                 this.updateActionButtonStates();
 
                 setTimeout(() => {
-                    viewManager.switchView('vm', { name: this.vmData.name, host });
+                    viewManager.switchView('vm', { name: this.vmData.name, host }, { skipHistory: true });
                 }, 400);
             } else {
                 const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
@@ -1604,6 +1880,77 @@ class VMView extends BaseView {
         return dotIndex === -1 ? hostText : hostText.slice(0, dotIndex);
     }
 
+    buildHostOverviewValue(hostname) {
+        const displayName = this.formatHostname(hostname);
+        if (!hostname) {
+            return { value: displayName, isHtml: false };
+        }
+
+        const safeHostname = escapeJsString(String(hostname));
+        const safeDisplayName = this.escapeHtml(displayName);
+
+        const hostHref = `/host/${encodeURIComponent(String(hostname))}`;
+        return {
+            value: `<a href="${hostHref}" class="vm-link" onclick="return viewManager.handleAnchorNavigation(event, 'host', { hostname: '${safeHostname}' });">${safeDisplayName}</a>`,
+            isHtml: true
+        };
+    }
+
+    getClusterStatus(vm, hostInfo) {
+        const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
+        const hostCluster = hostInfo && hostInfo.cluster ? String(hostInfo.cluster).trim() : '';
+        const clusterName = hostCluster || null;
+
+        if (typeof rawClustered !== 'undefined' && rawClustered !== null) {
+            if (typeof rawClustered === 'boolean') {
+                if (rawClustered) {
+                    return { label: 'Yes', clusterName, isClustered: true };
+                }
+                return { label: 'No', clusterName: null, isClustered: false };
+            }
+
+            const normalized = String(rawClustered).trim();
+            if (normalized.length > 0) {
+                const normalizedLower = normalized.toLowerCase();
+                if (['yes', 'true', '1'].includes(normalizedLower)) {
+                    return { label: 'Yes', clusterName, isClustered: true };
+                }
+                if (['no', 'false', '0'].includes(normalizedLower)) {
+                    return { label: 'No', clusterName: null, isClustered: false };
+                }
+                return { label: this.formatValue(rawClustered, 'Unknown'), clusterName: null, isClustered: null };
+            }
+        }
+
+        if (hostInfo && clusterName) {
+            return { label: 'Yes', clusterName, isClustered: true };
+        }
+        if (hostInfo) {
+            return { label: 'No', clusterName: null, isClustered: false };
+        }
+        return { label: 'Unknown', clusterName: null, isClustered: null };
+    }
+
+    buildClusterOverviewValue(vm, hostInfo) {
+        const status = this.getClusterStatus(vm, hostInfo);
+        if (status.isClustered && status.clusterName) {
+            const safeStatus = this.escapeHtml(status.label);
+            const safeClusterName = this.escapeHtml(status.clusterName);
+            const clusterNameJs = escapeJsString(status.clusterName);
+            const clusterHref = `/cluster/${encodeURIComponent(String(status.clusterName))}`;
+            const clusterLink = `<a href="${clusterHref}" class="vm-link" onclick="return viewManager.handleAnchorNavigation(event, 'cluster', { name: '${clusterNameJs}' });">${safeClusterName}</a>`;
+            return {
+                value: `${safeStatus} (${clusterLink})`,
+                isHtml: true
+            };
+        }
+
+        const labelText = status.clusterName
+            ? `${status.label} (${status.clusterName})`
+            : status.label;
+        return { value: labelText, isHtml: false };
+    }
+
     findVm(inventory, vmName, requestedHost) {
         if (!inventory) {
             return null;
@@ -1648,36 +1995,11 @@ class VMView extends BaseView {
     }
 
     formatClusterState(vm, hostInfo) {
-        const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
-        if (typeof rawClustered !== 'undefined' && rawClustered !== null) {
-            if (typeof rawClustered === 'boolean') {
-                if (rawClustered) {
-                    const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
-                    return `Yes${clusterName}`;
-                }
-                return 'No';
-            }
-
-            const normalized = String(rawClustered).trim().toLowerCase();
-            if (['yes', 'true', '1'].includes(normalized)) {
-                const clusterName = hostInfo && hostInfo.cluster ? ` (${hostInfo.cluster})` : '';
-                return `Yes${clusterName}`;
-            }
-            if (['no', 'false', '0'].includes(normalized)) {
-                return 'No';
-            }
-            if (normalized.length > 0) {
-                return this.formatValue(rawClustered, 'Unknown');
-            }
+        const status = this.getClusterStatus(vm, hostInfo);
+        if (status.clusterName) {
+            return `${status.label} (${status.clusterName})`;
         }
-
-        if (hostInfo && hostInfo.cluster) {
-            return `Yes (${hostInfo.cluster})`;
-        }
-        if (hostInfo) {
-            return 'No';
-        }
-        return 'Unknown';
+        return status.label;
     }
 
     extractIpAddresses(vm) {
@@ -1839,3 +2161,4 @@ async function retryHostConnection(hostname) {
 
 // Initialize view manager
 const viewManager = new ViewManager();
+window.viewManager = viewManager;

@@ -75,27 +75,49 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            padding: 0.75rem 1.5rem;
-            border-radius: 9999px;
+            padding: 0.85rem 1.6rem;
+            border-radius: 12px;
             text-decoration: none;
             font-weight: 600;
-            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            background: rgba(15, 23, 42, 0.55);
+            color: #e2e8f0;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.45);
+            transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+        }
+        .actions a:hover {
+            transform: translateY(-1px);
+            background: rgba(15, 23, 42, 0.7);
+            border-color: rgba(148, 163, 184, 0.5);
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.5);
+        }
+        .actions a:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.35);
         }
         .actions a.primary {
-            background: #fbbf24;
-            color: #111827;
-            box-shadow: 0 10px 25px rgba(251, 191, 36, 0.35);
+            border-color: rgba(59, 130, 246, 0.4);
+            background: rgba(37, 99, 235, 0.28);
+            color: #dbeafe;
+            box-shadow: 0 16px 36px rgba(37, 99, 235, 0.35);
         }
         .actions a.primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 12px 30px rgba(251, 191, 36, 0.45);
+            background: rgba(37, 99, 235, 0.36);
+            border-color: rgba(59, 130, 246, 0.6);
+            box-shadow: 0 18px 40px rgba(37, 99, 235, 0.4);
+        }
+        .actions a.primary:focus {
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
         }
         .actions a.secondary {
-            color: #f9fafb;
-            border: 1px solid rgba(249, 250, 251, 0.3);
+            color: rgba(226, 232, 240, 0.9);
+            background: rgba(15, 23, 42, 0.45);
         }
         .actions a.secondary:hover {
-            border-color: rgba(249, 250, 251, 0.6);
+            background: rgba(15, 23, 42, 0.62);
+        }
+        .actions a.secondary:focus {
+            box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.3);
         }
         .issues-empty {
             padding: 1rem 0;

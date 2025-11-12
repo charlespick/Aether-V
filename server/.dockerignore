@@ -13,6 +13,10 @@ venv/
 env/
 ENV/
 
+# Node.js (npm used only for pre-building static assets)
+node_modules/
+package-lock.json
+
 # IDE
 .vscode/
 .idea/

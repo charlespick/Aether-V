@@ -142,6 +142,8 @@ class SettingsOverlay extends BaseOverlay {
         super(data);
         this.refreshDiagnosticsHandler = null;
         this.diagnosticsData = null;
+        this.aboutSeeMoreHandler = null;
+        this.aboutExpanded = false;
     }
 
     getTitle() {
@@ -168,16 +170,65 @@ class SettingsOverlay extends BaseOverlay {
             { label: 'Source Control', value: build.source_control },
             { label: 'Built', value: this.formatBuildTime(build.build_time) },
             { label: 'Build Host', value: build.build_host },
-        ].filter(item => item.value);
+        ].filter((item) => item.value);
 
-        const detailMarkup = details.length
-            ? details.map(item => `
+        let summaryDetails = [];
+        let moreDetails = [];
+
+        if (details.length) {
+            [summaryDetails, moreDetails] = [[details[0]], details.slice(1)];
+        }
+
+        const renderDetailItems = (items) => items
+            .map((item) => `
                 <div class="about-item">
                     <span class="about-label">${this.escapeHtml(item.label)}</span>
                     <span class="about-value">${this.escapeHtml(String(item.value))}</span>
                 </div>
-            `).join('')
-            : '<p class="empty">Build metadata unavailable.</p>';
+            `)
+            .join('');
+
+        let summaryMarkup = '';
+        if (summaryDetails.length) {
+            summaryMarkup = `
+                <div class="about-grid about-grid--summary">
+                    ${renderDetailItems(summaryDetails)}
+                </div>
+            `;
+        } else {
+            summaryMarkup = '<p class="empty">Build metadata unavailable.</p>';
+        }
+
+        const moreDetailsMarkup = moreDetails.length
+            ? `
+                <div class="about-grid about-grid--more" id="about-more-details" hidden aria-hidden="true">
+                    ${renderDetailItems(moreDetails)}
+                </div>
+            `
+            : '';
+
+        const diagnosticsMarkup = this.renderDiagnosticsMarkup(diagnostics);
+        const toggleTargets = [];
+        if (moreDetails.length) {
+            toggleTargets.push('about-more-details');
+        }
+        toggleTargets.push('diagnostics-section');
+        const ariaControls = toggleTargets.join(' ');
+        const seeMoreButtonMarkup = toggleTargets.length
+            ? `
+                <div class="about-actions">
+                    <button
+                        type="button"
+                        class="see-more-btn"
+                        id="about-see-more"
+                        aria-expanded="false"
+                        aria-controls="${this.escapeHtml(ariaControls)}"
+                    >
+                        See more
+                    </button>
+                </div>
+            `
+            : '';
 
         return `
             <div class="settings-section">
@@ -231,6 +282,27 @@ class SettingsOverlay extends BaseOverlay {
             </div>
 
             <div class="settings-section">
+                <h3>About</h3>
+                <div class="about-info">
+                    <div class="about-brand">
+                        <img
+                            src="/assets/Logo.png"
+                            alt="${productName} logo"
+                            class="about-logo"
+                            loading="lazy"
+                        />
+                        <div class="about-brand-text">
+                            <p class="about-name">${productName}</p>
+                            <p class="about-description">${description}</p>
+                        </div>
+                    </div>
+                    ${summaryMarkup}
+                    ${moreDetailsMarkup}
+                    ${seeMoreButtonMarkup}
+                </div>
+            </div>
+
+            <div class="settings-section diagnostics-section" id="diagnostics-section" hidden aria-hidden="true">
                 <div class="settings-section-header">
                     <h3>Service Diagnostics</h3>
                     <button class="btn btn-tertiary" id="refresh-diagnostics" type="button">
@@ -238,18 +310,7 @@ class SettingsOverlay extends BaseOverlay {
                     </button>
                 </div>
                 <div class="diagnostics-content" id="diagnostics-content">
-                    ${this.renderDiagnosticsMarkup(diagnostics)}
-                </div>
-            </div>
-
-            <div class="settings-section">
-                <h3>About</h3>
-                <div class="about-info">
-                    <p><strong>${productName}</strong></p>
-                    <p>${description}</p>
-                    <div class="about-grid">
-                        ${detailMarkup}
-                    </div>
+                    ${diagnosticsMarkup}
                 </div>
             </div>
 
@@ -276,6 +337,18 @@ class SettingsOverlay extends BaseOverlay {
             this.refreshDiagnosticsHandler = () => this.refreshDiagnostics();
             refreshButton.addEventListener('click', this.refreshDiagnosticsHandler);
         }
+
+        const seeMoreBtn = document.getElementById('about-see-more');
+        if (seeMoreBtn) {
+            this.aboutSeeMoreHandler = () => {
+                this.aboutExpanded = !this.aboutExpanded;
+                this.updateAboutExpansion();
+            };
+            seeMoreBtn.addEventListener('click', this.aboutSeeMoreHandler);
+        }
+
+        this.aboutExpanded = false;
+        this.updateAboutExpansion();
     }
 
     save() {
@@ -308,6 +381,37 @@ class SettingsOverlay extends BaseOverlay {
             }
             this.refreshDiagnosticsHandler = null;
         }
+
+        if (this.aboutSeeMoreHandler) {
+            const seeMoreBtn = document.getElementById('about-see-more');
+            if (seeMoreBtn) {
+                seeMoreBtn.removeEventListener('click', this.aboutSeeMoreHandler);
+            }
+            this.aboutSeeMoreHandler = null;
+        }
+    }
+
+    updateAboutExpansion() {
+        const expanded = Boolean(this.aboutExpanded);
+        const seeMoreBtn = document.getElementById('about-see-more');
+        if (seeMoreBtn) {
+            seeMoreBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            seeMoreBtn.textContent = expanded ? 'See less' : 'See more';
+        }
+
+        const extraDetails = document.getElementById('about-more-details');
+        if (extraDetails) {
+            extraDetails.classList.toggle('is-expanded', expanded);
+            extraDetails.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            extraDetails.toggleAttribute('hidden', !expanded);
+        }
+
+        const diagnosticsSection = document.getElementById('diagnostics-section');
+        if (diagnosticsSection) {
+            diagnosticsSection.classList.toggle('is-expanded', expanded);
+            diagnosticsSection.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            diagnosticsSection.toggleAttribute('hidden', !expanded);
+        }
     }
 
     async fetchAboutInfo() {
@@ -337,6 +441,17 @@ class SettingsOverlay extends BaseOverlay {
             if (response.ok) {
                 return await response.json();
             }
+            if (response.status === 403) {
+                return {
+                    errorMessage:
+                        'Service diagnostics are unavailable because your account lacks the required permissions.',
+                };
+            }
+            console.error(
+                'Failed to load diagnostics information',
+                response.status,
+                response.statusText
+            );
         } catch (error) {
             console.error('Failed to load diagnostics information', error);
         }
@@ -409,6 +524,10 @@ class SettingsOverlay extends BaseOverlay {
     renderDiagnosticsMarkup(data) {
         if (!data) {
             return '<p class="empty">Diagnostics unavailable.</p>';
+        }
+
+        if (data.errorMessage) {
+            return `<p class="empty">${this.escapeHtml(data.errorMessage)}</p>`;
         }
 
         const remote = data.remote_tasks || {};
@@ -1201,7 +1320,10 @@ class JobDetailsOverlay extends BaseOverlay {
     }
 
     getTitle() {
-        const job = this.job;
+        return 'Job Details';
+    }
+
+    getJobSummaryTitle(job = this.job) {
         if (!job) {
             return 'Job Details';
         }
@@ -1225,12 +1347,13 @@ class JobDetailsOverlay extends BaseOverlay {
         const imageName = this.extractField(job, ['image_name', 'image']) || '—';
         const logText = this.logLines.length ? this.logLines.join('\n') : 'Waiting for output...';
         const details = job.parameters ? JSON.stringify(job.parameters, null, 2) : '{}';
+        const jobSummaryTitle = this.getJobSummaryTitle(job);
 
         return `
             <div class='job-details' data-job-id='${this.escapeHtml(jobId)}'>
                 <div class='job-header'>
                     <div class='job-header-text'>
-                        <div class='job-title'>${this.escapeHtml(this.getTitle())}</div>
+                        <div class='job-title'>${this.escapeHtml(jobSummaryTitle)}</div>
                         <div class='job-id'>Job ID: <span data-field='job-id'>${this.escapeHtml(jobId)}</span></div>
                     </div>
                     <span class='job-status-badge ${statusClass}' data-field='status-badge'>${this.escapeHtml(statusLabel)}</span>
