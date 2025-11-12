@@ -2651,7 +2651,7 @@ tbody tr:last-child td {
 
 .vm-overview-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 12px 24px;
 }
 
@@ -2681,6 +2681,8 @@ tbody tr:last-child td {
     font-size: 16px;
     font-weight: 600;
     color: var(--ink);
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .vm-detail-tabs {
@@ -2935,7 +2937,7 @@ tbody tr:last-child td {
     }
 
     .vm-overview-grid {
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        grid-template-columns: minmax(0, 1fr);
     }
 }
 
