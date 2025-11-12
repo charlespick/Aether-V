@@ -32,8 +32,8 @@ build: isos
 	docker build -f server/Dockerfile -t aetherv:latest .
 
 isos:
-	@echo "Building provisioning ISOs from latest source..."
-	$(POWERSHELL) -NoLogo -NoProfile -File ./Scripts/Build-ProvisioningISOs.ps1
+	@echo "Building all assets (ISOs + static files) from latest source..."
+	$(POWERSHELL) -NoLogo -NoProfile -File ./Scripts/Build-All-Assets.ps1
 
 run:
 	docker run -p 8000:8000 --env-file server/.env aetherv:latest

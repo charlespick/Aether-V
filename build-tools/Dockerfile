@@ -31,7 +31,10 @@ RUN apt-get update \
         docker-compose-plugin \
         genisoimage \
         nodejs \
+        npm \
         powershell \
+        python3 \
+        python3-pip \
         xorriso \
     && corepack enable \
     && rm -rf /var/lib/apt/lists/*
