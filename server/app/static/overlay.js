@@ -201,7 +201,7 @@ class SettingsOverlay extends BaseOverlay {
 
         const moreDetailsMarkup = moreDetails.length
             ? `
-                <div class="about-grid about-grid--more" id="about-more-details" aria-hidden="true">
+                <div class="about-grid about-grid--more" id="about-more-details" hidden aria-hidden="true">
                     ${renderDetailItems(moreDetails)}
                 </div>
             `
@@ -302,7 +302,7 @@ class SettingsOverlay extends BaseOverlay {
                 </div>
             </div>
 
-            <div class="settings-section diagnostics-section" id="diagnostics-section" aria-hidden="true">
+            <div class="settings-section diagnostics-section" id="diagnostics-section" hidden aria-hidden="true">
                 <div class="settings-section-header">
                     <h3>Service Diagnostics</h3>
                     <button class="btn btn-tertiary" id="refresh-diagnostics" type="button">
@@ -403,12 +403,14 @@ class SettingsOverlay extends BaseOverlay {
         if (extraDetails) {
             extraDetails.classList.toggle('is-expanded', expanded);
             extraDetails.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            extraDetails.toggleAttribute('hidden', !expanded);
         }
 
         const diagnosticsSection = document.getElementById('diagnostics-section');
         if (diagnosticsSection) {
             diagnosticsSection.classList.toggle('is-expanded', expanded);
             diagnosticsSection.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            diagnosticsSection.toggleAttribute('hidden', !expanded);
         }
     }
 
