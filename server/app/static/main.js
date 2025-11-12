@@ -5,7 +5,10 @@ window.jobSchema = configData.job_schema || null;
 const authEnabled = configData.auth_enabled;
 
 if (window.viewManager && typeof window.viewManager.setAppName === 'function') {
-    window.viewManager.setAppName(configData.app_name);
+    const envName = configData.environment_name;
+    const fallbackAppName = configData.app_name;
+    const effectiveName = typeof envName === 'string' && envName.trim() ? envName : fallbackAppName;
+    window.viewManager.setAppName(effectiveName);
 }
 
 const { DEFAULT_STYLE, applyIcon, renderDefaultIcon } = window.iconUtils;

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ (app_name or 'Aether-V') }} — Dashboard</title>
+    <title>{{ (environment_name or app_name or 'Aether-V') }} — Dashboard</title>
     <link rel="stylesheet" href="/static/main.css">
 </head>
 <body>
@@ -199,6 +199,7 @@
     <!-- Configuration passed from backend -->
     <script id="config-data" type="application/json">
         {
+            "environment_name": {{ environment_name | tojson }},
             "app_name": {{ app_name | tojson }},
             "auth_enabled": {{ auth_enabled | tojson }},
             "websocket_refresh_time": {{ websocket_refresh_time | tojson }},

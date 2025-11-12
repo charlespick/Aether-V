@@ -126,8 +126,9 @@ class ViewManager {
             }
             case 'host': {
                 const hostname = viewData && viewData.hostname ? String(viewData.hostname) : '';
+                const shortName = formatHostnamePrefix(hostname) || hostname;
                 return hostname
-                    ? `${appName} — Host: ${hostname}`
+                    ? `${appName} — Host: ${shortName}`
                     : `${appName} — Host`;
             }
             case 'vm': {
