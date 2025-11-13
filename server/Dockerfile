@@ -130,6 +130,14 @@ RUN set -eux; \
 # Stage 5: Application
 FROM base AS application
 
+# Install Kerberos runtime libraries (required for gssapi Python package)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    krb5-user \
+    libkrb5-3 \
+    libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy Python dependencies from previous stage
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=dependencies /usr/local/bin /usr/local/bin
