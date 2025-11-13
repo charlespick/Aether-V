@@ -101,7 +101,8 @@ async def lifespan(app: FastAPI):
             logger.info("Kerberos authentication initialized successfully")
         except KerberosManagerError as exc:
             logger.error("Failed to initialize Kerberos: %s", exc)
-            raise RuntimeError("Kerberos initialization failed; cannot start application") from exc
+            logger.warning("Server starting without Kerberos authentication - WinRM operations will fail")
+            logger.warning("To fix: provide valid WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64")
     else:
         logger.warning("Kerberos credentials not configured; WinRM operations will fail")
 
