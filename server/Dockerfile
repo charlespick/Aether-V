@@ -20,6 +20,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
     krb5-user \
+    libkrb5-3 \
     libkrb5-dev \
     libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
