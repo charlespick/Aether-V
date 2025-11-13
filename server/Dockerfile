@@ -15,14 +15,13 @@ WORKDIR /app
 # Stage 2: Dependencies
 FROM base AS dependencies
 
-# Install system dependencies including Kerberos libraries
+# Install build-time dependencies for Python wheels
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    gcc \
-    krb5-user \
-    libkrb5-3 \
-    libkrb5-dev \
-    libsasl2-dev \
+        gcc \
+        python3-dev \
+        libkrb5-dev \
+        libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -131,12 +130,13 @@ RUN set -eux; \
 # Stage 5: Application
 FROM base AS application
 
-# Install Kerberos runtime libraries (required for gssapi Python package)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    krb5-user \
-    libkrb5-3 \
-    libgssapi-krb5-2 \
+        krb5-user \
+        libkrb5-3 \
+        libgssapi-krb5-2 \
+        libk5crypto3 \
+        libcomerr2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python dependencies from previous stage
