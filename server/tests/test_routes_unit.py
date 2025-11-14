@@ -1,18 +1,11 @@
 from datetime import datetime
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException, Request, status
 
-# Patch Kerberos configuration before importing routes to prevent hanging subprocess calls
-kerberos_config_patcher = patch('app.core.config.Settings.has_kerberos_config', return_value=False)
-kerberos_config_patcher.start()
-kerberos_principal_patcher = patch('app.core.config.Settings.winrm_kerberos_principal', None)
-kerberos_principal_patcher.start()
-kerberos_keytab_patcher = patch('app.core.config.Settings.winrm_keytab_b64', None)
-kerberos_keytab_patcher.start()
+# Kerberos is disabled via environment variables in conftest.py
 
 from app.api import routes
 from app.core.models import BuildInfo, VMState
