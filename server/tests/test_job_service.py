@@ -5,12 +5,20 @@ import uuid
 from datetime import datetime
 from typing import List, Tuple
 from unittest import IsolatedAsyncioTestCase, skipIf
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 yaml_stub = types.ModuleType("yaml")
 yaml_stub.safe_dump = lambda data, sort_keys=False: ""
 sys.modules.setdefault("yaml", yaml_stub)
+
+# Patch Kerberos configuration before importing services to prevent hanging subprocess calls
+kerberos_config_patcher = patch('server.app.core.config.Settings.has_kerberos_config', return_value=False)
+kerberos_config_patcher.start()
+kerberos_principal_patcher = patch('server.app.core.config.Settings.winrm_kerberos_principal', None)
+kerberos_principal_patcher.start()
+kerberos_keytab_patcher = patch('server.app.core.config.Settings.winrm_keytab_b64', None)
+kerberos_keytab_patcher.start()
 
 try:
     import server.app.services.job_service as job_service_module
