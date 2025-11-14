@@ -2,7 +2,10 @@
 
 import base64
 import os
+import subprocess
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 from unittest.mock import MagicMock, patch
 
@@ -15,9 +18,13 @@ import pytest
 from app.services.kerberos_manager import (
     KerberosManager,
     KerberosManagerError,
-    initialize_kerberos,
+    _check_cluster_allowed_to_delegate,
+    _check_cluster_delegation,
+    _check_host_delegation_legacy,
+    _check_wsman_spn,
     cleanup_kerberos,
     get_kerberos_manager,
+    initialize_kerberos,
     validate_host_kerberos_setup,
 )
 
@@ -141,6 +148,244 @@ def test_kerberos_manager_invalid_base64():
         manager.initialize()
 
 
+def test_validate_keytab_missing_principal(sample_keytab_b64):
+    """klist output without the principal should raise an informative error."""
+
+    manager = KerberosManager(
+        principal="user@EXAMPLE.COM",
+        keytab_b64=sample_keytab_b64,
+    )
+
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   1 other@EXAMPLE.COM\n",
+        )
+
+        with pytest.raises(KerberosManagerError, match="Keytab does not contain principal"):
+            manager.initialize()
+
+    manager.cleanup()
+
+
+def test_validate_keytab_missing_klist(sample_keytab_b64):
+    """Missing klist binary should raise a helpful error message."""
+
+    manager = KerberosManager(
+        principal="user@EXAMPLE.COM",
+        keytab_b64=sample_keytab_b64,
+    )
+
+    with patch("app.services.kerberos_manager.subprocess.run", side_effect=FileNotFoundError):
+        with pytest.raises(KerberosManagerError, match="klist command not found"):
+            manager.initialize()
+
+    manager.cleanup()
+
+
+def test_configure_kdc_requires_realm(sample_keytab_b64):
+    """Providing a KDC without a realm should raise an error."""
+
+    manager = KerberosManager(
+        principal="user",
+        keytab_b64=sample_keytab_b64,
+        kdc="kdc.example.com",
+    )
+
+    with pytest.raises(KerberosManagerError, match="requires a Kerberos realm"):
+        manager._configure_kdc_override()
+
+
+def test_acquire_credentials_falls_back_to_kinit(kerberos_manager):
+    """When acquire_cred_from is missing we should fall back to kinit."""
+
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
+         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+         patch("app.services.kerberos_manager.os.write"), \
+         patch("app.services.kerberos_manager.os.close"), \
+         patch("app.services.kerberos_manager.os.fchmod"), \
+         patch("app.services.kerberos_manager.os.chmod"), \
+         patch("app.services.kerberos_manager.Path") as mock_path_cls, \
+         patch("app.services.kerberos_manager.gssapi_raw.acquire_cred_from", side_effect=AttributeError), \
+         patch.object(KerberosManager, "_acquire_credentials_via_kinit") as mock_kinit, \
+         patch("app.services.kerberos_manager.gssapi.Credentials") as mock_creds:
+
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 test-user@EXAMPLE.COM\n",
+        )
+
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"),
+            (2, "/tmp/krb5cc_test"),
+        ]
+
+        mock_keytab_path = MagicMock()
+        mock_cache_path = MagicMock()
+        mock_path_cls.side_effect = [mock_keytab_path, mock_cache_path]
+
+        kerberos_manager.initialize()
+
+        mock_kinit.assert_called_once()
+        mock_creds.assert_called()
+
+
+def test_acquire_credentials_via_kinit_success(monkeypatch):
+    """Successful kinit execution should pass without raising."""
+
+    manager = KerberosManager(principal="user@EXAMPLE.COM", keytab_b64="")
+    manager._keytab_path = Path("/tmp/test.keytab")
+    manager._cache_path = Path("/tmp/test.cache")
+
+    called_commands = []
+
+    def fake_run(cmd, capture_output=True, text=True, check=True):
+        called_commands.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+
+    manager._acquire_credentials_via_kinit()
+
+    assert any("kinit" in part for part in called_commands[0])
+
+
+def test_acquire_credentials_via_kinit_failure(monkeypatch):
+    """kinit failures should surface as KerberosManagerError."""
+
+    manager = KerberosManager(principal="user@EXAMPLE.COM", keytab_b64="")
+    manager._keytab_path = Path("/tmp/test.keytab")
+    manager._cache_path = Path("/tmp/test.cache")
+
+    error = subprocess.CalledProcessError(returncode=1, cmd=["kinit"], stderr="bad keytab")
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(side_effect=error),
+    )
+
+    with pytest.raises(KerberosManagerError, match="kinit failed: bad keytab"):
+        manager._acquire_credentials_via_kinit()
+
+
+def test_check_wsman_spn_uses_kvno_when_setspn_missing(monkeypatch):
+    """setspn absence should fall back to kvno validation."""
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=15):
+        if cmd[0] == "setspn":
+            raise FileNotFoundError
+        assert cmd[0] == "kvno"
+        return SimpleNamespace(returncode=0, stdout="ticket", stderr="")
+
+    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+
+    success, message = _check_wsman_spn("hyperv01", realm="EXAMPLE.COM")
+
+    assert success
+    assert "kvno" in message.lower()
+
+
+def test_check_wsman_spn_reports_missing_tools(monkeypatch):
+    """If neither setspn nor kvno is present we should surface a failure."""
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=15):
+        raise FileNotFoundError
+
+    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+
+    success, message = _check_wsman_spn("hyperv02")
+
+    assert not success
+    assert "not available" in message.lower()
+
+
+def test_check_cluster_delegation_reports_missing_rbcd(monkeypatch):
+    """Cluster delegation without RBCD should return False and guidance."""
+
+    stdout = "NO_RBCD"
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+    )
+
+    success, message = _check_cluster_delegation("ClusterA", ["hv1"], realm="EXAMPLE.COM")
+
+    assert success is False
+    assert "Resource-Based Constrained Delegation" in message
+
+
+def test_check_cluster_delegation_not_found(monkeypatch):
+    """Missing cluster objects should produce an actionable error."""
+
+    stdout = "ERROR: Cannot be found"
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+    )
+
+    success, message = _check_cluster_delegation("ClusterMissing", ["hv1"], realm="EXAMPLE.COM")
+
+    assert success is False
+    assert "not found" in message.lower()
+
+
+def test_check_cluster_delegation_skips_when_powershell_missing(monkeypatch):
+    """FileNotFoundError should indicate the check was skipped."""
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(side_effect=FileNotFoundError),
+    )
+
+    success, message = _check_cluster_delegation("ClusterA", ["hv1"], realm="EXAMPLE.COM")
+
+    assert success is None
+    assert "skipped" in message.lower()
+
+
+def test_check_cluster_allowed_to_delegate_success(monkeypatch):
+    """Delegation targets should report success with details."""
+
+    stdout = "DELEGATION_TARGETS\nTargets: WSMAN/hv1"
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+    )
+
+    success, message = _check_cluster_allowed_to_delegate("ClusterA", ["hv1"], realm="EXAMPLE.COM")
+
+    assert success is True
+    assert "Targets:" in message
+
+
+def test_check_cluster_allowed_to_delegate_not_found(monkeypatch):
+    """Not found errors should return False for delegation targets."""
+
+    stdout = "ERROR: Object cannot be found"
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+    )
+
+    success, message = _check_cluster_allowed_to_delegate("ClusterMissing", [], realm="EXAMPLE.COM")
+
+    assert success is False
+    assert "not found" in message.lower()
+
+
+def test_check_host_delegation_legacy_reports_missing(monkeypatch):
+    """Legacy host delegation should report when delegation is absent."""
+
+    stdout = "NO_DELEGATION"
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+    )
+
+    success, message = _check_host_delegation_legacy("hyperv01")
+
+    assert success is False
+    assert "No delegation" in message
 def test_kerberos_manager_cleanup(kerberos_manager):
     """Test that cleanup removes keytab file."""
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
