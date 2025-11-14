@@ -721,6 +721,44 @@ def _ldap_resolve_sids(
     return resolved
 
 
+def _normalize_ldap_boolean(value: object) -> Optional[bool]:
+    """Convert common LDAP flag encodings to real booleans."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            normalized = _normalize_ldap_boolean(item)
+            if normalized is not None:
+                return normalized
+        return None
+
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8", "ignore")
+        except Exception:  # pragma: no cover - defensive safeguard
+            value = ""
+
+    if isinstance(value, (int, float)):
+        return bool(value)
+
+    string_value = str(value).strip().lower()
+    if not string_value:
+        return None
+
+    if string_value in {"true", "1", "yes", "on"}:
+        return True
+
+    if string_value in {"false", "0", "no", "off"}:
+        return False
+
+    return None
+
+
 def _ldap_get_computer_delegation_info(
     name: str, realm: Optional[str]
 ) -> Optional[Dict[str, object]]:
@@ -801,6 +839,13 @@ def _ldap_get_computer_delegation_info(
 
         delegate_targets = [str(value) for value in delegate_targets if value]
 
+        trusted_to_auth = _normalize_ldap_boolean(
+            attr_dict.get("TrustedToAuthForDelegation")
+        )
+        trusted_for_delegation = _normalize_ldap_boolean(
+            attr_dict.get("TrustedForDelegation")
+        )
+
         return {
             "exists": True,
             "rbcd_present": bool(rbcd_values),
@@ -808,8 +853,8 @@ def _ldap_get_computer_delegation_info(
             "rbcd_sid_strings": sid_strings,
             "delegate_targets": delegate_targets,
             "delegate_present": bool(delegate_targets),
-            "trusted_to_auth": bool(attr_dict.get("TrustedToAuthForDelegation")),
-            "trusted_for_delegation": bool(attr_dict.get("TrustedForDelegation")),
+            "trusted_to_auth": bool(trusted_to_auth),
+            "trusted_for_delegation": bool(trusted_for_delegation),
         }
     finally:
         connection.unbind()

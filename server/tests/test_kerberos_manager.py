@@ -25,6 +25,7 @@ from app.services.kerberos_manager import (
     _check_host_delegation_legacy,
     _check_wsman_spn,
     _extract_allowed_sids_from_security_descriptor,
+    _normalize_ldap_boolean,
     _sid_bytes_to_str,
     cleanup_kerberos,
     get_kerberos_manager,
@@ -121,6 +122,26 @@ def _sid_from_components(*components: int) -> bytes:
     for value in components:
         sid.extend(struct.pack("<I", value))
     return bytes(sid)
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("TRUE", True),
+        ("false", False),
+        ("1", True),
+        ("0", False),
+        (b"Yes", True),
+        (b"no", False),
+        ([], None),
+        (None, None),
+        ("maybe", None),
+    ],
+)
+def test_normalize_ldap_boolean(value, expected):
+    """LDAP boolean normalization should interpret typical encodings."""
+
+    assert _normalize_ldap_boolean(value) is expected
 
 
 def test_extract_allowed_sids_handles_object_ace():
