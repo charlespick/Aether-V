@@ -438,7 +438,7 @@ def cleanup_kerberos() -> None:
 
 
 def validate_host_kerberos_setup(
-    hosts: List[str], 
+    hosts: List[str],
     realm: Optional[str] = None,
     clusters: Optional[Dict[str, List[str]]] = None
 ) -> Dict[str, List[str]]:
@@ -464,21 +464,21 @@ def validate_host_kerberos_setup(
         "delegation_errors": []
     }
 
-    if not hosts:
+    if hosts:
+        logger.info("Validating Kerberos setup for %d host(s)", len(hosts))
+
+        # Check WSMAN SPNs for all hosts
+        for host in hosts:
+            spn_check = _check_wsman_spn(host, realm)
+            if not spn_check[0]:
+                error_msg = f"Host '{host}': {spn_check[1]}"
+                result["errors"].append(error_msg)
+                result["spn_errors"].append(error_msg)
+            else:
+                logger.info("Host '%s': WSMAN SPN validated", host)
+    elif not clusters:
+        # Only warn when we truly have nothing to validate
         result["warnings"].append("No Hyper-V hosts configured to validate")
-        return result
-
-    logger.info("Validating Kerberos setup for %d host(s)", len(hosts))
-
-    # Check WSMAN SPNs for all hosts
-    for host in hosts:
-        spn_check = _check_wsman_spn(host, realm)
-        if not spn_check[0]:
-            error_msg = f"Host '{host}': {spn_check[1]}"
-            result["errors"].append(error_msg)
-            result["spn_errors"].append(error_msg)
-        else:
-            logger.info("Host '%s': WSMAN SPN validated", host)
 
     # Check delegation on cluster objects (if clusters provided)
     if clusters:
@@ -486,10 +486,14 @@ def validate_host_kerberos_setup(
         for cluster_name, cluster_hosts in clusters.items():
             # Skip "Default" cluster (represents hosts not in a cluster)
             if cluster_name == "Default":
-                logger.debug("Skipping delegation check for 'Default' cluster (non-clustered hosts)")
+                logger.debug(
+                    "Skipping delegation check for 'Default' cluster (non-clustered hosts)"
+                )
                 continue
-                
-            delegation_check = _check_cluster_delegation(cluster_name, cluster_hosts, realm)
+
+            delegation_check = _check_cluster_delegation(
+                cluster_name, cluster_hosts, realm
+            )
             if delegation_check[0] is False:
                 error_msg = f"Cluster '{cluster_name}': {delegation_check[1]}"
                 result["errors"].append(error_msg)
@@ -500,6 +504,25 @@ def validate_host_kerberos_setup(
                 result["warnings"].append(warning_msg)
             else:
                 logger.info("Cluster '%s': Delegation validated", cluster_name)
+
+            delegation_targets_check = _check_cluster_allowed_to_delegate(
+                cluster_name, cluster_hosts, realm
+            )
+            if delegation_targets_check[0] is False:
+                error_msg = (
+                    f"Cluster '{cluster_name}': {delegation_targets_check[1]}"
+                )
+                result["errors"].append(error_msg)
+                result["delegation_errors"].append(error_msg)
+            elif delegation_targets_check[0] is None:
+                warning_msg = (
+                    f"Cluster '{cluster_name}': {delegation_targets_check[1]}"
+                )
+                result["warnings"].append(warning_msg)
+            else:
+                logger.info(
+                    "Cluster '%s': msDS-AllowedToDelegateTo configured", cluster_name
+                )
     else:
         logger.debug("No cluster information provided; skipping delegation checks")
 
@@ -676,6 +699,109 @@ def _check_cluster_delegation(cluster_name: str, cluster_hosts: List[str], realm
     except Exception as exc:
         logger.debug("Delegation check failed for cluster '%s': %s", cluster_name, exc)
         return (None, f"Unable to check RBCD: {exc}")
+
+
+def _check_cluster_allowed_to_delegate(
+    cluster_name: str,
+    cluster_hosts: List[str],
+    realm: Optional[str] = None,
+) -> Tuple[Optional[bool], str]:
+    """Validate that the cluster computer object can delegate to required SPNs."""
+
+    host_hint = ", ".join(cluster_hosts) if cluster_hosts else "configured Hyper-V hosts"
+
+    try:
+        ps_script = f"""
+        try {{
+            $cluster = Get-ADComputer -Identity '{cluster_name}' -Properties 'msDS-AllowedToDelegateTo' -ErrorAction Stop
+            $targets = $cluster.'msDS-AllowedToDelegateTo'
+
+            if ($targets -and $targets.Count -gt 0) {{
+                Write-Output "DELEGATION_TARGETS"
+                Write-Output "Targets: $($targets -join ', ')"
+            }} else {{
+                Write-Output "NO_DELEGATION_TARGETS"
+            }}
+        }} catch {{
+            Write-Output "ERROR: $($_.Exception.Message)"
+        }}
+        """
+
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if "NO_DELEGATION_TARGETS" in output:
+                return (
+                    False,
+                    "Cluster computer object is missing msDS-AllowedToDelegateTo entries. "
+                    f"Grant delegation to the Hyper-V hosts ({host_hint}) so migration "
+                    "operations can perform double-hop authentication.",
+                )
+            if "DELEGATION_TARGETS" in output:
+                details = ""
+                for line in output.splitlines():
+                    if line.startswith("Targets:"):
+                        details = f" ({line})"
+                        break
+                return (True, f"msDS-AllowedToDelegateTo configured{details}")
+            if "ERROR:" in output:
+                error_msg = output.replace("ERROR:", "").strip()
+                lowered = error_msg.lower()
+                if "cannot be found" in lowered or "not found" in lowered:
+                    return (
+                        False,
+                        f"Cluster object '{cluster_name}' not found in Active Directory. "
+                        "Ensure the cluster name object exists before configuring delegation.",
+                    )
+                logger.debug(
+                    "Allowed-to-delegate check error for cluster '%s': %s",
+                    cluster_name,
+                    error_msg,
+                )
+                return (None, f"Unable to check msDS-AllowedToDelegateTo: {error_msg}")
+
+            logger.debug(
+                "Unexpected allowed-to-delegate output for cluster '%s': %s",
+                cluster_name,
+                output,
+            )
+            return (None, "Unable to determine msDS-AllowedToDelegateTo status (unexpected output)")
+
+        logger.debug(
+            "Allowed-to-delegate check failed for cluster '%s': %s",
+            cluster_name,
+            result.stderr,
+        )
+        return (
+            None,
+            "Unable to inspect msDS-AllowedToDelegateTo (AD PowerShell module may not be available)",
+        )
+
+    except FileNotFoundError:
+        logger.debug(
+            "PowerShell not available - skipping allowed-to-delegate check for cluster '%s'",
+            cluster_name,
+        )
+        return (None, "msDS-AllowedToDelegateTo check skipped (PowerShell not available)")
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "Allowed-to-delegate check timed out for cluster '%s'",
+            cluster_name,
+        )
+        return (None, "msDS-AllowedToDelegateTo check timed out")
+    except Exception as exc:
+        logger.debug(
+            "Allowed-to-delegate check failed for cluster '%s': %s",
+            cluster_name,
+            exc,
+        )
+        return (None, f"Unable to inspect msDS-AllowedToDelegateTo: {exc}")
 
 
 def _check_host_delegation_legacy(host: str, realm: Optional[str] = None) -> Tuple[Optional[bool], str]:
