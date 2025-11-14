@@ -33,11 +33,12 @@ from .services.remote_task_service import remote_task_service
 from .services.websocket_service import websocket_manager
 from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
 from .services.kerberos_manager import (
-    initialize_kerberos, 
-    cleanup_kerberos, 
+    initialize_kerberos,
+    cleanup_kerberos,
     KerberosManagerError,
     validate_host_kerberos_setup,
 )
+from .core.models import NotificationLevel
 
 # Configure logging
 logging.basicConfig(
@@ -231,13 +232,13 @@ async def lifespan(app: FastAPI):
             try:
                 # Wait for initial inventory refresh to complete
                 await inventory_service.wait_for_initial_refresh()
-                
+
                 # Get cluster information from inventory
                 clusters_dict = {}
                 for cluster in inventory_service.clusters.values():
                     if cluster.name != "Default":  # Skip non-clustered hosts
                         clusters_dict[cluster.name] = cluster.hosts
-                
+
                 if clusters_dict and settings.has_kerberos_config():
                     logger.info("Running delegation validation for %d cluster(s)", len(clusters_dict))
                     delegation_validation = validate_host_kerberos_setup(
@@ -245,19 +246,55 @@ async def lifespan(app: FastAPI):
                         realm=settings.winrm_kerberos_realm,
                         clusters=clusters_dict
                     )
-                    
+
                     # Log any delegation issues found
                     for error in delegation_validation.get("delegation_errors", []):
                         logger.warning("Cluster delegation validation: %s", error)
-                    
+
                     for warning in delegation_validation.get("warnings", []):
                         logger.warning("Cluster delegation validation: %s", warning)
-                    
-                    if not delegation_validation.get("delegation_errors"):
+
+                    if delegation_validation.get("delegation_errors") or delegation_validation.get("warnings"):
+                        issues = []
+                        for error in delegation_validation.get("delegation_errors", []):
+                            issues.append(f"Error: {error}")
+                        for warning in delegation_validation.get("warnings", []):
+                            issues.append(f"Warning: {warning}")
+
+                        level = (
+                            NotificationLevel.ERROR
+                            if delegation_validation.get("delegation_errors")
+                            else NotificationLevel.WARNING
+                        )
+                        title = (
+                            "Kerberos cluster delegation errors detected"
+                            if level is NotificationLevel.ERROR
+                            else "Kerberos cluster delegation warnings"
+                        )
+
+                        notification_service.upsert_system_notification(
+                            "kerberos-cluster-validation",
+                            title=title,
+                            message="\n".join(issues),
+                            level=level,
+                            metadata={
+                                "clusters_checked": len(clusters_dict),
+                                "errors": len(delegation_validation.get("delegation_errors", [])),
+                                "warnings": len(delegation_validation.get("warnings", [])),
+                            },
+                        )
+                    else:
                         logger.info("Cluster delegation validation completed successfully")
+                        notification_service.clear_system_notification(
+                            "kerberos-cluster-validation"
+                        )
+                else:
+                    notification_service.clear_system_notification(
+                        "kerberos-cluster-validation"
+                    )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to validate cluster delegation")
-        
+
         asyncio.create_task(_validate_delegation_after_inventory())
         
     else:

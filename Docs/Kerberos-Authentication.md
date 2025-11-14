@@ -166,6 +166,14 @@ Get-ADComputer $ClusterComputer -Properties PrincipalsAllowedToDelegateToAccount
     Select-Object Name, PrincipalsAllowedToDelegateToAccount
 ```
 
+### Automatic cluster delegation verification
+
+Once the initial inventory synchronisation completes, Aether-V inspects the
+discovered cluster computer objects and verifies that `msDS-AllowedToDelegateTo`
+contains delegation targets. Missing delegation is surfaced through the system
+notification panel so administrators can remediate Active Directory configuration
+issues before running double-hop operations.
+
 ### Step 3: Configure Service Principal Names (SPNs)
 
 Ensure proper SPNs are registered for Hyper-V hosts:

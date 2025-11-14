@@ -18,6 +18,7 @@ from app.services.kerberos_manager import (
     initialize_kerberos,
     cleanup_kerberos,
     get_kerberos_manager,
+    validate_host_kerberos_setup,
 )
 
 
@@ -365,6 +366,66 @@ def test_credential_acquisition_failure(kerberos_manager):
 
         with pytest.raises(KerberosManagerError, match="Kerberos initialization failed"):
             kerberos_manager.initialize()
+
+
+def test_validate_host_kerberos_setup_reports_missing_cluster_delegation(monkeypatch):
+    """Missing msDS-AllowedToDelegateTo entries should be reported as errors."""
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=20):
+        script = cmd[-1]
+        if "msDS-AllowedToActOnBehalfOfOtherIdentity" in script:
+            return MagicMock(returncode=0, stdout="RBCD_CONFIGURED\nPrincipals: host$", stderr="")
+        if "msDS-AllowedToDelegateTo" in script:
+            return MagicMock(returncode=0, stdout="NO_DELEGATION_TARGETS", stderr="")
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._check_wsman_spn",
+        lambda host, realm=None: (True, "WSMAN SPN validated"),
+    )
+
+    result = validate_host_kerberos_setup(
+        hosts=[],
+        realm="EXAMPLE.COM",
+        clusters={"ClusterA": ["hyperv01", "hyperv02"]},
+    )
+
+    assert any(
+        "msDS-AllowedToDelegateTo" in error for error in result["delegation_errors"]
+    )
+    assert result["errors"], "Expected errors when delegation targets are missing"
+
+
+def test_validate_host_kerberos_setup_succeeds_with_delegation(monkeypatch):
+    """Delegation checks should pass when targets are configured."""
+
+    def fake_run(cmd, capture_output=True, text=True, timeout=20):
+        script = cmd[-1]
+        if "msDS-AllowedToActOnBehalfOfOtherIdentity" in script:
+            return MagicMock(returncode=0, stdout="RBCD_CONFIGURED\nPrincipals: host$", stderr="")
+        if "msDS-AllowedToDelegateTo" in script:
+            return MagicMock(
+                returncode=0,
+                stdout="DELEGATION_TARGETS\nTargets: WSMAN/hyperv01",
+                stderr="",
+            )
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._check_wsman_spn",
+        lambda host, realm=None: (True, "WSMAN SPN validated"),
+    )
+
+    result = validate_host_kerberos_setup(
+        hosts=[],
+        realm="EXAMPLE.COM",
+        clusters={"ClusterA": ["hyperv01"]},
+    )
+
+    assert not result["delegation_errors"], "Delegation errors should not be reported"
+    assert not result["warnings"], "No warnings expected when checks succeed"
 
 
 def test_kdc_override_sets_krb5_config(monkeypatch, sample_keytab_b64):
