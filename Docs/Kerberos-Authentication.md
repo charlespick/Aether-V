@@ -198,16 +198,24 @@ WINRM_KERBEROS_PRINCIPAL=svc-aetherv@AD.EXAMPLE.COM
 # Required: Base64-encoded keytab file
 WINRM_KEYTAB_B64=<base64-encoded-keytab-content>
 
-# Optional: Override Kerberos realm (usually auto-detected from principal)
+# Optional: Override Kerberos realm (defaults to the realm segment of WINRM_KERBEROS_PRINCIPAL)
 # WINRM_KERBEROS_REALM=AD.EXAMPLE.COM
 
-# Optional: Override KDC server (usually auto-discovered via DNS)
+# Optional: Override KDC server. When set the server writes a temporary krb5.conf so GSSAPI and kinit target the provided host.
 # WINRM_KERBEROS_KDC=dc01.ad.example.com
 
 # Standard WinRM settings
 HYPERV_HOSTS=hyperv01.ad.example.com,hyperv02.ad.example.com
 WINRM_PORT=5985
 ```
+
+### Realm detection and KDC overrides
+
+Aether-V automatically derives the Kerberos realm from `WINRM_KERBEROS_PRINCIPAL` when
+`WINRM_KERBEROS_REALM` is not supplied, so most deployments only need to set the
+principal and keytab. If DNS lookups for the realm return the wrong KDC, supply
+`WINRM_KERBEROS_KDC`—the server writes a temporary `krb5.conf` with the override so
+both GSSAPI and the `kinit` fallback use the specified domain controller.
 
 ### Kubernetes Deployment
 

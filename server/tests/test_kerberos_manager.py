@@ -1,6 +1,7 @@
 """Unit tests for Kerberos manager service."""
 
 import base64
+import os
 import sys
 
 from unittest.mock import MagicMock, patch
@@ -61,7 +62,6 @@ def kerberos_manager(sample_keytab_b64):
         principal="test-user@EXAMPLE.COM",
         keytab_b64=sample_keytab_b64,
         realm="EXAMPLE.COM",
-        kdc="kdc.example.com",
     )
     yield manager
     # Cleanup after test
@@ -96,7 +96,6 @@ def test_kerberos_manager_initialization(kerberos_manager, sample_keytab_b64):
         assert kerberos_manager.is_initialized
         assert kerberos_manager.principal == "test-user@EXAMPLE.COM"
         assert kerberos_manager.realm == "EXAMPLE.COM"
-        assert kerberos_manager.kdc == "kdc.example.com"
 
 
 def test_kerberos_manager_writes_keytab(kerberos_manager):
@@ -239,6 +238,7 @@ def test_global_kerberos_manager_initialize(sample_keytab_b64):
         manager = get_kerberos_manager()
         assert manager is not None
         assert manager.principal == "global-test@EXAMPLE.COM"
+        assert manager.realm == "EXAMPLE.COM"
 
         # Cleanup
         cleanup_kerberos()
@@ -365,3 +365,59 @@ def test_credential_acquisition_failure(kerberos_manager):
 
         with pytest.raises(KerberosManagerError, match="Kerberos initialization failed"):
             kerberos_manager.initialize()
+
+
+def test_kdc_override_sets_krb5_config(monkeypatch, sample_keytab_b64):
+    """KDC overrides should materialize a temporary krb5.conf and set KRB5_CONFIG."""
+
+    manager = KerberosManager(
+        principal="test-user@EXAMPLE.COM",
+        keytab_b64=sample_keytab_b64,
+        realm="EXAMPLE.COM",
+        kdc="kdc.example.com",
+    )
+
+    monkeypatch.delenv("KRB5_CONFIG", raising=False)
+
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
+         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+         patch("app.services.kerberos_manager.os.write"), \
+         patch("app.services.kerberos_manager.os.close"), \
+         patch("app.services.kerberos_manager.os.fchmod"), \
+         patch("app.services.kerberos_manager.os.chmod") as mock_chmod, \
+         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 test-user@EXAMPLE.COM\n",
+        )
+
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"),
+            (2, "/tmp/krb5cc_test"),
+            (3, "/tmp/krb5_override.conf"),
+        ]
+
+        mock_keytab_path = MagicMock()
+        mock_keytab_path.__str__.return_value = "/tmp/aetherv_test.keytab"
+        mock_cache_path = MagicMock()
+        mock_cache_path.__str__.return_value = "/tmp/krb5cc_test"
+        mock_conf_path = MagicMock()
+        mock_conf_path.__str__.return_value = "/tmp/krb5_override.conf"
+        mock_conf_path.exists.return_value = True
+
+        mock_path_cls.side_effect = [mock_keytab_path, mock_cache_path, mock_conf_path]
+
+        manager.initialize()
+
+        mock_conf_path.write_text.assert_called_once()
+        written_conf = mock_conf_path.write_text.call_args[0][0]
+        assert "kdc = kdc.example.com" in written_conf
+        assert mock_conf_path.write_text.call_args[1].get("encoding") == "utf-8"
+        mock_chmod.assert_any_call(mock_conf_path, 0o600)
+        assert os.environ.get("KRB5_CONFIG") == "/tmp/krb5_override.conf"
+
+        manager.cleanup()
+
+        mock_conf_path.unlink.assert_called_once()
+        assert "KRB5_CONFIG" not in os.environ

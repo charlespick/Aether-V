@@ -142,10 +142,10 @@ class Settings(BaseSettings):
         """Decode base64-encoded keytab data if configured."""
         if not self.winrm_keytab_b64:
             return None
-        
+
         import base64
         import logging
-        
+
         try:
             return base64.b64decode(self.winrm_keytab_b64)
         except Exception as e:
@@ -153,6 +153,18 @@ class Settings(BaseSettings):
                 f"Failed to decode WINRM_KEYTAB_B64: {type(e).__name__}: {e}"
             )
             return None
+
+    def get_kerberos_realm(self) -> Optional[str]:
+        """Return the configured or derived Kerberos realm if available."""
+
+        if self.winrm_kerberos_realm and self.winrm_kerberos_realm.strip():
+            return self.winrm_kerberos_realm.strip()
+
+        principal = (self.winrm_kerberos_principal or "").strip()
+        if "@" in principal:
+            return principal.rsplit("@", 1)[1]
+
+        return None
 
     def has_kerberos_config(self) -> bool:
         """Check if Kerberos authentication is configured."""
