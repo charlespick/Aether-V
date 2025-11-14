@@ -217,6 +217,8 @@ HYPERV_HOSTS=hyperv01.ad.example.com,hyperv02.ad.example.com
 WINRM_PORT=5985
 ```
 
+Use the service account's UPN for `WINRM_KERBEROS_PRINCIPAL` so it matches the keytab entry (for example `svc-aetherv@AD.EXAMPLE.COM`). If you instead supply a service SPN such as `HTTP/aetherv.example.com@AD.EXAMPLE.COM`, ensure that SPN is registered to the same account and included in the keytab.
+
 ### Realm detection and KDC overrides
 
 Aether-V automatically derives the Kerberos realm from `WINRM_KERBEROS_PRINCIPAL` when
