@@ -48,8 +48,8 @@ for the UI banner.
 | `COOKIE_SAMESITE`               | `lax`                        | No                      | SameSite policy for cookies. Use `none` for cross-site scenarios (requires HTTPS).                                   |
 | `HYPERV_HOSTS`                  | _(empty)_                    | Recommended             | Comma-separated list of Hyper-V hostnames. Without hosts no workloads can be managed.                                |
 | `WINRM_KERBEROS_PRINCIPAL`      | _(unset)_                    | Yes                     | Kerberos SPN for WinRM authentication that is registered to the service account (e.g., `HTTP/aetherv.example.com@AD.EXAMPLE.COM`).                   |
-| `WINRM_KERBEROS_REALM`          | _(unset)_                    | No                      | Optional Kerberos realm override. Usually auto-detected from principal.                                              |
-| `WINRM_KERBEROS_KDC`            | _(unset)_                    | No                      | Optional KDC server override for Kerberos authentication.                                                            |
+| `WINRM_KERBEROS_REALM`          | _(unset)_                    | No                      | Optional Kerberos realm override. Defaults to the realm portion of `WINRM_KERBEROS_PRINCIPAL` when left unset.        |
+| `WINRM_KERBEROS_KDC`            | _(unset)_                    | No                      | Optional KDC server override. When provided the server writes a temporary `krb5.conf` so GSSAPI/kinit honour the host. |
 | `WINRM_PORT`                    | `5985`                       | No                      | WinRM port on Hyper-V hosts. Use `5986` when enforcing HTTPS.                                                        |
 | `WINRM_OPERATION_TIMEOUT`       | `15.0`                       | No                      | Seconds to wait for individual WinRM operations before cancelling the request.    |
 | `WINRM_CONNECTION_TIMEOUT`      | `30.0`                       | No                      | Network connect timeout (seconds) when establishing WinRM sessions.               |

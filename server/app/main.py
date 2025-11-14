@@ -99,11 +99,12 @@ async def lifespan(app: FastAPI):
     # Initialize Kerberos if configured
     if settings.has_kerberos_config():
         logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
+        kerberos_realm = settings.get_kerberos_realm()
         try:
             initialize_kerberos(
                 principal=settings.winrm_kerberos_principal,
                 keytab_b64=settings.winrm_keytab_b64,
-                realm=settings.winrm_kerberos_realm,
+                realm=kerberos_realm,
                 kdc=settings.winrm_kerberos_kdc,
             )
         except KerberosManagerError as exc:
@@ -129,7 +130,7 @@ async def lifespan(app: FastAPI):
                 # For now, do initial validation without cluster info (will re-validate later)
                 validation_result = validate_host_kerberos_setup(
                     hosts=hyperv_hosts,
-                    realm=settings.winrm_kerberos_realm,
+                    realm=kerberos_realm,
                     clusters=None  # Will be validated later after inventory refresh
                 )
 

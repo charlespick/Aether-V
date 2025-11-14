@@ -46,6 +46,7 @@ class KerberosManager:
         self.kdc = kdc
         self._keytab_path: Optional[Path] = None
         self._cache_path: Optional[Path] = None
+        self._krb5_conf_path: Optional[Path] = None
         self._initialized = False
 
     def initialize(self) -> None:
@@ -99,6 +100,7 @@ class KerberosManager:
                 logger.info("Using Kerberos realm: %s", self.realm)
             if self.kdc:
                 logger.info("Using KDC server: %s", self.kdc)
+                self._configure_kdc_override()
 
             # Acquire Kerberos credentials (TGT) from the keytab
             self._acquire_credentials()
@@ -108,6 +110,7 @@ class KerberosManager:
 
         except Exception as exc:
             logger.error("Failed to initialize Kerberos manager: %s", exc)
+            self.cleanup()
             raise KerberosManagerError(f"Kerberos initialization failed: {exc}") from exc
 
     def _write_keytab(self) -> Path:
@@ -232,6 +235,49 @@ class KerberosManager:
             logger.error("Failed to validate keytab: %s", exc)
             raise KerberosManagerError(f"Keytab validation failed: {exc}") from exc
 
+    def _configure_kdc_override(self) -> None:
+        """Write a temporary krb5 configuration when a KDC override is provided."""
+
+        if not self.kdc:
+            return
+
+        if not self.realm:
+            raise KerberosManagerError("KDC override requires a Kerberos realm to be set")
+
+        conf_path: Optional[Path] = None
+
+        try:
+            fd, conf_path_str = tempfile.mkstemp(prefix="krb5_aetherv_", suffix=".conf")
+            os.close(fd)
+            conf_path = Path(conf_path_str)
+
+            config_contents = (
+                "[libdefaults]\n"
+                f"    default_realm = {self.realm}\n"
+                "    dns_lookup_kdc = false\n\n"
+                "[realms]\n"
+                f"    {self.realm} = {{\n"
+                f"        kdc = {self.kdc}\n"
+                "    }\n"
+            )
+
+            conf_path.write_text(config_contents, encoding="utf-8")
+            os.chmod(conf_path, 0o600)
+
+            self._krb5_conf_path = conf_path
+            os.environ["KRB5_CONFIG"] = str(conf_path)
+            logger.debug("Wrote temporary krb5.conf to %s for KDC override", conf_path)
+        except KerberosManagerError:
+            raise
+        except Exception as exc:
+            logger.error("Failed to configure KDC override: %s", exc)
+            if conf_path and conf_path.exists():
+                try:
+                    conf_path.unlink()
+                except Exception:
+                    logger.debug("Unable to remove temporary krb5.conf after failure", exc_info=True)
+            raise KerberosManagerError(f"Failed to configure KDC override: {exc}") from exc
+
     def _acquire_credentials(self) -> None:
         """
         Acquire Kerberos credentials (TGT) using the keytab.
@@ -328,6 +374,19 @@ class KerberosManager:
                 logger.debug("Removed credential cache: %s", self._cache_path)
             except Exception as exc:
                 logger.warning("Failed to remove credential cache: %s", exc)
+
+        if self._krb5_conf_path and self._krb5_conf_path.exists():
+            try:
+                self._krb5_conf_path.unlink()
+                logger.debug("Removed temporary krb5.conf: %s", self._krb5_conf_path)
+            except Exception as exc:
+                logger.warning("Failed to remove temporary krb5.conf: %s", exc)
+
+        if self._krb5_conf_path and os.environ.get("KRB5_CONFIG") == str(self._krb5_conf_path):
+            os.environ.pop("KRB5_CONFIG", None)
+            logger.debug("Cleared KRB5_CONFIG environment override")
+
+        self._krb5_conf_path = None
 
         self._initialized = False
 
