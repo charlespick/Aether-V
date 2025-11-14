@@ -1,7 +1,7 @@
 """Unit tests for Kerberos manager service."""
 
 import base64
-from pathlib import Path
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,7 +18,9 @@ from app.services.kerberos_manager import (
 @pytest.fixture
 def sample_keytab_b64():
     """Return a base64-encoded sample keytab."""
-    # This is a minimal valid keytab structure (not a real keytab)
+    # This is a minimal valid keytab structure (not a real keytab).
+    # The bytes below represent the keytab file version header (0x05 0x02 for version 2),
+    # followed by six zero bytes. This is sufficient for mocking keytab presence in tests.
     fake_keytab = b"\x05\x02\x00\x00\x00\x00\x00\x00"
     return base64.b64encode(fake_keytab).decode("utf-8")
 
@@ -34,8 +36,7 @@ def kerberos_manager(sample_keytab_b64):
     )
     yield manager
     # Cleanup after test
-    if manager.is_initialized:
-        manager.cleanup()
+    manager.cleanup()
 
 
 def test_kerberos_manager_initialization(kerberos_manager, sample_keytab_b64):
@@ -284,8 +285,10 @@ def test_credential_acquisition_failure(kerberos_manager):
                             mock_path_cls.side_effect = [mock_keytab_path, mock_cache_path]
                             
                             # Simulate credential acquisition failure
-                            import gssapi.exceptions
-                            mock_creds.side_effect = gssapi.exceptions.GSSError(1, 2)
+                            class DummyGSSError(Exception):
+                                def __init__(self, *args, **kwargs):
+                                    super().__init__(*args)
+                            mock_creds.side_effect = DummyGSSError(1, 2)
                             
                             with pytest.raises(KerberosManagerError, match="Failed to acquire Kerberos credentials"):
                                 kerberos_manager.initialize()

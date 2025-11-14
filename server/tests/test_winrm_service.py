@@ -6,7 +6,7 @@ from pypsrp.powershell import InformationRecord
 from pypsrp.serializer import GenericComplexObject
 
 from app.services.winrm_service import _PSRPStreamCursor, WinRMService
-from app.core.config import Settings
+
 
 
 def test_stringify_prefers_complex_object_properties():
@@ -98,7 +98,7 @@ def test_winrm_service_create_session_uses_kerberos():
             
             # Verify WSMan was called with Kerberos auth
             mock_wsman.assert_called_once()
-            call_kwargs = mock_wsman.call_args[1]
+            call_kwargs = mock_wsman.call_args.kwargs
             
             assert call_kwargs["auth"] == "kerberos"
             assert call_kwargs["username"] is None

@@ -93,7 +93,7 @@ never committed to source control.
 | -------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `OIDC_CLIENT_SECRET`       | Client secret for the OIDC application.          | Required when using interactive login.                                                                                                   |
 | `SESSION_SECRET_KEY`       | Key used to sign session cookies.                | Optional for development; required in production to persist authenticated sessions across restarts.                                      |
-| `WINRM_KEYTAB_B64`         | Base64-encoded Kerberos keytab for WinRM access. | Required for Kerberos authentication. Generate with `base64 < service.keytab` and set as single-line value.                             |
+| `WINRM_KEYTAB_B64`         | Base64-encoded Kerberos keytab for WinRM access. | Required for Kerberos authentication. Generate with `base64 < service.keytab \| tr -d '\n'` and set as single-line value.                |
 
 Service principals and other non-interactive callers authenticate by requesting OAuth tokens directly from the identity provider (for example, using a Microsoft Entra application client ID and secret) and presenting those bearer tokens to Aether-V. Access tokens should be requested with the API audience (for example `api://<client-id>/.default`) so the resulting token contains the configured app roles. No static API keys are required or supported.
 

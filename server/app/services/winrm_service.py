@@ -388,7 +388,7 @@ class WinRMService:
         operation_timeout = int(max(1.0, float(settings.winrm_operation_timeout)))
         read_timeout = int(max(1.0, float(settings.winrm_read_timeout)))
 
-        principal = settings.winrm_kerberos_principal or "not-configured"
+        principal = settings.winrm_kerberos_principal or "(Kerberos not configured)"
         logger.info(
             "Creating WinRM (PSRP) session to %s (port=%s, auth=kerberos, principal=%s)",
             hostname,

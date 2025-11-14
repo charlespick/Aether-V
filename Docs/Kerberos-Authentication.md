@@ -181,8 +181,8 @@ setspn -L hyperv01
 # - WSMAN/hyperv01
 
 # If missing, register manually (usually not needed):
-setspn -S WSMAN/hyperv01.ad.example.com hyperv01
-setspn -S WSMAN/hyperv01 hyperv01
+setspn -S WSMAN/hyperv01.ad.example.com hyperv01$
+setspn -S WSMAN/hyperv01 hyperv01$
 ```
 
 ## Aether-V Configuration
@@ -385,9 +385,9 @@ Get-WinEvent -LogName Security -FilterXPath "*[System[(EventID=4768 or EventID=4
 
 ## Troubleshooting
 
-### Issue: "Kerberos initialization failed"
+### Issue: "Failed to initialize Kerberos"
 
-**Symptoms:** Application fails to start with "Kerberos initialization failed; cannot start application"
+**Symptoms:** Application fails to start with "Failed to initialize Kerberos" (may be followed by additional warning messages)
 
 **Solutions:**
 1. Verify keytab is properly base64-encoded
