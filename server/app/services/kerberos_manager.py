@@ -3,9 +3,11 @@
 import base64
 import logging
 import os
+import re
+import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Tuple
 
 import gssapi
 
@@ -58,6 +60,9 @@ class KerberosManager:
             # Decode and write keytab to secure temp file
             self._keytab_path = self._write_keytab()
             logger.info("Keytab written to %s", self._keytab_path)
+
+            # Validate keytab contains the expected principal
+            self._validate_keytab_with_klist()
 
             # Set environment variables for Kerberos
             os.environ["KRB5_CLIENT_KTNAME"] = str(self._keytab_path)
@@ -131,6 +136,87 @@ class KerberosManager:
         except Exception as exc:
             logger.error("Failed to write keytab: %s", exc)
             raise KerberosManagerError(f"Failed to write keytab: {exc}") from exc
+
+    def _validate_keytab_with_klist(self) -> None:
+        """
+        Validate keytab contains the expected principal using klist.
+
+        Runs 'klist -k' to list principals in the keytab and verifies
+        that the configured principal is present.
+
+        Raises:
+            KerberosManagerError: If validation fails
+        """
+        try:
+            # Run klist -k to list keytab entries
+            result = subprocess.run(
+                ["klist", "-k", str(self._keytab_path)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode != 0:
+                logger.error("klist command failed with exit code %d: %s", result.returncode, result.stderr)
+                raise KerberosManagerError(f"Failed to validate keytab with klist: {result.stderr}")
+
+            # Parse klist output to find principals
+            # Output format is typically:
+            # Keytab name: FILE:/path/to/keytab
+            # KVNO Principal
+            # ---- --------------------------------------------------------------------------
+            #    2 user@REALM
+            #    2 user@realm
+            
+            output = result.stdout
+            logger.debug("klist output:\n%s", output)
+
+            # Extract principals from output
+            principals_found = []
+            for line in output.splitlines():
+                # Skip header lines and empty lines
+                line = line.strip()
+                if not line or "Keytab name:" in line or "KVNO" in line or "----" in line:
+                    continue
+                
+                # Extract principal (format: "KVNO principal")
+                parts = line.split(None, 1)
+                if len(parts) == 2:
+                    principals_found.append(parts[1])
+
+            if not principals_found:
+                raise KerberosManagerError("No principals found in keytab")
+
+            # Check if our principal is in the keytab (case-insensitive comparison)
+            principal_lower = self.principal.lower()
+            matching_principals = [p for p in principals_found if p.lower() == principal_lower]
+
+            if not matching_principals:
+                logger.error(
+                    "Principal '%s' not found in keytab. Found principals: %s",
+                    self.principal,
+                    ", ".join(principals_found)
+                )
+                raise KerberosManagerError(
+                    f"Keytab does not contain principal '{self.principal}'. "
+                    f"Found: {', '.join(principals_found)}"
+                )
+
+            logger.info("Validated keytab contains principal: %s", matching_principals[0])
+
+        except subprocess.TimeoutExpired:
+            logger.error("klist command timed out")
+            raise KerberosManagerError("Keytab validation timed out") from None
+        except FileNotFoundError:
+            logger.error("klist command not found - ensure Kerberos tools are installed")
+            raise KerberosManagerError(
+                "klist command not found. Install krb5-user (Debian/Ubuntu) or krb5-workstation (RHEL/CentOS)"
+            ) from None
+        except KerberosManagerError:
+            raise
+        except Exception as exc:
+            logger.error("Failed to validate keytab: %s", exc)
+            raise KerberosManagerError(f"Keytab validation failed: {exc}") from exc
 
     def _acquire_credentials(self) -> None:
         """
@@ -226,10 +312,198 @@ def cleanup_kerberos() -> None:
         _kerberos_manager = None
 
 
+def validate_host_kerberos_setup(hosts: List[str], realm: Optional[str] = None) -> Dict[str, List[str]]:
+    """
+    Validate Kerberos setup for configured Hyper-V hosts.
+
+    Checks:
+    1. WSMAN SPN exists for each host
+    2. Delegation is configured for each host (if possible to check)
+
+    Args:
+        hosts: List of hostnames to validate
+        realm: Kerberos realm (optional)
+
+    Returns:
+        Dictionary with 'errors' and 'warnings' lists containing validation messages
+    """
+    result = {"errors": [], "warnings": []}
+
+    if not hosts:
+        result["warnings"].append("No Hyper-V hosts configured to validate")
+        return result
+
+    logger.info("Validating Kerberos setup for %d host(s)", len(hosts))
+
+    for host in hosts:
+        # Check WSMAN SPN
+        spn_check = _check_wsman_spn(host, realm)
+        if not spn_check[0]:
+            result["errors"].append(f"Host '{host}': {spn_check[1]}")
+        else:
+            logger.info("Host '%s': WSMAN SPN validated", host)
+
+        # Check delegation (best effort)
+        delegation_check = _check_host_delegation(host, realm)
+        if delegation_check[0] is False:
+            result["errors"].append(f"Host '{host}': {delegation_check[1]}")
+        elif delegation_check[0] is None:
+            # Could not determine - add warning
+            result["warnings"].append(f"Host '{host}': {delegation_check[1]}")
+        else:
+            logger.info("Host '%s': Delegation validated", host)
+
+    return result
+
+
+def _check_wsman_spn(host: str, realm: Optional[str] = None) -> Tuple[bool, str]:
+    """
+    Check if WSMAN SPN exists for a host.
+
+    Uses 'setspn -Q' to query for WSMAN service principal.
+
+    Args:
+        host: Hostname to check
+        realm: Optional Kerberos realm
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        # Query for WSMAN SPN
+        # Format: WSMAN/hostname or WSMAN/hostname.domain
+        spn_to_check = f"WSMAN/{host}"
+        
+        # Try setspn -Q (Windows AD query)
+        result = subprocess.run(
+            ["setspn", "-Q", spn_to_check],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        # setspn -Q returns 0 if SPN is found
+        if result.returncode == 0:
+            # Parse output to confirm SPN exists
+            if spn_to_check.lower() in result.stdout.lower():
+                return (True, f"WSMAN SPN '{spn_to_check}' found")
+            else:
+                return (False, f"WSMAN SPN '{spn_to_check}' not found in Active Directory")
+        else:
+            return (False, f"WSMAN SPN '{spn_to_check}' not found (setspn exit code: {result.returncode})")
+
+    except FileNotFoundError:
+        # setspn not available (likely not on Windows or not in PATH)
+        # Try alternative: kvno command (attempts to get service ticket)
+        try:
+            kvno_spn = f"WSMAN/{host}"
+            if realm:
+                kvno_spn = f"{kvno_spn}@{realm}"
+            
+            result = subprocess.run(
+                ["kvno", kvno_spn],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+
+            if result.returncode == 0:
+                return (True, f"WSMAN SPN validated via kvno")
+            else:
+                return (False, f"WSMAN SPN '{kvno_spn}' not found or inaccessible: {result.stderr.strip()}")
+
+        except FileNotFoundError:
+            logger.warning("Neither setspn nor kvno available - cannot validate WSMAN SPN for %s", host)
+            return (False, f"Cannot validate WSMAN SPN - setspn and kvno tools not available")
+        except subprocess.TimeoutExpired:
+            return (False, f"WSMAN SPN check timed out using kvno")
+        except Exception as exc:
+            return (False, f"WSMAN SPN validation failed: {exc}")
+
+    except subprocess.TimeoutExpired:
+        return (False, f"WSMAN SPN check timed out")
+    except Exception as exc:
+        return (False, f"WSMAN SPN check failed: {exc}")
+
+
+def _check_host_delegation(host: str, realm: Optional[str] = None) -> Tuple[Optional[bool], str]:
+    """
+    Check if delegation is configured for a host.
+
+    This is a best-effort check. Returns None if unable to determine.
+
+    Args:
+        host: Hostname to check
+        realm: Optional Kerberos realm
+
+    Returns:
+        Tuple of (success: Optional[bool], message: str)
+        - True: Delegation confirmed
+        - False: Delegation confirmed absent
+        - None: Unable to determine
+    """
+    try:
+        # Try to get delegation info using PowerShell Get-ADComputer
+        # This requires Active Directory PowerShell module
+        ps_script = f"""
+        $computer = Get-ADComputer -Identity '{host}' -Properties TrustedForDelegation, TrustedToAuthForDelegation, msDS-AllowedToDelegateTo
+        if ($computer.TrustedToAuthForDelegation -or $computer.TrustedForDelegation -or $computer.'msDS-AllowedToDelegateTo') {{
+            Write-Output "DELEGATION_CONFIGURED"
+            if ($computer.'msDS-AllowedToDelegateTo') {{
+                Write-Output "RBCD: $($computer.'msDS-AllowedToDelegateTo' -join ', ')"
+            }}
+        }} else {{
+            Write-Output "NO_DELEGATION"
+        }}
+        """
+
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if "DELEGATION_CONFIGURED" in output:
+                # Extract RBCD info if available
+                rbcd_info = ""
+                for line in output.splitlines():
+                    if line.startswith("RBCD:"):
+                        rbcd_info = f" ({line})"
+                return (True, f"Delegation configured{rbcd_info}")
+            elif "NO_DELEGATION" in output:
+                return (
+                    False,
+                    f"No delegation configured. Set up Resource-Based Constrained Delegation (RBCD) "
+                    f"for double-hop authentication."
+                )
+            else:
+                logger.debug("Unexpected delegation check output: %s", output)
+                return (None, "Unable to determine delegation status (unexpected output)")
+        else:
+            # PowerShell command failed - likely Get-ADComputer not available
+            logger.debug("Delegation check failed: %s", result.stderr)
+            return (None, "Unable to check delegation (AD PowerShell module may not be available)")
+
+    except FileNotFoundError:
+        # PowerShell not available (not on Windows)
+        logger.debug("PowerShell not available - skipping delegation check")
+        return (None, "Delegation check skipped (PowerShell not available)")
+    except subprocess.TimeoutExpired:
+        logger.warning("Delegation check timed out for %s", host)
+        return (None, "Delegation check timed out")
+    except Exception as exc:
+        logger.debug("Delegation check failed: %s", exc)
+        return (None, f"Unable to check delegation: {exc}")
+
+
 __all__ = [
     "KerberosManager",
     "KerberosManagerError",
     "initialize_kerberos",
     "get_kerberos_manager",
     "cleanup_kerberos",
+    "validate_host_kerberos_setup",
 ]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Set
@@ -215,6 +216,28 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             "Provide WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64 to manage Hyper-V hosts.",
         )
     elif settings.winrm_kerberos_principal and settings.winrm_keytab_b64:
+        # Validate principal format (user@REALM or service/host@REALM)
+        principal = settings.winrm_kerberos_principal
+        # Kerberos principal format: [primary[/instance]]@REALM
+        # Examples: user@REALM, HTTP/server.example.com@REALM, svc-aetherv@AD.EXAMPLE.COM
+        principal_pattern = r'^[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)?@[A-Z0-9._-]+$'
+        if not re.match(principal_pattern, principal):
+            _error(
+                result,
+                f"WINRM_KERBEROS_PRINCIPAL '{principal}' is not in valid Kerberos principal format.",
+                "Use format: user@REALM or service/host@REALM (e.g., svc-aetherv@AD.EXAMPLE.COM or HTTP/server.example.com@REALM). "
+                "Realm must be uppercase.",
+            )
+        else:
+            # Warn if realm is not all uppercase (common mistake)
+            realm = principal.split('@')[-1]
+            if realm != realm.upper():
+                _warn(
+                    result,
+                    f"WINRM_KERBEROS_PRINCIPAL realm '{realm}' is not all uppercase.",
+                    "Kerberos realms should typically be uppercase. If this is intentional, ignore this warning.",
+                )
+        
         # Validate keytab can be decoded
         keytab_bytes = settings.get_keytab_bytes()
         if keytab_bytes is None:

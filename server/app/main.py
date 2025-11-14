@@ -32,7 +32,12 @@ from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
 from .services.websocket_service import websocket_manager
 from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
-from .services.kerberos_manager import initialize_kerberos, cleanup_kerberos, KerberosManagerError
+from .services.kerberos_manager import (
+    initialize_kerberos, 
+    cleanup_kerberos, 
+    KerberosManagerError,
+    validate_host_kerberos_setup,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -90,19 +95,38 @@ async def lifespan(app: FastAPI):
 
     # Initialize Kerberos if configured
     if settings.has_kerberos_config():
-        try:
-            logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
-            initialize_kerberos(
-                principal=settings.winrm_kerberos_principal,
-                keytab_b64=settings.winrm_keytab_b64,
+        logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
+        initialize_kerberos(
+            principal=settings.winrm_kerberos_principal,
+            keytab_b64=settings.winrm_keytab_b64,
+            realm=settings.winrm_kerberos_realm,
+            kdc=settings.winrm_kerberos_kdc,
+        )
+        logger.info("Kerberos authentication initialized successfully")
+
+        # Validate host Kerberos setup (WSMAN SPNs and delegation)
+        hyperv_hosts = settings.get_hyperv_hosts_list()
+        if hyperv_hosts:
+            logger.info("Validating Kerberos setup for %d configured host(s)", len(hyperv_hosts))
+            validation_result = validate_host_kerberos_setup(
+                hosts=hyperv_hosts,
                 realm=settings.winrm_kerberos_realm,
-                kdc=settings.winrm_kerberos_kdc,
             )
-            logger.info("Kerberos authentication initialized successfully")
-        except KerberosManagerError as exc:
-            logger.error("Failed to initialize Kerberos: %s", exc)
-            logger.warning("Server starting without Kerberos authentication - WinRM operations will fail")
-            logger.warning("To fix: provide valid WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64")
+
+            # Log warnings
+            for warning in validation_result.get("warnings", []):
+                logger.warning("Kerberos host validation: %s", warning)
+
+            # Log errors and raise if critical issues found
+            if validation_result.get("errors"):
+                for error in validation_result["errors"]:
+                    logger.error("Kerberos host validation: %s", error)
+                raise KerberosManagerError(
+                    f"Kerberos host validation failed with {len(validation_result['errors'])} error(s). "
+                    "Ensure WSMAN SPNs are registered and delegation is configured for all Hyper-V hosts."
+                )
+            
+            logger.info("Kerberos host validation completed successfully")
     else:
         logger.warning("Kerberos credentials not configured; WinRM operations will fail")
 
