@@ -105,33 +105,56 @@ async def lifespan(app: FastAPI):
         logger.info("Kerberos authentication initialized successfully")
 
         # Validate host Kerberos setup (WSMAN SPNs and delegation)
+        # We need to get cluster information for delegation checking
         hyperv_hosts = settings.get_hyperv_hosts_list()
         if hyperv_hosts:
             logger.info("Validating Kerberos setup for %d configured host(s)", len(hyperv_hosts))
+            
+            # Import inventory service to get cluster information after it's started
+            # For now, do initial validation without cluster info (will re-validate later)
             validation_result = validate_host_kerberos_setup(
                 hosts=hyperv_hosts,
                 realm=settings.winrm_kerberos_realm,
+                clusters=None  # Will be validated later after inventory refresh
             )
 
             # Log and collect validation issues
             for warning in validation_result.get("warnings", []):
                 logger.warning("Kerberos host validation: %s", warning)
 
-            # Add errors as warnings to config_result instead of failing startup
+            # Add errors with specific hints based on error type
             if validation_result.get("errors"):
                 from .core.config_validation import ConfigIssue
-                for error in validation_result["errors"]:
-                    logger.warning("Kerberos host validation: %s", error)
+                
+                # Handle SPN errors
+                for error in validation_result.get("spn_errors", []):
+                    logger.warning("Kerberos SPN validation: %s", error)
                     config_result.warnings.append(
                         ConfigIssue(
                             message=error,
-                            hint="Ensure WSMAN SPNs are registered and delegation is configured for all Hyper-V hosts. "
-                                 "WinRM operations will fail until these issues are resolved."
+                            hint="Ensure WSMAN SPNs are registered in Active Directory for all Hyper-V hosts. "
+                                 "Use 'setspn -S WSMAN/<hostname> <hostname>' on a domain controller. "
+                                 "WinRM operations will fail until WSMAN SPNs are registered."
                         )
                     )
+                
+                # Handle delegation errors
+                for error in validation_result.get("delegation_errors", []):
+                    logger.warning("Kerberos delegation validation: %s", error)
+                    config_result.warnings.append(
+                        ConfigIssue(
+                            message=error,
+                            hint="Configure Resource-Based Constrained Delegation (RBCD) on cluster name objects. "
+                                 "Run: Set-ADComputer <cluster-name> -PrincipalsAllowedToDelegateToAccount (Get-ADComputer <host1>, Get-ADComputer <host2>, ...). "
+                                 "This allows Hyper-V hosts to delegate credentials for double-hop authentication."
+                        )
+                    )
+                
                 logger.warning(
-                    "Kerberos host validation found %d issue(s); application will start in degraded mode",
-                    len(validation_result["errors"])
+                    "Kerberos validation found %d issue(s) (%d SPN, %d delegation); application will start in degraded mode",
+                    len(validation_result["errors"]),
+                    len(validation_result.get("spn_errors", [])),
+                    len(validation_result.get("delegation_errors", []))
                 )
             else:
                 logger.info("Kerberos host validation completed successfully")
@@ -181,6 +204,42 @@ async def lifespan(app: FastAPI):
         logger.info(
             "Application services initialised; inventory refresh will continue in the background"
         )
+        
+        # Schedule delegation validation after initial inventory refresh
+        # This allows us to check RBCD on discovered cluster objects
+        async def _validate_delegation_after_inventory() -> None:
+            try:
+                # Wait for initial inventory refresh to complete
+                await inventory_service.wait_for_initial_refresh()
+                
+                # Get cluster information from inventory
+                clusters_dict = {}
+                for cluster in inventory_service.clusters.values():
+                    if cluster.name != "Default":  # Skip non-clustered hosts
+                        clusters_dict[cluster.name] = cluster.hosts
+                
+                if clusters_dict and settings.has_kerberos_config():
+                    logger.info("Running delegation validation for %d cluster(s)", len(clusters_dict))
+                    delegation_validation = validate_host_kerberos_setup(
+                        hosts=[],  # Already validated SPNs at startup
+                        realm=settings.winrm_kerberos_realm,
+                        clusters=clusters_dict
+                    )
+                    
+                    # Log any delegation issues found
+                    for error in delegation_validation.get("delegation_errors", []):
+                        logger.warning("Cluster delegation validation: %s", error)
+                    
+                    for warning in delegation_validation.get("warnings", []):
+                        logger.warning("Cluster delegation validation: %s", warning)
+                    
+                    if not delegation_validation.get("delegation_errors"):
+                        logger.info("Cluster delegation validation completed successfully")
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to validate cluster delegation")
+        
+        asyncio.create_task(_validate_delegation_after_inventory())
+        
     else:
         logger.error(
             "Skipping job and inventory service startup because configuration errors were detected."

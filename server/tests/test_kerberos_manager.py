@@ -109,6 +109,36 @@ def test_kerberos_manager_invalid_base64():
         manager.initialize()
 
 
+def test_kerberos_manager_realm_auto_detection(sample_keytab_b64):
+    """Test that realm is auto-detected from principal when not explicitly provided."""
+    # Test with realm auto-detection
+    manager = KerberosManager(
+        principal="test-user@AUTO.EXAMPLE.COM",
+        keytab_b64=sample_keytab_b64,
+    )
+    assert manager.realm == "AUTO.EXAMPLE.COM"
+    assert manager.principal == "test-user@AUTO.EXAMPLE.COM"
+    manager.cleanup()
+    
+    # Test with explicit realm override
+    manager2 = KerberosManager(
+        principal="test-user@AUTO.EXAMPLE.COM",
+        keytab_b64=sample_keytab_b64,
+        realm="OVERRIDE.EXAMPLE.COM",
+    )
+    assert manager2.realm == "OVERRIDE.EXAMPLE.COM"
+    manager2.cleanup()
+    
+    # Test with principal without realm
+    manager3 = KerberosManager(
+        principal="test-user",
+        keytab_b64=sample_keytab_b64,
+    )
+    assert manager3.realm is None
+    manager3.cleanup()
+
+
+
 def test_kerberos_manager_cleanup(kerberos_manager):
     """Test that cleanup removes keytab file."""
     with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
