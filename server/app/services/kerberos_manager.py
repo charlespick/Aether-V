@@ -64,12 +64,16 @@ class KerberosManager:
             logger.debug("Set KRB5_CLIENT_KTNAME=%s", self._keytab_path)
 
             # Set cache location (also use temp file for security)
+            # Create a unique path for the credential cache but DO NOT pre-create the file
+            # GSSAPI will create the cache file itself in the correct format
             cache_fd, cache_path_str = tempfile.mkstemp(prefix="krb5cc_aetherv_", suffix="")
-            os.close(cache_fd)  # Close the file descriptor, we just need the path
+            os.close(cache_fd)  # Close the file descriptor
             self._cache_path = Path(cache_path_str)
-            self._cache_path.chmod(0o600)  # Secure the cache file
+            # Remove the empty file created by mkstemp - GSSAPI will create it properly
+            self._cache_path.unlink()
+            logger.debug("Prepared credential cache path: %s", self._cache_path)
             os.environ["KRB5CCNAME"] = f"FILE:{self._cache_path}"
-            logger.debug("Set KRB5CCNAME=%s", self._cache_path)
+            logger.debug("Set KRB5CCNAME=FILE:%s", self._cache_path)
 
             # Set realm and KDC if provided
             if self.realm:
