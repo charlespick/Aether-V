@@ -312,11 +312,11 @@ def test_invoke_polls_until_completion(monkeypatch):
 def test_normalize_state_and_state_complete_helpers():
     """Helper methods should normalise enum and string states consistently."""
 
-    class DummyState(PSInvocationState):
-        def __init__(self, name: str):
-            self.name = name
+    class DummyState:
+        def __str__(self) -> str:
+            return "Completed"
 
-    assert WinRMService._normalize_state(DummyState("COMPLETED")) == "completed"
+    assert WinRMService._normalize_state(DummyState()) == "completed"
     assert WinRMService._normalize_state(None) == "unknown"
     assert WinRMService._normalize_state("FAILED") == "failed"
 
