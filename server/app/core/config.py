@@ -144,9 +144,14 @@ class Settings(BaseSettings):
             return None
         
         import base64
+        import logging
+        
         try:
             return base64.b64decode(self.winrm_keytab_b64)
-        except Exception:
+        except Exception as e:
+            logging.error(
+                f"Failed to decode WINRM_KEYTAB_B64: {type(e).__name__}: {e}"
+            )
             return None
 
     def has_kerberos_config(self) -> bool:
