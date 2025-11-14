@@ -96,11 +96,11 @@ async def lifespan(app: FastAPI):
 
     kerberos_failed = False
     kerberos_initialized = False
+    kerberos_realm = settings.get_kerberos_realm()
 
     # Initialize Kerberos if configured
     if settings.has_kerberos_config():
         logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
-        kerberos_realm = settings.get_kerberos_realm()
         try:
             initialize_kerberos(
                 principal=settings.winrm_kerberos_principal,
@@ -228,6 +228,7 @@ async def lifespan(app: FastAPI):
         
         # Schedule delegation validation after initial inventory refresh
         # This allows us to check RBCD on discovered cluster objects
+        kerberos_realm_for_delegation = kerberos_realm
         async def _validate_delegation_after_inventory() -> None:
             try:
                 # Wait for initial inventory refresh to complete
@@ -243,7 +244,7 @@ async def lifespan(app: FastAPI):
                     logger.info("Running delegation validation for %d cluster(s)", len(clusters_dict))
                     delegation_validation = validate_host_kerberos_setup(
                         hosts=[],  # Already validated SPNs at startup
-                        realm=settings.winrm_kerberos_realm,
+                        realm=kerberos_realm_for_delegation,
                         clusters=clusters_dict
                     )
 
