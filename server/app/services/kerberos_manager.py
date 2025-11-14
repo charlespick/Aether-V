@@ -128,7 +128,7 @@ class KerberosManager:
             try:
                 # Set restrictive permissions immediately (600 = rw-------)
                 # Do this before writing sensitive data
-                os.chmod(fd, 0o600)
+                os.fchmod(fd, 0o600)
                 logger.debug("Set keytab permissions to 600")
                 
                 # Write keytab data to the file descriptor
