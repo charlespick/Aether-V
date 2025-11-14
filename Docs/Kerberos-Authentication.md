@@ -133,11 +133,12 @@ For each Hyper-V host, configure RBCD to allow the service account to delegate:
 # Run on a domain controller or machine with AD PowerShell tools
 # Replace placeholders with your actual values
 
+# Replace with the sAMAccountName of your Aether-V service account
 $ServiceAccount = "svc-aetherv"
 $HyperVHost = "hyperv01"
 
-# Get the service account and host objects
-$ServicePrincipal = Get-ADServiceAccount $ServiceAccount
+# Get the service account
+$ServicePrincipal = Get-ADUser -Identity $ServiceAccount
 $HostComputer = Get-ADComputer $HyperVHost
 
 # Configure RBCD - allow service account to delegate to the host
@@ -150,7 +151,8 @@ Get-ADComputer $HostComputer -Properties PrincipalsAllowedToDelegateToAccount |
 
 ### Step 2: Configure Delegation for Cluster Objects
 
-If using Hyper-V failover clusters, also configure RBCD for the cluster name object:
+If using Hyper-V failover clusters, also configure RBCD for the cluster name object. Reuse the
+`$ServicePrincipal` value resolved with `Get-ADUser` above:
 
 ```powershell
 $ClusterName = "HV-CLUSTER01"
