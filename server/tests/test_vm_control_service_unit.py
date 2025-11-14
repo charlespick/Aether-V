@@ -1,13 +1,6 @@
 import pytest
-from unittest.mock import patch
 
-# Patch Kerberos configuration before importing services to prevent hanging subprocess calls
-kerberos_config_patcher = patch('app.core.config.Settings.has_kerberos_config', return_value=False)
-kerberos_config_patcher.start()
-kerberos_principal_patcher = patch('app.core.config.Settings.winrm_kerberos_principal', None)
-kerberos_principal_patcher.start()
-kerberos_keytab_patcher = patch('app.core.config.Settings.winrm_keytab_b64', None)
-kerberos_keytab_patcher.start()
+# Kerberos is disabled via environment variables in conftest.py
 
 from app.services import vm_control_service as vm_module
 
