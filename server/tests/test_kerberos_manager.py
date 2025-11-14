@@ -314,6 +314,41 @@ def test_check_cluster_delegation_reports_missing_rbcd(monkeypatch):
     assert "Resource-Based Constrained Delegation" in message
 
 
+def test_check_cluster_delegation_flags_missing_hosts(monkeypatch):
+    """When a cluster host lacks delegation it should be reported as an error."""
+
+    stdout = "RBCD_CONFIGURED\nPrincipals: CONTOSO\\HV1$, CONTOSO\\HV2$"
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+    )
+
+    success, message = _check_cluster_delegation(
+        "ClusterA", ["hv1", "hv3"], realm="EXAMPLE.COM"
+    )
+
+    assert success is False
+    assert "hv3" in message
+    assert "Principals:" in message
+
+
+def test_check_cluster_delegation_success_when_all_hosts_present(monkeypatch):
+    """Delegation succeeds when every cluster host is represented in the ACL."""
+
+    stdout = "RBCD_CONFIGURED\nPrincipals: CONTOSO\\HV1$, WSMAN/hv2.contoso.com"
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+    )
+
+    success, message = _check_cluster_delegation(
+        "ClusterA", ["HV1", "hv2.contoso.com"], realm="EXAMPLE.COM"
+    )
+
+    assert success is True
+    assert "Principals:" in message
+
+
 def test_check_cluster_delegation_not_found(monkeypatch):
     """Missing cluster objects should produce an actionable error."""
 
@@ -619,7 +654,11 @@ def test_validate_host_kerberos_setup_reports_missing_cluster_delegation(monkeyp
     def fake_run(cmd, capture_output=True, text=True, timeout=20):
         script = cmd[-1]
         if "msDS-AllowedToActOnBehalfOfOtherIdentity" in script:
-            return MagicMock(returncode=0, stdout="RBCD_CONFIGURED\nPrincipals: host$", stderr="")
+            return MagicMock(
+                returncode=0,
+                stdout="RBCD_CONFIGURED\nPrincipals: CONTOSO\\HYPERV01$",
+                stderr="",
+            )
         if "msDS-AllowedToDelegateTo" in script:
             return MagicMock(returncode=0, stdout="NO_DELEGATION_TARGETS", stderr="")
         raise AssertionError(f"Unexpected command: {cmd}")
@@ -648,7 +687,11 @@ def test_validate_host_kerberos_setup_succeeds_with_delegation(monkeypatch):
     def fake_run(cmd, capture_output=True, text=True, timeout=20):
         script = cmd[-1]
         if "msDS-AllowedToActOnBehalfOfOtherIdentity" in script:
-            return MagicMock(returncode=0, stdout="RBCD_CONFIGURED\nPrincipals: host$", stderr="")
+            return MagicMock(
+                returncode=0,
+                stdout="RBCD_CONFIGURED\nPrincipals: CONTOSO\\HYPERV01$",
+                stderr="",
+            )
         if "msDS-AllowedToDelegateTo" in script:
             return MagicMock(
                 returncode=0,
