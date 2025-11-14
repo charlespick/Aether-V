@@ -3,6 +3,7 @@
 import base64
 import copy
 import os
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +24,8 @@ from app.services.kerberos_manager import (
     _check_cluster_delegation,
     _check_host_delegation_legacy,
     _check_wsman_spn,
+    _extract_allowed_sids_from_security_descriptor,
+    _sid_bytes_to_str,
     cleanup_kerberos,
     get_kerberos_manager,
     initialize_kerberos,
@@ -75,6 +78,61 @@ def kerberos_manager(sample_keytab_b64):
     yield manager
     # Cleanup after test
     manager.cleanup()
+
+
+def _build_security_descriptor_with_object_ace(sid_blob: bytes) -> bytes:
+    """Construct a minimal self-relative security descriptor with an object ACE."""
+
+    # Security descriptor header (self-relative, DACL present)
+    header = bytearray(20)
+    header[0] = 1  # Revision
+    struct.pack_into("<H", header, 2, 0x0004)  # SE_DACL_PRESENT
+    struct.pack_into("<I", header, 16, 20)  # DACL offset immediately after header
+
+    # ACCESS_ALLOWED_OBJECT_ACE: header (4) + mask (4) + flags (4) + SID
+    ace_size = 12 + len(sid_blob)
+    ace = bytearray(ace_size)
+    ace[0] = 0x05  # ACCESS_ALLOWED_OBJECT_ACE_TYPE
+    struct.pack_into("<H", ace, 2, ace_size)
+    struct.pack_into("<I", ace, 4, 0x00000001)  # ACCESS_MASK (arbitrary allow)
+    struct.pack_into("<I", ace, 8, 0x00000000)  # Flags - no GUIDs present
+    ace[12:] = sid_blob
+
+    # ACL header plus the ACE payload
+    acl_size = 8 + len(ace)
+    acl = bytearray(8)
+    acl[0] = 2  # ACL revision
+    struct.pack_into("<H", acl, 2, acl_size)
+    struct.pack_into("<H", acl, 4, 1)  # One ACE
+
+    return bytes(header + acl + ace)
+
+
+def _sid_from_components(*components: int) -> bytes:
+    """Build a SID blob using the provided sub-authorities."""
+
+    if not components:
+        raise ValueError("At least one sub-authority is required")
+
+    sid = bytearray()
+    sid.append(1)  # Revision
+    sid.append(len(components))
+    sid.extend(b"\x00\x00\x00\x00\x00\x05")  # SECURITY_NT_AUTHORITY
+    for value in components:
+        sid.extend(struct.pack("<I", value))
+    return bytes(sid)
+
+
+def test_extract_allowed_sids_handles_object_ace():
+    """Object ACE entries should yield SID blobs for RBCD lookups."""
+
+    sid_blob = _sid_from_components(21, 1, 2, 3, 4)
+    descriptor = _build_security_descriptor_with_object_ace(sid_blob)
+
+    sids = _extract_allowed_sids_from_security_descriptor(descriptor)
+
+    assert sids == [sid_blob]
+    assert _sid_bytes_to_str(sid_blob) == "S-1-5-21-1-2-3-4"
 
 
 def test_kerberos_manager_initialization(kerberos_manager, sample_keytab_b64):

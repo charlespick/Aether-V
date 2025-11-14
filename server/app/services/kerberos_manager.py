@@ -557,7 +557,7 @@ def _lookup_default_naming_context(connection: Connection) -> Optional[str]:
 
 
 def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[bytes]:
-    """Return SID blobs from ACCESS_ALLOWED ACEs within a security descriptor."""
+    """Return SID blobs from ACCESS_ALLOWED ACEs (including object ACEs)."""
 
     if not descriptor:
         return []
@@ -585,6 +585,9 @@ def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[by
     cursor = dacl_offset + 8
     sids: List[bytes] = []
 
+    ACE_OBJECT_TYPE_PRESENT = 0x1
+    ACE_INHERITED_OBJECT_TYPE_PRESENT = 0x2
+
     for _ in range(ace_count):
         if cursor + 4 > len(data):
             break
@@ -597,6 +600,27 @@ def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[by
 
         if ace_type == 0x00:  # ACCESS_ALLOWED_ACE_TYPE
             sid_start = cursor + 8
+            sid_blob = data[sid_start: cursor + ace_size]
+            if sid_blob:
+                sids.append(sid_blob)
+        elif ace_type == 0x05:  # ACCESS_ALLOWED_OBJECT_ACE_TYPE
+            if ace_size < 12:
+                cursor += ace_size
+                continue
+
+            flags = struct.unpack_from("<I", data, cursor + 8)[0]
+            sid_start = cursor + 12
+
+            # Object ACEs may include optional GUIDs depending on the flags
+            if flags & ACE_OBJECT_TYPE_PRESENT:
+                sid_start += 16
+            if flags & ACE_INHERITED_OBJECT_TYPE_PRESENT:
+                sid_start += 16
+
+            if sid_start >= cursor + ace_size:
+                cursor += ace_size
+                continue
+
             sid_blob = data[sid_start: cursor + ace_size]
             if sid_blob:
                 sids.append(sid_blob)
