@@ -26,6 +26,7 @@ from app.services.kerberos_manager import (
     _check_wsman_spn,
     _extract_allowed_sids_from_security_descriptor,
     _normalize_ldap_boolean,
+    _parse_ldap_server_target,
     _sid_bytes_to_str,
     cleanup_kerberos,
     get_kerberos_manager,
@@ -142,6 +143,24 @@ def test_normalize_ldap_boolean(value, expected):
     """LDAP boolean normalization should interpret typical encodings."""
 
     assert _normalize_ldap_boolean(value) is expected
+
+
+@pytest.mark.parametrize(
+    "target, expected_host, expected_port",
+    [
+        ("dc01.ad.example.com", "dc01.ad.example.com", None),
+        ("dc01.ad.example.com:88", "dc01.ad.example.com", 88),
+        ("[2001:db8::10]:636", "2001:db8::10", 636),
+        ("server:3268", "server", 3268),
+        (" :389 ", None, None),
+    ],
+)
+def test_parse_ldap_server_target(target, expected_host, expected_port):
+    """Target parsing should extract host and optional port information."""
+
+    host, port = _parse_ldap_server_target(target)
+    assert host == expected_host
+    assert port == expected_port
 
 
 def test_extract_allowed_sids_handles_object_ace():
@@ -889,6 +908,74 @@ def test_validate_host_kerberos_setup_succeeds_with_delegation(monkeypatch):
 
     assert not result["delegation_errors"], "Delegation errors should not be reported"
     assert not result["warnings"], "No warnings expected when checks succeed"
+
+
+def test_establish_ldap_connection_ignores_kdc_port(monkeypatch):
+    """LDAP connections should ignore non-LDAP ports in the KDC override."""
+
+    captured = {}
+
+    class DummyServer:
+        def __init__(self, host, **kwargs):
+            captured["host"] = host
+            captured["kwargs"] = kwargs
+
+    class DummyConnection:
+        def __init__(self, server, **kwargs):
+            captured["server"] = server
+            captured["connection_kwargs"] = kwargs
+
+    monkeypatch.setattr("app.services.kerberos_manager.Server", DummyServer)
+    monkeypatch.setattr("app.services.kerberos_manager.Connection", DummyConnection)
+    monkeypatch.setattr("app.services.kerberos_manager.SASL", object())
+    monkeypatch.setattr("app.services.kerberos_manager.KERBEROS", object())
+    monkeypatch.setattr("app.services.kerberos_manager.BASE", object())
+    monkeypatch.setattr("app.services.kerberos_manager.SUBTREE", object())
+    monkeypatch.setattr("app.services.kerberos_manager.escape_filter_chars", lambda value: value)
+    monkeypatch.setattr("app.services.kerberos_manager.NONE", object())
+
+    from app.services.kerberos_manager import _establish_ldap_connection
+
+    connection = _establish_ldap_connection("dc01.ad.example.com:88")
+
+    assert connection is not None
+    assert captured["host"] == "dc01.ad.example.com"
+    assert "port" not in captured["kwargs"]
+    assert captured["connection_kwargs"]["sasl_mechanism"] is not None
+
+
+def test_establish_ldap_connection_respects_valid_ldap_port(monkeypatch):
+    """Valid LDAP ports should be passed to the ldap3 Server constructor."""
+
+    captured = {}
+
+    class DummyServer:
+        def __init__(self, host, **kwargs):
+            captured["host"] = host
+            captured["kwargs"] = kwargs
+
+    class DummyConnection:
+        def __init__(self, server, **kwargs):
+            captured["server"] = server
+            captured["connection_kwargs"] = kwargs
+
+    monkeypatch.setattr("app.services.kerberos_manager.Server", DummyServer)
+    monkeypatch.setattr("app.services.kerberos_manager.Connection", DummyConnection)
+    monkeypatch.setattr("app.services.kerberos_manager.SASL", object())
+    monkeypatch.setattr("app.services.kerberos_manager.KERBEROS", object())
+    monkeypatch.setattr("app.services.kerberos_manager.BASE", object())
+    monkeypatch.setattr("app.services.kerberos_manager.SUBTREE", object())
+    monkeypatch.setattr("app.services.kerberos_manager.escape_filter_chars", lambda value: value)
+    monkeypatch.setattr("app.services.kerberos_manager.NONE", object())
+
+    from app.services.kerberos_manager import _establish_ldap_connection
+
+    connection = _establish_ldap_connection("dc01.ad.example.com:636")
+
+    assert connection is not None
+    assert captured["host"] == "dc01.ad.example.com"
+    assert captured["kwargs"].get("port") == 636
+    assert captured["connection_kwargs"]["sasl_mechanism"] is not None
 
 
 def test_kdc_override_sets_krb5_config(monkeypatch, sample_keytab_b64):

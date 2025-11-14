@@ -496,6 +496,40 @@ def _derive_ldap_server_host(realm: Optional[str]) -> Optional[str]:
     return None
 
 
+def _parse_ldap_server_target(server_host: str) -> Tuple[Optional[str], Optional[int]]:
+    """Split an LDAP server target into host and optional port components."""
+
+    if not server_host:
+        return None, None
+
+    host = server_host.strip()
+    if not host:
+        return None, None
+
+    port: Optional[int] = None
+
+    if host.startswith("["):
+        closing = host.find("]")
+        if closing != -1:
+            bracket_host = host[1:closing].strip()
+            remainder = host[closing + 1 :]
+            if remainder.startswith(":") and remainder[1:].isdigit():
+                port = int(remainder[1:])
+            host = bracket_host
+    else:
+        if host.count(":") == 1:
+            possible_host, possible_port = host.rsplit(":", 1)
+            if possible_port.isdigit():
+                host = possible_host
+                port = int(possible_port)
+
+    cleaned_host = host.strip()
+    if not cleaned_host:
+        return None, None
+
+    return cleaned_host, port
+
+
 def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connection]:
     """Bind to LDAP using the existing Kerberos ticket cache."""
 
@@ -515,8 +549,26 @@ def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connectio
         logger.debug("Unable to derive LDAP server host - skipping LDAP-based delegation checks")
         return None
 
+    host, override_port = _parse_ldap_server_target(server_host)
+
+    if not host:
+        logger.debug("Unable to determine LDAP hostname from %r", server_host)
+        return None
+
+    server_kwargs = {"get_info": NONE}
+
+    if override_port is not None:
+        if override_port in {389, 636, 3268, 3269}:
+            server_kwargs["port"] = override_port
+        else:
+            logger.debug(
+                "Ignoring non-LDAP port %s derived from %r when binding to LDAP",
+                override_port,
+                server_host,
+            )
+
     try:
-        server = Server(server_host, get_info=NONE)
+        server = Server(host, **server_kwargs)
         connection = Connection(
             server,
             authentication=SASL,
