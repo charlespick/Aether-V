@@ -113,20 +113,28 @@ async def lifespan(app: FastAPI):
                 realm=settings.winrm_kerberos_realm,
             )
 
-            # Log warnings
+            # Log and collect validation issues
             for warning in validation_result.get("warnings", []):
                 logger.warning("Kerberos host validation: %s", warning)
 
-            # Log errors and raise if critical issues found
+            # Add errors as warnings to config_result instead of failing startup
             if validation_result.get("errors"):
+                from .core.config_validation import ConfigIssue
                 for error in validation_result["errors"]:
-                    logger.error("Kerberos host validation: %s", error)
-                raise KerberosManagerError(
-                    f"Kerberos host validation failed with {len(validation_result['errors'])} error(s). "
-                    "Ensure WSMAN SPNs are registered and delegation is configured for all Hyper-V hosts."
+                    logger.warning("Kerberos host validation: %s", error)
+                    config_result.warnings.append(
+                        ConfigIssue(
+                            message=error,
+                            hint="Ensure WSMAN SPNs are registered and delegation is configured for all Hyper-V hosts. "
+                                 "WinRM operations will fail until these issues are resolved."
+                        )
+                    )
+                logger.warning(
+                    "Kerberos host validation found %d issue(s); application will start in degraded mode",
+                    len(validation_result["errors"])
                 )
-            
-            logger.info("Kerberos host validation completed successfully")
+            else:
+                logger.info("Kerberos host validation completed successfully")
     else:
         logger.warning("Kerberos credentials not configured; WinRM operations will fail")
 
