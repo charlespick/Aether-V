@@ -4,6 +4,7 @@ import base64
 import logging
 import os
 import re
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -11,6 +12,30 @@ from typing import Optional, List, Dict, Tuple, Set
 
 import gssapi
 import gssapi.raw as gssapi_raw
+
+try:
+    from ldap3 import (
+        BASE,
+        KERBEROS,
+        SASL,
+        SUBTREE,
+        Connection,
+        Server,
+        NONE,
+    )
+    from ldap3.core.exceptions import LDAPException
+    from ldap3.utils.conv import escape_bytes, escape_filter_chars
+except ImportError:  # pragma: no cover - optional dependency safeguard
+    BASE = None  # type: ignore[assignment]
+    KERBEROS = None  # type: ignore[assignment]
+    SASL = None  # type: ignore[assignment]
+    SUBTREE = None  # type: ignore[assignment]
+    Connection = None  # type: ignore[assignment]
+    Server = None  # type: ignore[assignment]
+    NONE = None  # type: ignore[assignment]
+    LDAPException = Exception  # type: ignore[assignment]
+    escape_bytes = None  # type: ignore[assignment]
+    escape_filter_chars = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +462,335 @@ def cleanup_kerberos() -> None:
         _kerberos_manager = None
 
 
+def _realm_to_base_dn(realm: Optional[str]) -> Optional[str]:
+    """Convert a Kerberos realm (e.g. EXAMPLE.COM) to a base DN."""
+
+    if not realm:
+        return None
+
+    realm = realm.strip().strip(".")
+    if not realm:
+        return None
+
+    parts = [part.strip() for part in realm.split(".") if part.strip()]
+    if not parts:
+        return None
+
+    return ",".join(f"DC={part.lower()}" for part in parts)
+
+
+def _derive_ldap_server_host(realm: Optional[str]) -> Optional[str]:
+    """Pick an LDAP host using Kerberos manager hints or the provided realm."""
+
+    manager = get_kerberos_manager()
+
+    if manager and manager.kdc:
+        return manager.kdc
+
+    if manager and manager.realm:
+        return manager.realm.lower()
+
+    if realm:
+        return realm.lower()
+
+    return None
+
+
+def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connection]:
+    """Bind to LDAP using the existing Kerberos ticket cache."""
+
+    if (
+        Server is None
+        or Connection is None
+        or SASL is None
+        or KERBEROS is None
+        or escape_filter_chars is None
+        or BASE is None
+        or SUBTREE is None
+    ):
+        logger.debug("ldap3 module unavailable - skipping LDAP-based delegation checks")
+        return None
+
+    if not server_host:
+        logger.debug("Unable to derive LDAP server host - skipping LDAP-based delegation checks")
+        return None
+
+    try:
+        server = Server(server_host, get_info=NONE)
+        connection = Connection(
+            server,
+            authentication=SASL,
+            sasl_mechanism=KERBEROS,
+            auto_bind=True,
+            raise_exceptions=True,
+        )
+        return connection
+    except LDAPException as exc:  # pragma: no cover - environment specific
+        logger.debug("LDAP bind to %s failed: %s", server_host, exc, exc_info=True)
+        return None
+
+
+def _lookup_default_naming_context(connection: Connection) -> Optional[str]:
+    """Query root DSE for the default naming context."""
+
+    try:
+        if connection.search(
+            "",
+            "(objectClass=*)",
+            search_scope=BASE,
+            attributes=["defaultNamingContext"],
+            size_limit=1,
+        ) and connection.entries:
+            entry = connection.entries[0]
+            attr_dict = entry.entry_attributes_as_dict
+            if not attr_dict:
+                return None
+            value = attr_dict.get("defaultNamingContext")
+            if isinstance(value, list):
+                value = value[0] if value else None
+            if value:
+                return str(value)
+    except LDAPException as exc:  # pragma: no cover - environment specific
+        logger.debug("Failed to query defaultNamingContext via LDAP: %s", exc, exc_info=True)
+
+    return None
+
+
+def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[bytes]:
+    """Return SID blobs from ACCESS_ALLOWED ACEs within a security descriptor."""
+
+    if not descriptor:
+        return []
+
+    if isinstance(descriptor, memoryview):
+        descriptor = descriptor.tobytes()
+    elif isinstance(descriptor, bytearray):
+        descriptor = bytes(descriptor)
+
+    if not isinstance(descriptor, (bytes, bytearray)):
+        return []
+
+    data = bytes(descriptor)
+    if len(data) < 20:
+        return []
+
+    dacl_offset = struct.unpack_from("<I", data, 16)[0]
+    if dacl_offset == 0 or dacl_offset >= len(data):
+        return []
+
+    if len(data) < dacl_offset + 8:
+        return []
+
+    ace_count = struct.unpack_from("<H", data, dacl_offset + 4)[0]
+    cursor = dacl_offset + 8
+    sids: List[bytes] = []
+
+    for _ in range(ace_count):
+        if cursor + 4 > len(data):
+            break
+
+        ace_type = data[cursor]
+        ace_size = struct.unpack_from("<H", data, cursor + 2)[0]
+
+        if ace_size < 8 or cursor + ace_size > len(data):
+            break
+
+        if ace_type == 0x00:  # ACCESS_ALLOWED_ACE_TYPE
+            sid_start = cursor + 8
+            sid_blob = data[sid_start: cursor + ace_size]
+            if sid_blob:
+                sids.append(sid_blob)
+
+        cursor += ace_size
+
+    return sids
+
+
+def _sid_bytes_to_str(sid: bytes) -> Optional[str]:
+    """Convert a SID byte sequence to its S-1-x textual representation."""
+
+    if not sid:
+        return None
+
+    if isinstance(sid, memoryview):
+        sid = sid.tobytes()
+
+    if len(sid) < 8:
+        return None
+
+    revision = sid[0]
+    sub_authority_count = sid[1]
+    identifier_authority = int.from_bytes(sid[2:8], byteorder="big")
+
+    sub_authorities: List[str] = []
+    offset = 8
+    for _ in range(sub_authority_count):
+        if offset + 4 > len(sid):
+            return None
+        sub_authority = struct.unpack_from("<I", sid, offset)[0]
+        sub_authorities.append(str(sub_authority))
+        offset += 4
+
+    components = [f"S-{revision}", str(identifier_authority), *sub_authorities]
+    return "-".join(components)
+
+
+def _ldap_resolve_sids(
+    connection: Connection, base_dn: str, sid_blobs: List[bytes]
+) -> Dict[str, str]:
+    """Resolve SID blobs to display names via LDAP."""
+
+    if not sid_blobs or escape_bytes is None:
+        return {}
+
+    unique: List[Tuple[str, bytes]] = []
+    seen: Set[str] = set()
+    for blob in sid_blobs:
+        sid_str = _sid_bytes_to_str(blob)
+        if not sid_str or sid_str in seen:
+            continue
+        seen.add(sid_str)
+        unique.append((sid_str, blob))
+
+    resolved: Dict[str, str] = {}
+
+    for index in range(0, len(unique), 25):
+        chunk = unique[index:index + 25]
+        filter_components = "".join(
+            f"(objectSid={escape_bytes(blob)})" for _, blob in chunk
+        )
+        if not filter_components:
+            continue
+
+        ldap_filter = f"(|{filter_components})"
+
+        try:
+            connection.search(
+                base_dn,
+                ldap_filter,
+                search_scope=SUBTREE,
+                attributes=["sAMAccountName", "cn", "name", "objectSid"],
+                size_limit=len(chunk),
+            )
+        except LDAPException as exc:  # pragma: no cover - environment specific
+            logger.debug("LDAP SID lookup failed: %s", exc, exc_info=True)
+            continue
+
+        for entry in connection.entries:
+            raw_sid_values = entry.entry_raw_attributes.get("objectSid") if entry.entry_raw_attributes else None
+            if not raw_sid_values:
+                continue
+            raw_sid = raw_sid_values[0]
+            if isinstance(raw_sid, memoryview):
+                raw_sid = raw_sid.tobytes()
+            sid_str = _sid_bytes_to_str(raw_sid)
+            if not sid_str:
+                continue
+
+            attr_dict = entry.entry_attributes_as_dict or {}
+            candidate = attr_dict.get("sAMAccountName") or attr_dict.get("cn") or attr_dict.get("name")
+            if isinstance(candidate, list):
+                candidate = candidate[0] if candidate else None
+            display = str(entry.entry_dn) if not candidate else str(candidate)
+            resolved[sid_str] = display
+
+    return resolved
+
+
+def _ldap_get_computer_delegation_info(
+    name: str, realm: Optional[str]
+) -> Optional[Dict[str, object]]:
+    """Fetch delegation-related attributes for a computer account via LDAP."""
+
+    server_host = _derive_ldap_server_host(realm)
+    connection = _establish_ldap_connection(server_host)
+    if connection is None:
+        return None
+
+    try:
+        manager = get_kerberos_manager()
+        base_hint = _realm_to_base_dn(realm or (manager.realm if manager else None))
+        base_dn = base_hint or _lookup_default_naming_context(connection)
+        if not base_dn:
+            logger.debug("Unable to determine LDAP base DN for '%s'", name)
+            return None
+
+        sam_account = name if name.endswith("$") else f"{name}$"
+        search_filter = (
+            f"(&(objectClass=computer)(sAMAccountName={escape_filter_chars(sam_account)}))"
+        )
+
+        try:
+            connection.search(
+                base_dn,
+                search_filter,
+                search_scope=SUBTREE,
+                attributes=[
+                    "msDS-AllowedToActOnBehalfOfOtherIdentity",
+                    "msDS-AllowedToDelegateTo",
+                    "TrustedToAuthForDelegation",
+                    "TrustedForDelegation",
+                    "objectSid",
+                ],
+                size_limit=1,
+            )
+        except LDAPException as exc:  # pragma: no cover - environment specific
+            logger.debug("LDAP search for '%s' failed: %s", name, exc, exc_info=True)
+            return None
+
+        if not connection.entries:
+            return {"exists": False}
+
+        entry = connection.entries[0]
+        raw_attrs = entry.entry_raw_attributes or {}
+        attr_dict = entry.entry_attributes_as_dict or {}
+
+        rbcd_values = raw_attrs.get("msDS-AllowedToActOnBehalfOfOtherIdentity") or []
+        sid_blobs: List[bytes] = []
+        for descriptor in rbcd_values:
+            sid_blobs.extend(_extract_allowed_sids_from_security_descriptor(descriptor))
+
+        sid_strings = [
+            sid_str
+            for sid_str in (_sid_bytes_to_str(blob) for blob in sid_blobs)
+            if sid_str
+        ]
+
+        principal_lookup = _ldap_resolve_sids(connection, base_dn, sid_blobs)
+        allowed_principals: List[str] = []
+        seen_principals: Set[str] = set()
+
+        for blob in sid_blobs:
+            sid_str = _sid_bytes_to_str(blob)
+            if not sid_str:
+                continue
+            display = principal_lookup.get(sid_str, sid_str)
+            if display not in seen_principals:
+                seen_principals.add(display)
+                allowed_principals.append(display)
+
+        delegate_targets = attr_dict.get("msDS-AllowedToDelegateTo") or []
+        if isinstance(delegate_targets, str):
+            delegate_targets = [delegate_targets]
+        elif isinstance(delegate_targets, (tuple, set)):
+            delegate_targets = list(delegate_targets)
+
+        delegate_targets = [str(value) for value in delegate_targets if value]
+
+        return {
+            "exists": True,
+            "rbcd_present": bool(rbcd_values),
+            "rbcd_principals": allowed_principals,
+            "rbcd_sid_strings": sid_strings,
+            "delegate_targets": delegate_targets,
+            "delegate_present": bool(delegate_targets),
+            "trusted_to_auth": bool(attr_dict.get("TrustedToAuthForDelegation")),
+            "trusted_for_delegation": bool(attr_dict.get("TrustedForDelegation")),
+        }
+    finally:
+        connection.unbind()
+
+
 def validate_host_kerberos_setup(
     hosts: List[str],
     realm: Optional[str] = None,
@@ -491,8 +845,13 @@ def validate_host_kerberos_setup(
                 )
                 continue
 
+            directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
+
             delegation_check = _check_cluster_delegation(
-                cluster_name, cluster_hosts, realm
+                cluster_name,
+                cluster_hosts,
+                realm,
+                cluster_directory_info=directory_info,
             )
             if delegation_check[0] is False:
                 error_msg = f"Cluster '{cluster_name}': {delegation_check[1]}"
@@ -506,7 +865,10 @@ def validate_host_kerberos_setup(
                 logger.info("Cluster '%s': Delegation validated", cluster_name)
 
             delegation_targets_check = _check_cluster_allowed_to_delegate(
-                cluster_name, cluster_hosts, realm
+                cluster_name,
+                cluster_hosts,
+                realm,
+                cluster_directory_info=directory_info,
             )
             if delegation_targets_check[0] is False:
                 error_msg = (
@@ -684,9 +1046,14 @@ def _find_missing_delegation_hosts(
     return missing_hosts
 
 
-def _check_cluster_delegation(cluster_name: str, cluster_hosts: List[str], realm: Optional[str] = None) -> Tuple[Optional[bool], str]:
-    """
-    Check if Resource-Based Constrained Delegation (RBCD) is configured for a cluster.
+def _check_cluster_delegation(
+    cluster_name: str,
+    cluster_hosts: List[str],
+    realm: Optional[str] = None,
+    *,
+    cluster_directory_info: Optional[Dict[str, object]] = None,
+) -> Tuple[Optional[bool], str]:
+    """Check if Resource-Based Constrained Delegation (RBCD) is configured for a cluster.
 
     RBCD should be configured on the cluster name object (CNO) to allow the Hyper-V hosts
     to delegate credentials when performing double-hop operations (e.g., accessing shared storage).
@@ -702,222 +1069,117 @@ def _check_cluster_delegation(cluster_name: str, cluster_hosts: List[str], realm
         - False: RBCD confirmed absent or misconfigured
         - None: Unable to determine
     """
-    try:
-        # Check if the cluster object has msDS-AllowedToActOnBehalfOfOtherIdentity configured
-        # This is the RBCD attribute that allows the Hyper-V hosts to delegate on behalf of the cluster
-        ps_script = f"""
-        try {{
-            $cluster = Get-ADComputer -Identity '{cluster_name}' -Properties 'msDS-AllowedToActOnBehalfOfOtherIdentity' -ErrorAction Stop
-            
-            if ($cluster.'msDS-AllowedToActOnBehalfOfOtherIdentity') {{
-                # RBCD is configured - verify it includes the cluster hosts
-                $rbcdACL = $cluster.'msDS-AllowedToActOnBehalfOfOtherIdentity'
-                $securityDescriptor = New-Object System.DirectoryServices.ActiveDirectorySecurity
-                $securityDescriptor.SetSecurityDescriptorBinaryForm($rbcdACL)
-                
-                $allowedPrincipals = @()
-                foreach ($ace in $securityDescriptor.Access) {{
-                    if ($ace.AccessControlType -eq 'Allow') {{
-                        $allowedPrincipals += $ace.IdentityReference.Value
-                    }}
-                }}
-                
-                Write-Output "RBCD_CONFIGURED"
-                Write-Output "Principals: $($allowedPrincipals -join ', ')"
-            }} else {{
-                Write-Output "NO_RBCD"
-            }}
-        }} catch {{
-            Write-Output "ERROR: $($_.Exception.Message)"
-        }}
-        """
 
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_script],
-            capture_output=True,
-            text=True,
-            timeout=20,
+    if cluster_directory_info is None:
+        cluster_directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
+
+    if cluster_directory_info is None:
+        return (
+            None,
+            "RBCD check skipped (LDAP connection unavailable)",
         )
 
-        if result.returncode == 0:
-            output = result.stdout.strip()
-            if "RBCD_CONFIGURED" in output:
-                principals_info = ""
-                allowed_principals: List[str] = []
-                for line in output.splitlines():
-                    if line.startswith("Principals:"):
-                        principals_info = f" ({line})"
-                        principal_values = line.split(":", 1)[1].strip() if ":" in line else ""
-                        if principal_values:
-                            allowed_principals = [
-                                principal.strip()
-                                for principal in principal_values.split(",")
-                                if principal.strip()
-                            ]
-                        break
+    if not cluster_directory_info.get("exists", True):
+        return (
+            False,
+            f"Cluster object '{cluster_name}' not found in Active Directory. "
+            "Ensure the cluster is properly configured and the cluster name object exists.",
+        )
 
-                missing_hosts = _find_missing_delegation_hosts(
-                    cluster_hosts, allowed_principals, realm
-                )
+    if not cluster_directory_info.get("rbcd_present"):
+        return (
+            False,
+            f"No Resource-Based Constrained Delegation (RBCD) configured on cluster object. "
+            f"Configure RBCD on the cluster name object '{cluster_name}' to allow Hyper-V hosts "
+            f"({', '.join(cluster_hosts)}) to delegate credentials for double-hop authentication.",
+        )
 
-                if missing_hosts:
-                    missing_display = ", ".join(sorted(missing_hosts))
-                    message = (
-                        "Resource-Based Constrained Delegation (RBCD) configured but missing "
-                        f"delegation entries for hosts: {missing_display}. Add the Hyper-V "
-                        "computer accounts to the msDS-AllowedToActOnBehalfOfOtherIdentity ACL "
-                        "on the cluster name object."
-                    )
-                    if principals_info:
-                        message = f"{message}{principals_info}"
-                    return (False, message)
+    allowed_principals = (
+        cluster_directory_info.get("rbcd_principals")
+        or cluster_directory_info.get("rbcd_sid_strings")
+        or []
+    )
+    allowed_principals_list = [
+        str(principal) for principal in allowed_principals if principal
+    ]
+    principals_info = ""
+    if allowed_principals_list:
+        principals_info = f" (Principals: {', '.join(allowed_principals_list)})"
 
-                return (
-                    True,
-                    f"Resource-Based Constrained Delegation (RBCD) configured{principals_info}",
-                )
-            elif "NO_RBCD" in output:
-                return (
-                    False,
-                    f"No Resource-Based Constrained Delegation (RBCD) configured on cluster object. "
-                    f"Configure RBCD on the cluster name object '{cluster_name}' to allow Hyper-V hosts "
-                    f"({', '.join(cluster_hosts)}) to delegate credentials for double-hop authentication."
-                )
-            elif "ERROR:" in output:
-                error_msg = output.replace("ERROR:", "").strip()
-                # Check if it's a "not found" error
-                if "cannot be found" in error_msg.lower() or "not found" in error_msg.lower():
-                    return (
-                        False,
-                        f"Cluster object '{cluster_name}' not found in Active Directory. "
-                        f"Ensure the cluster is properly configured and the cluster name object exists."
-                    )
-                logger.debug("Delegation check error for cluster '%s': %s", cluster_name, error_msg)
-                return (None, f"Unable to check RBCD: {error_msg}")
-            else:
-                logger.debug("Unexpected delegation check output for cluster '%s': %s", cluster_name, output)
-                return (None, "Unable to determine RBCD status (unexpected output)")
-        else:
-            # PowerShell command failed
-            logger.debug("Delegation check failed for cluster '%s': %s", cluster_name, result.stderr)
-            return (None, "Unable to check RBCD (AD PowerShell module may not be available)")
+    missing_hosts = _find_missing_delegation_hosts(
+        cluster_hosts, allowed_principals_list, realm
+    )
 
-    except FileNotFoundError:
-        # PowerShell not available (not on Windows)
-        logger.debug("PowerShell not available - skipping delegation check for cluster '%s'", cluster_name)
-        return (None, "RBCD check skipped (PowerShell not available)")
-    except subprocess.TimeoutExpired:
-        logger.warning("Delegation check timed out for cluster '%s'", cluster_name)
-        return (None, "RBCD check timed out")
-    except Exception as exc:
-        logger.debug("Delegation check failed for cluster '%s': %s", cluster_name, exc)
-        return (None, f"Unable to check RBCD: {exc}")
+    if missing_hosts:
+        missing_display = ", ".join(sorted(missing_hosts))
+        message = (
+            "Resource-Based Constrained Delegation (RBCD) configured but missing "
+            f"delegation entries for hosts: {missing_display}. Add the Hyper-V "
+            "computer accounts to the msDS-AllowedToActOnBehalfOfOtherIdentity ACL "
+            "on the cluster name object."
+        )
+        if principals_info:
+            message = f"{message}{principals_info}"
+        return (False, message)
+
+    return (
+        True,
+        f"Resource-Based Constrained Delegation (RBCD) configured{principals_info}",
+    )
 
 
 def _check_cluster_allowed_to_delegate(
     cluster_name: str,
     cluster_hosts: List[str],
     realm: Optional[str] = None,
+    *,
+    cluster_directory_info: Optional[Dict[str, object]] = None,
 ) -> Tuple[Optional[bool], str]:
     """Validate that the cluster computer object can delegate to required SPNs."""
 
     host_hint = ", ".join(cluster_hosts) if cluster_hosts else "configured Hyper-V hosts"
 
-    try:
-        ps_script = f"""
-        try {{
-            $cluster = Get-ADComputer -Identity '{cluster_name}' -Properties 'msDS-AllowedToDelegateTo' -ErrorAction Stop
-            $targets = $cluster.'msDS-AllowedToDelegateTo'
+    if cluster_directory_info is None:
+        cluster_directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
 
-            if ($targets -and $targets.Count -gt 0) {{
-                Write-Output "DELEGATION_TARGETS"
-                Write-Output "Targets: $($targets -join ', ')"
-            }} else {{
-                Write-Output "NO_DELEGATION_TARGETS"
-            }}
-        }} catch {{
-            Write-Output "ERROR: $($_.Exception.Message)"
-        }}
-        """
-
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_script],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-
-        if result.returncode == 0:
-            output = result.stdout.strip()
-            if "NO_DELEGATION_TARGETS" in output:
-                return (
-                    False,
-                    "Cluster computer object is missing msDS-AllowedToDelegateTo entries. "
-                    f"Grant delegation to the Hyper-V hosts ({host_hint}) so migration "
-                    "operations can perform double-hop authentication.",
-                )
-            if "DELEGATION_TARGETS" in output:
-                details = ""
-                for line in output.splitlines():
-                    if line.startswith("Targets:"):
-                        details = f" ({line})"
-                        break
-                return (True, f"msDS-AllowedToDelegateTo configured{details}")
-            if "ERROR:" in output:
-                error_msg = output.replace("ERROR:", "").strip()
-                lowered = error_msg.lower()
-                if "cannot be found" in lowered or "not found" in lowered:
-                    return (
-                        False,
-                        f"Cluster object '{cluster_name}' not found in Active Directory. "
-                        "Ensure the cluster name object exists before configuring delegation.",
-                    )
-                logger.debug(
-                    "Allowed-to-delegate check error for cluster '%s': %s",
-                    cluster_name,
-                    error_msg,
-                )
-                return (None, f"Unable to check msDS-AllowedToDelegateTo: {error_msg}")
-
-            logger.debug(
-                "Unexpected allowed-to-delegate output for cluster '%s': %s",
-                cluster_name,
-                output,
-            )
-            return (None, "Unable to determine msDS-AllowedToDelegateTo status (unexpected output)")
-
-        logger.debug(
-            "Allowed-to-delegate check failed for cluster '%s': %s",
-            cluster_name,
-            result.stderr,
-        )
+    if cluster_directory_info is None:
         return (
             None,
-            "Unable to inspect msDS-AllowedToDelegateTo (AD PowerShell module may not be available)",
+            "msDS-AllowedToDelegateTo check skipped (LDAP connection unavailable)",
         )
 
-    except FileNotFoundError:
-        logger.debug(
-            "PowerShell not available - skipping allowed-to-delegate check for cluster '%s'",
-            cluster_name,
+    if not cluster_directory_info.get("exists", True):
+        return (
+            False,
+            f"Cluster object '{cluster_name}' not found in Active Directory. "
+            "Ensure the cluster name object exists before configuring delegation.",
         )
-        return (None, "msDS-AllowedToDelegateTo check skipped (PowerShell not available)")
-    except subprocess.TimeoutExpired:
-        logger.warning(
-            "Allowed-to-delegate check timed out for cluster '%s'",
-            cluster_name,
-        )
-        return (None, "msDS-AllowedToDelegateTo check timed out")
-    except Exception as exc:
-        logger.debug(
-            "Allowed-to-delegate check failed for cluster '%s': %s",
-            cluster_name,
-            exc,
-        )
-        return (None, f"Unable to inspect msDS-AllowedToDelegateTo: {exc}")
+
+    delegate_targets = [
+        str(target)
+        for target in cluster_directory_info.get("delegate_targets", [])
+        if target
+    ]
+    if cluster_directory_info.get("delegate_present"):
+        details = ""
+        if delegate_targets:
+            details = f" (Targets: {', '.join(delegate_targets)})"
+        return (True, f"msDS-AllowedToDelegateTo configured{details}")
+
+    return (
+        False,
+        "Cluster computer object is missing msDS-AllowedToDelegateTo entries. "
+        f"Grant delegation to the Hyper-V hosts ({host_hint}) so migration "
+        "operations can perform double-hop authentication.",
+    )
 
 
-def _check_host_delegation_legacy(host: str, realm: Optional[str] = None) -> Tuple[Optional[bool], str]:
+def _check_host_delegation_legacy(
+    host: str,
+    realm: Optional[str] = None,
+    *,
+    directory_info: Optional[Dict[str, object]] = None,
+) -> Tuple[Optional[bool], str]:
     """
     Check if delegation is configured for a host (LEGACY - not used for cluster validation).
 
@@ -936,61 +1198,41 @@ def _check_host_delegation_legacy(host: str, realm: Optional[str] = None) -> Tup
         - False: Delegation confirmed absent
         - None: Unable to determine
     """
-    try:
-        # Try to get delegation info using PowerShell Get-ADComputer
-        # This requires Active Directory PowerShell module
-        ps_script = f"""
-        $computer = Get-ADComputer -Identity '{host}' -Properties TrustedForDelegation, TrustedToAuthForDelegation, msDS-AllowedToDelegateTo
-        if ($computer.TrustedToAuthForDelegation -or $computer.TrustedForDelegation -or $computer.'msDS-AllowedToDelegateTo') {{
-            Write-Output "DELEGATION_CONFIGURED"
-            if ($computer.'msDS-AllowedToDelegateTo') {{
-                Write-Output "RBCD: $($computer.'msDS-AllowedToDelegateTo' -join ', ')"
-            }}
-        }} else {{
-            Write-Output "NO_DELEGATION"
-        }}
-        """
+    if directory_info is None:
+        directory_info = _ldap_get_computer_delegation_info(host, realm)
 
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_script],
-            capture_output=True,
-            text=True,
-            timeout=20,
+    if directory_info is None:
+        return (
+            None,
+            "Delegation check skipped (LDAP connection unavailable)",
         )
 
-        if result.returncode == 0:
-            output = result.stdout.strip()
-            if "DELEGATION_CONFIGURED" in output:
-                # Extract RBCD info if available
-                rbcd_info = ""
-                for line in output.splitlines():
-                    if line.startswith("RBCD:"):
-                        rbcd_info = f" ({line})"
-                return (True, f"Delegation configured{rbcd_info}")
-            elif "NO_DELEGATION" in output:
-                return (
-                    False,
-                    f"No delegation configured. Set up Resource-Based Constrained Delegation (RBCD) "
-                    f"for double-hop authentication."
-                )
-            else:
-                logger.debug("Unexpected delegation check output: %s", output)
-                return (None, "Unable to determine delegation status (unexpected output)")
-        else:
-            # PowerShell command failed - likely Get-ADComputer not available
-            logger.debug("Delegation check failed: %s", result.stderr)
-            return (None, "Unable to check delegation (AD PowerShell module may not be available)")
+    if not directory_info.get("exists", True):
+        return (
+            False,
+            f"Computer object '{host}' not found in Active Directory. Ensure the host exists before configuring delegation.",
+        )
 
-    except FileNotFoundError:
-        # PowerShell not available (not on Windows)
-        logger.debug("PowerShell not available - skipping delegation check")
-        return (None, "Delegation check skipped (PowerShell not available)")
-    except subprocess.TimeoutExpired:
-        logger.warning("Delegation check timed out for %s", host)
-        return (None, "Delegation check timed out")
-    except Exception as exc:
-        logger.debug("Delegation check failed: %s", exc)
-        return (None, f"Unable to check delegation: {exc}")
+    trusted_to_auth = bool(directory_info.get("trusted_to_auth"))
+    trusted_for = bool(directory_info.get("trusted_for_delegation"))
+    delegate_present = bool(directory_info.get("delegate_present"))
+    delegate_targets = [
+        str(target)
+        for target in directory_info.get("delegate_targets", [])
+        if target
+    ]
+
+    if trusted_to_auth or trusted_for or delegate_present:
+        rbcd_info = ""
+        if delegate_present and delegate_targets:
+            rbcd_info = f" (RBCD: {', '.join(delegate_targets)})"
+        return (True, f"Delegation configured{rbcd_info}")
+
+    return (
+        False,
+        "No delegation configured. Set up Resource-Based Constrained Delegation (RBCD) "
+        "for double-hop authentication.",
+    )
 
 
 __all__ = [

@@ -1,6 +1,7 @@
 """Unit tests for Kerberos manager service."""
 
 import base64
+import copy
 import os
 import subprocess
 import sys
@@ -302,10 +303,24 @@ def test_check_wsman_spn_reports_missing_tools(monkeypatch):
 def test_check_cluster_delegation_reports_missing_rbcd(monkeypatch):
     """Cluster delegation without RBCD should return False and guidance."""
 
-    stdout = "NO_RBCD"
+    info = {
+        "exists": True,
+        "rbcd_present": False,
+        "rbcd_principals": [],
+        "rbcd_sid_strings": [],
+        "delegate_targets": [],
+        "delegate_present": False,
+        "trusted_to_auth": False,
+        "trusted_for_delegation": False,
+    }
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda name, realm=None: copy.deepcopy(info),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run",
-        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
     )
 
     success, message = _check_cluster_delegation("ClusterA", ["hv1"], realm="EXAMPLE.COM")
@@ -317,10 +332,24 @@ def test_check_cluster_delegation_reports_missing_rbcd(monkeypatch):
 def test_check_cluster_delegation_flags_missing_hosts(monkeypatch):
     """When a cluster host lacks delegation it should be reported as an error."""
 
-    stdout = "RBCD_CONFIGURED\nPrincipals: CONTOSO\\HV1$, CONTOSO\\HV2$"
+    info = {
+        "exists": True,
+        "rbcd_present": True,
+        "rbcd_principals": ["CONTOSO\\HV1$", "CONTOSO\\HV2$"],
+        "rbcd_sid_strings": [],
+        "delegate_targets": [],
+        "delegate_present": False,
+        "trusted_to_auth": False,
+        "trusted_for_delegation": False,
+    }
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda name, realm=None: copy.deepcopy(info),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run",
-        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
     )
 
     success, message = _check_cluster_delegation(
@@ -335,10 +364,24 @@ def test_check_cluster_delegation_flags_missing_hosts(monkeypatch):
 def test_check_cluster_delegation_success_when_all_hosts_present(monkeypatch):
     """Delegation succeeds when every cluster host is represented in the ACL."""
 
-    stdout = "RBCD_CONFIGURED\nPrincipals: CONTOSO\\HV1$, WSMAN/hv2.contoso.com"
+    info = {
+        "exists": True,
+        "rbcd_present": True,
+        "rbcd_principals": ["CONTOSO\\HV1$", "WSMAN/hv2.contoso.com"],
+        "rbcd_sid_strings": [],
+        "delegate_targets": [],
+        "delegate_present": False,
+        "trusted_to_auth": False,
+        "trusted_for_delegation": False,
+    }
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda name, realm=None: copy.deepcopy(info),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run",
-        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
     )
 
     success, message = _check_cluster_delegation(
@@ -352,10 +395,15 @@ def test_check_cluster_delegation_success_when_all_hosts_present(monkeypatch):
 def test_check_cluster_delegation_not_found(monkeypatch):
     """Missing cluster objects should produce an actionable error."""
 
-    stdout = "ERROR: Cannot be found"
+    info = {"exists": False}
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda name, realm=None: copy.deepcopy(info),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run",
-        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
     )
 
     success, message = _check_cluster_delegation("ClusterMissing", ["hv1"], realm="EXAMPLE.COM")
@@ -364,27 +412,43 @@ def test_check_cluster_delegation_not_found(monkeypatch):
     assert "not found" in message.lower()
 
 
-def test_check_cluster_delegation_skips_when_powershell_missing(monkeypatch):
-    """FileNotFoundError should indicate the check was skipped."""
+def test_check_cluster_delegation_skips_when_ldap_unavailable(monkeypatch):
+    """LDAP connectivity issues should cause the check to be skipped."""
 
     monkeypatch.setattr(
-        "app.services.kerberos_manager.subprocess.run",
-        MagicMock(side_effect=FileNotFoundError),
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda *args, **kwargs: None,
     )
 
     success, message = _check_cluster_delegation("ClusterA", ["hv1"], realm="EXAMPLE.COM")
 
     assert success is None
-    assert "skipped" in message.lower()
+    lowered = message.lower()
+    assert "skipped" in lowered
+    assert "ldap" in lowered
 
 
 def test_check_cluster_allowed_to_delegate_success(monkeypatch):
     """Delegation targets should report success with details."""
 
-    stdout = "DELEGATION_TARGETS\nTargets: WSMAN/hv1"
+    info = {
+        "exists": True,
+        "rbcd_present": True,
+        "rbcd_principals": [],
+        "rbcd_sid_strings": [],
+        "delegate_targets": ["WSMAN/hv1"],
+        "delegate_present": True,
+        "trusted_to_auth": False,
+        "trusted_for_delegation": False,
+    }
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda name, realm=None: copy.deepcopy(info),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run",
-        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
     )
 
     success, message = _check_cluster_allowed_to_delegate("ClusterA", ["hv1"], realm="EXAMPLE.COM")
@@ -396,10 +460,15 @@ def test_check_cluster_allowed_to_delegate_success(monkeypatch):
 def test_check_cluster_allowed_to_delegate_not_found(monkeypatch):
     """Not found errors should return False for delegation targets."""
 
-    stdout = "ERROR: Object cannot be found"
+    info = {"exists": False}
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda name, realm=None: copy.deepcopy(info),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run",
-        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
     )
 
     success, message = _check_cluster_allowed_to_delegate("ClusterMissing", [], realm="EXAMPLE.COM")
@@ -411,10 +480,24 @@ def test_check_cluster_allowed_to_delegate_not_found(monkeypatch):
 def test_check_host_delegation_legacy_reports_missing(monkeypatch):
     """Legacy host delegation should report when delegation is absent."""
 
-    stdout = "NO_DELEGATION"
+    info = {
+        "exists": True,
+        "rbcd_present": False,
+        "rbcd_principals": [],
+        "rbcd_sid_strings": [],
+        "delegate_targets": [],
+        "delegate_present": False,
+        "trusted_to_auth": False,
+        "trusted_for_delegation": False,
+    }
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda name, realm=None: copy.deepcopy(info),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run",
-        MagicMock(return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")),
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
     )
 
     success, message = _check_host_delegation_legacy("hyperv01")
@@ -651,19 +734,30 @@ def test_credential_acquisition_failure(kerberos_manager):
 def test_validate_host_kerberos_setup_reports_missing_cluster_delegation(monkeypatch):
     """Missing msDS-AllowedToDelegateTo entries should be reported as errors."""
 
-    def fake_run(cmd, capture_output=True, text=True, timeout=20):
-        script = cmd[-1]
-        if "msDS-AllowedToActOnBehalfOfOtherIdentity" in script:
-            return MagicMock(
-                returncode=0,
-                stdout="RBCD_CONFIGURED\nPrincipals: CONTOSO\\HYPERV01$",
-                stderr="",
-            )
-        if "msDS-AllowedToDelegateTo" in script:
-            return MagicMock(returncode=0, stdout="NO_DELEGATION_TARGETS", stderr="")
-        raise AssertionError(f"Unexpected command: {cmd}")
+    cluster_info = {
+        "exists": True,
+        "rbcd_present": True,
+        "rbcd_principals": ["CONTOSO\\HYPERV01$"],
+        "rbcd_sid_strings": [],
+        "delegate_targets": [],
+        "delegate_present": False,
+        "trusted_to_auth": False,
+        "trusted_for_delegation": False,
+    }
 
-    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+    def fake_ldap(name, realm=None):
+        if name == "ClusterA":
+            return copy.deepcopy(cluster_info)
+        return None
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        fake_ldap,
+    )
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager._check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
@@ -684,23 +778,25 @@ def test_validate_host_kerberos_setup_reports_missing_cluster_delegation(monkeyp
 def test_validate_host_kerberos_setup_succeeds_with_delegation(monkeypatch):
     """Delegation checks should pass when targets are configured."""
 
-    def fake_run(cmd, capture_output=True, text=True, timeout=20):
-        script = cmd[-1]
-        if "msDS-AllowedToActOnBehalfOfOtherIdentity" in script:
-            return MagicMock(
-                returncode=0,
-                stdout="RBCD_CONFIGURED\nPrincipals: CONTOSO\\HYPERV01$",
-                stderr="",
-            )
-        if "msDS-AllowedToDelegateTo" in script:
-            return MagicMock(
-                returncode=0,
-                stdout="DELEGATION_TARGETS\nTargets: WSMAN/hyperv01",
-                stderr="",
-            )
-        raise AssertionError(f"Unexpected command: {cmd}")
+    cluster_info = {
+        "exists": True,
+        "rbcd_present": True,
+        "rbcd_principals": ["CONTOSO\\HYPERV01$"],
+        "rbcd_sid_strings": [],
+        "delegate_targets": ["WSMAN/hyperv01"],
+        "delegate_present": True,
+        "trusted_to_auth": False,
+        "trusted_for_delegation": False,
+    }
 
-    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        lambda name, realm=None: copy.deepcopy(cluster_info) if name == "ClusterA" else None,
+    )
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run",
+        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager._check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
