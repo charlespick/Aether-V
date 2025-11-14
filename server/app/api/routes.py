@@ -3,6 +3,7 @@ import asyncio
 import base64
 import json
 import logging
+import traceback
 import secrets
 import uuid
 import zlib
@@ -950,9 +951,10 @@ async def get_auth_token(request: Request):
             except Exception as e:
                 # Session is invalid, clear it
                 request.session.pop("user_info", None)
+                # Log the stack trace for debugging, but do not return details to the user
+                logger.error("Exception during session validation:\n%s", traceback.format_exc())
                 response_data = {"authenticated": False,
-                                 "reason": f"Session error: {str(e)}"}
-
+                                 "reason": "Session error"}
     # Create response with cache control headers
     response = Response(
         content=json.dumps(response_data),
