@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Set
 
 import gssapi
 import gssapi.raw as gssapi_raw
@@ -599,6 +599,91 @@ def _check_wsman_spn(host: str, realm: Optional[str] = None) -> Tuple[bool, str]
         return (False, f"WSMAN SPN check failed: {exc}")
 
 
+def _normalize_principal_tokens(principal: str) -> Set[str]:
+    """Return a set of comparable tokens derived from an allowed principal entry."""
+
+    tokens: Set[str] = set()
+    queue: List[str] = []
+
+    if principal:
+        queue.append(principal.strip().lower())
+
+    while queue:
+        current = queue.pop()
+        if not current or current in tokens:
+            continue
+
+        tokens.add(current)
+
+        if "\\" in current:
+            queue.append(current.split("\\", 1)[1])
+        if "/" in current:
+            queue.append(current.split("/", 1)[1])
+        if "@" in current:
+            queue.append(current.split("@", 1)[0])
+        if current.endswith("$"):
+            queue.append(current[:-1])
+        if "." in current:
+            queue.append(current.split(".", 1)[0])
+
+    return tokens
+
+
+def _normalize_host_tokens(host: str, realm: Optional[str]) -> Set[str]:
+    """Return a set of expected tokens for a Hyper-V host entry."""
+
+    tokens: Set[str] = set()
+
+    if not host:
+        return tokens
+
+    host_lower = host.strip().lower()
+    if not host_lower:
+        return tokens
+
+    short_name = host_lower.split(".", 1)[0]
+    realm_lower = realm.lower() if realm else None
+
+    candidates = {
+        host_lower,
+        short_name,
+        f"{short_name}$",
+    }
+
+    if realm_lower:
+        candidates.update(
+            {
+                f"{short_name}$@{realm_lower}",
+                f"{short_name}@{realm_lower}",
+            }
+        )
+
+    tokens.update(candidate for candidate in candidates if candidate)
+
+    return tokens
+
+
+def _find_missing_delegation_hosts(
+    cluster_hosts: List[str], allowed_principals: List[str], realm: Optional[str]
+) -> List[str]:
+    """Identify cluster hosts that do not have delegation entries configured."""
+
+    if not cluster_hosts:
+        return []
+
+    allowed_tokens: Set[str] = set()
+    for principal in allowed_principals:
+        allowed_tokens.update(_normalize_principal_tokens(principal))
+
+    missing_hosts: List[str] = []
+    for host in cluster_hosts:
+        host_tokens = _normalize_host_tokens(host, realm)
+        if not host_tokens or allowed_tokens.isdisjoint(host_tokens):
+            missing_hosts.append(host)
+
+    return missing_hosts
+
+
 def _check_cluster_delegation(cluster_name: str, cluster_hosts: List[str], realm: Optional[str] = None) -> Tuple[Optional[bool], str]:
     """
     Check if Resource-Based Constrained Delegation (RBCD) is configured for a cluster.
@@ -657,12 +742,40 @@ def _check_cluster_delegation(cluster_name: str, cluster_hosts: List[str], realm
         if result.returncode == 0:
             output = result.stdout.strip()
             if "RBCD_CONFIGURED" in output:
-                # Extract principals info if available
                 principals_info = ""
+                allowed_principals: List[str] = []
                 for line in output.splitlines():
                     if line.startswith("Principals:"):
                         principals_info = f" ({line})"
-                return (True, f"Resource-Based Constrained Delegation (RBCD) configured{principals_info}")
+                        principal_values = line.split(":", 1)[1].strip() if ":" in line else ""
+                        if principal_values:
+                            allowed_principals = [
+                                principal.strip()
+                                for principal in principal_values.split(",")
+                                if principal.strip()
+                            ]
+                        break
+
+                missing_hosts = _find_missing_delegation_hosts(
+                    cluster_hosts, allowed_principals, realm
+                )
+
+                if missing_hosts:
+                    missing_display = ", ".join(sorted(missing_hosts))
+                    message = (
+                        "Resource-Based Constrained Delegation (RBCD) configured but missing "
+                        f"delegation entries for hosts: {missing_display}. Add the Hyper-V "
+                        "computer accounts to the msDS-AllowedToActOnBehalfOfOtherIdentity ACL "
+                        "on the cluster name object."
+                    )
+                    if principals_info:
+                        message = f"{message}{principals_info}"
+                    return (False, message)
+
+                return (
+                    True,
+                    f"Resource-Based Constrained Delegation (RBCD) configured{principals_info}",
+                )
             elif "NO_RBCD" in output:
                 return (
                     False,
