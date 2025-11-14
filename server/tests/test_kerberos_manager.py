@@ -91,9 +91,10 @@ def test_kerberos_manager_writes_keytab(kerberos_manager):
                             
                             # Verify keytab was written via os.write
                             assert mock_write.call_count == 1
-                            # Verify permissions were set to 600
+                            # Verify keytab permissions were set to 600
                             mock_keytab_path.chmod.assert_called_once_with(0o600)
-                            mock_cache_path.chmod.assert_called_once_with(0o600)
+                            # Verify cache path empty file was removed (to allow GSSAPI to create it)
+                            mock_cache_path.unlink.assert_called_once()
 
 
 def test_kerberos_manager_invalid_base64():
@@ -128,9 +129,12 @@ def test_kerberos_manager_cleanup(kerberos_manager):
                             kerberos_manager.initialize()
                             kerberos_manager.cleanup()
                             
-                            # Verify both keytab and cache were removed
+                            # Verify keytab was removed
                             mock_keytab_path.unlink.assert_called_once()
-                            mock_cache_path.unlink.assert_called_once()
+                            # Verify cache path was removed twice:
+                            # 1. During init (remove empty file created by mkstemp)
+                            # 2. During cleanup (remove cache file created by GSSAPI)
+                            assert mock_cache_path.unlink.call_count == 2
                             assert not kerberos_manager.is_initialized
 
 
