@@ -34,7 +34,15 @@ class KerberosManager:
         """
         self.principal = principal
         self.keytab_b64 = keytab_b64
-        self.realm = realm
+        # Auto-detect realm from principal if not explicitly provided
+        if realm:
+            self.realm = realm
+        elif "@" in principal:
+            # Extract realm from principal (e.g., "user@REALM" -> "REALM")
+            self.realm = principal.split("@", 1)[1]
+            logger.debug("Auto-detected realm '%s' from principal", self.realm)
+        else:
+            self.realm = None
         self.kdc = kdc
         self._keytab_path: Optional[Path] = None
         self._cache_path: Optional[Path] = None
@@ -370,22 +378,32 @@ def cleanup_kerberos() -> None:
         _kerberos_manager = None
 
 
-def validate_host_kerberos_setup(hosts: List[str], realm: Optional[str] = None) -> Dict[str, List[str]]:
+def validate_host_kerberos_setup(
+    hosts: List[str], 
+    realm: Optional[str] = None,
+    clusters: Optional[Dict[str, List[str]]] = None
+) -> Dict[str, List[str]]:
     """
-    Validate Kerberos setup for configured Hyper-V hosts.
+    Validate Kerberos setup for configured Hyper-V hosts and clusters.
 
     Checks:
     1. WSMAN SPN exists for each host
-    2. Delegation is configured for each host (if possible to check)
+    2. Resource-Based Constrained Delegation (RBCD) is configured on cluster objects
 
     Args:
         hosts: List of hostnames to validate
-        realm: Kerberos realm (optional)
+        realm: Kerberos realm (optional, auto-detected from principal if not provided)
+        clusters: Optional dict mapping cluster names to list of member hostnames
 
     Returns:
-        Dictionary with 'errors' and 'warnings' lists containing validation messages
+        Dictionary with 'errors', 'warnings', 'spn_errors', and 'delegation_errors' lists
     """
-    result = {"errors": [], "warnings": []}
+    result = {
+        "errors": [], 
+        "warnings": [], 
+        "spn_errors": [],
+        "delegation_errors": []
+    }
 
     if not hosts:
         result["warnings"].append("No Hyper-V hosts configured to validate")
@@ -393,23 +411,38 @@ def validate_host_kerberos_setup(hosts: List[str], realm: Optional[str] = None) 
 
     logger.info("Validating Kerberos setup for %d host(s)", len(hosts))
 
+    # Check WSMAN SPNs for all hosts
     for host in hosts:
-        # Check WSMAN SPN
         spn_check = _check_wsman_spn(host, realm)
         if not spn_check[0]:
-            result["errors"].append(f"Host '{host}': {spn_check[1]}")
+            error_msg = f"Host '{host}': {spn_check[1]}"
+            result["errors"].append(error_msg)
+            result["spn_errors"].append(error_msg)
         else:
             logger.info("Host '%s': WSMAN SPN validated", host)
 
-        # Check delegation (best effort)
-        delegation_check = _check_host_delegation(host, realm)
-        if delegation_check[0] is False:
-            result["errors"].append(f"Host '{host}': {delegation_check[1]}")
-        elif delegation_check[0] is None:
-            # Could not determine - add warning
-            result["warnings"].append(f"Host '{host}': {delegation_check[1]}")
-        else:
-            logger.info("Host '%s': Delegation validated", host)
+    # Check delegation on cluster objects (if clusters provided)
+    if clusters:
+        logger.info("Checking delegation for %d cluster(s)", len(clusters))
+        for cluster_name, cluster_hosts in clusters.items():
+            # Skip "Default" cluster (represents hosts not in a cluster)
+            if cluster_name == "Default":
+                logger.debug("Skipping delegation check for 'Default' cluster (non-clustered hosts)")
+                continue
+                
+            delegation_check = _check_cluster_delegation(cluster_name, cluster_hosts, realm)
+            if delegation_check[0] is False:
+                error_msg = f"Cluster '{cluster_name}': {delegation_check[1]}"
+                result["errors"].append(error_msg)
+                result["delegation_errors"].append(error_msg)
+            elif delegation_check[0] is None:
+                # Could not determine - add warning
+                warning_msg = f"Cluster '{cluster_name}': {delegation_check[1]}"
+                result["warnings"].append(warning_msg)
+            else:
+                logger.info("Cluster '%s': Delegation validated", cluster_name)
+    else:
+        logger.debug("No cluster information provided; skipping delegation checks")
 
     return result
 
@@ -484,9 +517,114 @@ def _check_wsman_spn(host: str, realm: Optional[str] = None) -> Tuple[bool, str]
         return (False, f"WSMAN SPN check failed: {exc}")
 
 
-def _check_host_delegation(host: str, realm: Optional[str] = None) -> Tuple[Optional[bool], str]:
+def _check_cluster_delegation(cluster_name: str, cluster_hosts: List[str], realm: Optional[str] = None) -> Tuple[Optional[bool], str]:
     """
-    Check if delegation is configured for a host.
+    Check if Resource-Based Constrained Delegation (RBCD) is configured for a cluster.
+
+    RBCD should be configured on the cluster name object (CNO) to allow the Hyper-V hosts
+    to delegate credentials when performing double-hop operations (e.g., accessing shared storage).
+
+    Args:
+        cluster_name: Name of the cluster
+        cluster_hosts: List of hostnames that are members of this cluster
+        realm: Optional Kerberos realm
+
+    Returns:
+        Tuple of (success: Optional[bool], message: str)
+        - True: RBCD confirmed on cluster object
+        - False: RBCD confirmed absent or misconfigured
+        - None: Unable to determine
+    """
+    try:
+        # Check if the cluster object has msDS-AllowedToActOnBehalfOfOtherIdentity configured
+        # This is the RBCD attribute that allows the Hyper-V hosts to delegate on behalf of the cluster
+        ps_script = f"""
+        try {{
+            $cluster = Get-ADComputer -Identity '{cluster_name}' -Properties 'msDS-AllowedToActOnBehalfOfOtherIdentity' -ErrorAction Stop
+            
+            if ($cluster.'msDS-AllowedToActOnBehalfOfOtherIdentity') {{
+                # RBCD is configured - verify it includes the cluster hosts
+                $rbcdACL = $cluster.'msDS-AllowedToActOnBehalfOfOtherIdentity'
+                $securityDescriptor = New-Object System.DirectoryServices.ActiveDirectorySecurity
+                $securityDescriptor.SetSecurityDescriptorBinaryForm($rbcdACL)
+                
+                $allowedPrincipals = @()
+                foreach ($ace in $securityDescriptor.Access) {{
+                    if ($ace.AccessControlType -eq 'Allow') {{
+                        $allowedPrincipals += $ace.IdentityReference.Value
+                    }}
+                }}
+                
+                Write-Output "RBCD_CONFIGURED"
+                Write-Output "Principals: $($allowedPrincipals -join ', ')"
+            }} else {{
+                Write-Output "NO_RBCD"
+            }}
+        }} catch {{
+            Write-Output "ERROR: $($_.Exception.Message)"
+        }}
+        """
+
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if "RBCD_CONFIGURED" in output:
+                # Extract principals info if available
+                principals_info = ""
+                for line in output.splitlines():
+                    if line.startswith("Principals:"):
+                        principals_info = f" ({line})"
+                return (True, f"Resource-Based Constrained Delegation (RBCD) configured{principals_info}")
+            elif "NO_RBCD" in output:
+                return (
+                    False,
+                    f"No Resource-Based Constrained Delegation (RBCD) configured on cluster object. "
+                    f"Configure RBCD on the cluster name object '{cluster_name}' to allow Hyper-V hosts "
+                    f"({', '.join(cluster_hosts)}) to delegate credentials for double-hop authentication."
+                )
+            elif "ERROR:" in output:
+                error_msg = output.replace("ERROR:", "").strip()
+                # Check if it's a "not found" error
+                if "cannot be found" in error_msg.lower() or "not found" in error_msg.lower():
+                    return (
+                        False,
+                        f"Cluster object '{cluster_name}' not found in Active Directory. "
+                        f"Ensure the cluster is properly configured and the cluster name object exists."
+                    )
+                logger.debug("Delegation check error for cluster '%s': %s", cluster_name, error_msg)
+                return (None, f"Unable to check RBCD: {error_msg}")
+            else:
+                logger.debug("Unexpected delegation check output for cluster '%s': %s", cluster_name, output)
+                return (None, "Unable to determine RBCD status (unexpected output)")
+        else:
+            # PowerShell command failed
+            logger.debug("Delegation check failed for cluster '%s': %s", cluster_name, result.stderr)
+            return (None, "Unable to check RBCD (AD PowerShell module may not be available)")
+
+    except FileNotFoundError:
+        # PowerShell not available (not on Windows)
+        logger.debug("PowerShell not available - skipping delegation check for cluster '%s'", cluster_name)
+        return (None, "RBCD check skipped (PowerShell not available)")
+    except subprocess.TimeoutExpired:
+        logger.warning("Delegation check timed out for cluster '%s'", cluster_name)
+        return (None, "RBCD check timed out")
+    except Exception as exc:
+        logger.debug("Delegation check failed for cluster '%s': %s", cluster_name, exc)
+        return (None, f"Unable to check RBCD: {exc}")
+
+
+def _check_host_delegation_legacy(host: str, realm: Optional[str] = None) -> Tuple[Optional[bool], str]:
+    """
+    Check if delegation is configured for a host (LEGACY - not used for cluster validation).
+
+    This checks the old-style delegation on individual host objects, which is NOT the recommended
+    approach for failover clusters. Use _check_cluster_delegation instead.
 
     This is a best-effort check. Returns None if unable to determine.
 

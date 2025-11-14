@@ -245,6 +245,17 @@ class InventoryService:
             )
         self._slow_hosts.clear()
 
+    async def wait_for_initial_refresh(self) -> bool:
+        """
+        Wait for the initial inventory refresh to complete.
+
+        Returns:
+            True if the initial refresh succeeded, False otherwise
+        """
+        await self._initial_refresh_event.wait()
+        return self._initial_refresh_succeeded
+
+
     async def _initialize_dummy_data(self):
         """Initialize with dummy data for development."""
         logger.info("Initializing dummy data for development")
