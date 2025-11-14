@@ -15,6 +15,30 @@ from app.services.kerberos_manager import (
 )
 
 
+@pytest.fixture(autouse=True)
+def mock_gssapi_components():
+    """Auto-mock gssapi components for all tests in this file."""
+    with patch("app.services.kerberos_manager.gssapi.Name") as mock_name_cls:
+        with patch("app.services.kerberos_manager.gssapi_raw.acquire_cred_from") as mock_acquire:
+            with patch("app.services.kerberos_manager.gssapi.Credentials") as mock_creds_cls:
+                # Mock gssapi.Name to return a mock with .raw attribute
+                mock_name = MagicMock()
+                mock_name.raw = MagicMock()
+                mock_name_cls.return_value = mock_name
+                
+                # Mock acquire_cred_from to return mock credentials
+                mock_raw_creds = MagicMock()
+                mock_raw_creds.creds = MagicMock()
+                mock_acquire.return_value = mock_raw_creds
+                
+                # Mock gssapi.Credentials wrapper
+                mock_creds_instance = MagicMock()
+                mock_creds_instance.lifetime = 86400
+                mock_creds_cls.return_value = mock_creds_instance
+                
+                yield
+
+
 @pytest.fixture
 def sample_keytab_b64():
     """Return a base64-encoded sample keytab."""
@@ -41,12 +65,18 @@ def kerberos_manager(sample_keytab_b64):
 
 def test_kerberos_manager_initialization(kerberos_manager, sample_keytab_b64):
     """Test that KerberosManager initializes correctly."""
-    with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
-        with patch("app.services.kerberos_manager.os.write"):
-            with patch("app.services.kerberos_manager.os.close"):
-                with patch("app.services.kerberos_manager.Path") as mock_path_cls:
-                    with patch("app.services.kerberos_manager.gssapi.Name") as mock_name:
-                        with patch("app.services.kerberos_manager.gssapi.Credentials") as mock_creds:
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
+            with patch("app.services.kerberos_manager.os.write"):
+                with patch("app.services.kerberos_manager.os.close"):
+                    with patch("app.services.kerberos_manager.os.chmod"):
+                        with patch("app.services.kerberos_manager.Path") as mock_path_cls:
+                            # Mock subprocess for klist with correct principal
+                            mock_subprocess.return_value = MagicMock(
+                                returncode=0,
+                                stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 test-user@EXAMPLE.COM\n"
+                            )
+                            
                             # Mock tempfile.mkstemp for keytab and cache
                             mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
                             
@@ -55,31 +85,28 @@ def test_kerberos_manager_initialization(kerberos_manager, sample_keytab_b64):
                             mock_cache_path = MagicMock()
                             mock_path_cls.side_effect = [mock_keytab_path, mock_cache_path]
                             
-                            # Mock gssapi credential acquisition
-                            mock_creds_instance = MagicMock()
-                            mock_creds_instance.lifetime = 86400
-                            mock_creds.return_value = mock_creds_instance
-                            
                             kerberos_manager.initialize()
                             
                             assert kerberos_manager.is_initialized
                             assert kerberos_manager.principal == "test-user@EXAMPLE.COM"
                             assert kerberos_manager.realm == "EXAMPLE.COM"
                             assert kerberos_manager.kdc == "kdc.example.com"
-                            
-                            # Verify gssapi was called
-                            mock_name.assert_called_once()
-                            mock_creds.assert_called_once()
 
 
 def test_kerberos_manager_writes_keytab(kerberos_manager):
     """Test that keytab is written with correct permissions."""
-    with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
-        with patch("app.services.kerberos_manager.os.write") as mock_write:
-            with patch("app.services.kerberos_manager.os.close"):
-                with patch("app.services.kerberos_manager.gssapi.Name"):
-                    with patch("app.services.kerberos_manager.gssapi.Credentials"):
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
+            with patch("app.services.kerberos_manager.os.write") as mock_write:
+                with patch("app.services.kerberos_manager.os.close"):
+                    with patch("app.services.kerberos_manager.os.chmod") as mock_chmod:
                         with patch("app.services.kerberos_manager.Path") as mock_path_cls:
+                            # Mock subprocess for klist with correct principal
+                            mock_subprocess.return_value = MagicMock(
+                                returncode=0,
+                                stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 test-user@EXAMPLE.COM\n"
+                            )
+                            
                             # Mock tempfile.mkstemp
                             mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
                             
@@ -93,9 +120,7 @@ def test_kerberos_manager_writes_keytab(kerberos_manager):
                             # Verify keytab was written via os.write
                             assert mock_write.call_count == 1
                             # Verify keytab permissions were set to 600
-                            mock_keytab_path.chmod.assert_called_once_with(0o600)
-                            # Verify cache path empty file was removed (to allow GSSAPI to create it)
-                            mock_cache_path.unlink.assert_called_once()
+                            assert any(call[0][1] == 0o600 for call in mock_chmod.call_args_list)
 
 
 def test_kerberos_manager_invalid_base64():
@@ -111,12 +136,18 @@ def test_kerberos_manager_invalid_base64():
 
 def test_kerberos_manager_cleanup(kerberos_manager):
     """Test that cleanup removes keytab file."""
-    with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
-        with patch("app.services.kerberos_manager.os.write"):
-            with patch("app.services.kerberos_manager.os.close"):
-                with patch("app.services.kerberos_manager.gssapi.Name"):
-                    with patch("app.services.kerberos_manager.gssapi.Credentials"):
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
+            with patch("app.services.kerberos_manager.os.write"):
+                with patch("app.services.kerberos_manager.os.close"):
+                    with patch("app.services.kerberos_manager.os.chmod"):
                         with patch("app.services.kerberos_manager.Path") as mock_path_cls:
+                            # Mock subprocess for klist with correct principal
+                            mock_subprocess.return_value = MagicMock(
+                                returncode=0,
+                                stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 test-user@EXAMPLE.COM\n"
+                            )
+                            
                             # Mock tempfile.mkstemp
                             mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
                             
@@ -132,21 +163,25 @@ def test_kerberos_manager_cleanup(kerberos_manager):
                             
                             # Verify keytab was removed
                             mock_keytab_path.unlink.assert_called_once()
-                            # Verify cache path was removed twice:
-                            # 1. During init (remove empty file created by mkstemp)
-                            # 2. During cleanup (remove cache file created by GSSAPI)
-                            assert mock_cache_path.unlink.call_count == 2
+                            # Verify cache path was removed
+                            mock_cache_path.unlink.assert_called()
                             assert not kerberos_manager.is_initialized
 
 
 def test_kerberos_manager_double_initialization(kerberos_manager):
     """Test that double initialization is handled correctly."""
-    with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
-        with patch("app.services.kerberos_manager.os.write"):
-            with patch("app.services.kerberos_manager.os.close"):
-                with patch("app.services.kerberos_manager.Path") as mock_path_cls:
-                    with patch("app.services.kerberos_manager.gssapi.Name"):
-                        with patch("app.services.kerberos_manager.gssapi.Credentials"):
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
+            with patch("app.services.kerberos_manager.os.write"):
+                with patch("app.services.kerberos_manager.os.close"):
+                    with patch("app.services.kerberos_manager.os.chmod"):
+                        with patch("app.services.kerberos_manager.Path") as mock_path_cls:
+                            # Mock subprocess for klist with correct principal
+                            mock_subprocess.return_value = MagicMock(
+                                returncode=0,
+                                stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 test-user@EXAMPLE.COM\n"
+                            )
+                            
                             # Mock tempfile.mkstemp
                             mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
                             
@@ -166,12 +201,18 @@ def test_kerberos_manager_double_initialization(kerberos_manager):
 
 def test_global_kerberos_manager_initialize(sample_keytab_b64):
     """Test global Kerberos manager initialization."""
-    with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
-        with patch("app.services.kerberos_manager.os.write"):
-            with patch("app.services.kerberos_manager.os.close"):
-                with patch("app.services.kerberos_manager.Path") as mock_path_cls:
-                    with patch("app.services.kerberos_manager.gssapi.Name"):
-                        with patch("app.services.kerberos_manager.gssapi.Credentials"):
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
+            with patch("app.services.kerberos_manager.os.write"):
+                with patch("app.services.kerberos_manager.os.close"):
+                    with patch("app.services.kerberos_manager.os.chmod"):
+                        with patch("app.services.kerberos_manager.Path") as mock_path_cls:
+                            # Mock subprocess for klist with correct principal
+                            mock_subprocess.return_value = MagicMock(
+                                returncode=0,
+                                stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 global-test@EXAMPLE.COM\n"
+                            )
+                            
                             # Mock tempfile.mkstemp
                             mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
                             
@@ -196,12 +237,18 @@ def test_global_kerberos_manager_initialize(sample_keytab_b64):
 
 def test_global_kerberos_manager_reinitialize(sample_keytab_b64):
     """Test that reinitializing global manager cleans up previous instance."""
-    with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
-        with patch("app.services.kerberos_manager.os.write"):
-            with patch("app.services.kerberos_manager.os.close"):
-                with patch("app.services.kerberos_manager.Path") as mock_path_cls:
-                    with patch("app.services.kerberos_manager.gssapi.Name"):
-                        with patch("app.services.kerberos_manager.gssapi.Credentials"):
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
+            with patch("app.services.kerberos_manager.os.write"):
+                with patch("app.services.kerberos_manager.os.close"):
+                    with patch("app.services.kerberos_manager.os.chmod"):
+                        with patch("app.services.kerberos_manager.Path") as mock_path_cls:
+                            # Mock subprocess for klist - different principals for each init
+                            mock_subprocess.side_effect = [
+                                MagicMock(returncode=0, stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 first@EXAMPLE.COM\n"),
+                                MagicMock(returncode=0, stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 second@EXAMPLE.COM\n"),
+                            ]
+                            
                             # Mock tempfile.mkstemp - will be called twice (2 files per init, 2 inits)
                             mock_mkstemp.side_effect = [
                                 (1, "/tmp/aetherv_test1.keytab"), (2, "/tmp/krb5cc_test1"),
@@ -244,12 +291,18 @@ def test_keytab_bytes_decoding(sample_keytab_b64):
     # Decode manually to compare
     expected_bytes = base64.b64decode(sample_keytab_b64)
     
-    with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
-        with patch("app.services.kerberos_manager.os.write") as mock_write:
-            with patch("app.services.kerberos_manager.os.close"):
-                with patch("app.services.kerberos_manager.Path") as mock_path_cls:
-                    with patch("app.services.kerberos_manager.gssapi.Name"):
-                        with patch("app.services.kerberos_manager.gssapi.Credentials"):
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
+            with patch("app.services.kerberos_manager.os.write") as mock_write:
+                with patch("app.services.kerberos_manager.os.close"):
+                    with patch("app.services.kerberos_manager.os.chmod"):
+                        with patch("app.services.kerberos_manager.Path") as mock_path_cls:
+                            # Mock subprocess for klist with correct principal
+                            mock_subprocess.return_value = MagicMock(
+                                returncode=0,
+                                stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 test@EXAMPLE.COM\n"
+                            )
+                            
                             # Mock tempfile.mkstemp
                             mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
                             
@@ -270,25 +323,32 @@ def test_keytab_bytes_decoding(sample_keytab_b64):
 
 def test_credential_acquisition_failure(kerberos_manager):
     """Test that credential acquisition failure is handled properly."""
-    with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
-        with patch("app.services.kerberos_manager.os.write"):
-            with patch("app.services.kerberos_manager.os.close"):
-                with patch("app.services.kerberos_manager.Path") as mock_path_cls:
-                    with patch("app.services.kerberos_manager.gssapi.Name"):
-                        with patch("app.services.kerberos_manager.gssapi.Credentials") as mock_creds:
-                            # Mock tempfile.mkstemp
-                            mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
-                            
-                            # Mock Path instances
-                            mock_keytab_path = MagicMock()
-                            mock_cache_path = MagicMock()
-                            mock_path_cls.side_effect = [mock_keytab_path, mock_cache_path]
-                            
-                            # Simulate credential acquisition failure
-                            class DummyGSSError(Exception):
-                                def __init__(self, *args, **kwargs):
-                                    super().__init__(*args)
-                            mock_creds.side_effect = DummyGSSError(1, 2)
-                            
-                            with pytest.raises(KerberosManagerError, match="Failed to acquire Kerberos credentials"):
-                                kerberos_manager.initialize()
+    with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess:
+        with patch("app.services.kerberos_manager.gssapi_raw.acquire_cred_from") as mock_acquire:
+            with patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp:
+                with patch("app.services.kerberos_manager.os.write"):
+                    with patch("app.services.kerberos_manager.os.close"):
+                        with patch("app.services.kerberos_manager.os.chmod"):
+                            with patch("app.services.kerberos_manager.Path") as mock_path_cls:
+                                # Mock subprocess for klist with correct principal
+                                mock_subprocess.return_value = MagicMock(
+                                    returncode=0,
+                                    stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 test-user@EXAMPLE.COM\n"
+                                )
+                                
+                                # Mock tempfile.mkstemp
+                                mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
+                                
+                                # Mock Path instances
+                                mock_keytab_path = MagicMock()
+                                mock_cache_path = MagicMock()
+                                mock_path_cls.side_effect = [mock_keytab_path, mock_cache_path]
+                                
+                                # Simulate credential acquisition failure
+                                class DummyGSSError(Exception):
+                                    def __init__(self, *args, **kwargs):
+                                        super().__init__(*args)
+                                mock_acquire.side_effect = DummyGSSError(1, 2)
+                                
+                                with pytest.raises(KerberosManagerError, match="Kerberos initialization failed"):
+                                    kerberos_manager.initialize()
