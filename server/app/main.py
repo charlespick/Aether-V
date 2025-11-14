@@ -23,7 +23,7 @@ from .core.config import (
     AGENT_HTTP_MOUNT_PATH,
 )
 from .core.build_info import build_metadata
-from .core.config_validation import run_config_checks
+from .core.config_validation import ConfigIssue, run_config_checks
 from .api.routes import router
 from .services.inventory_service import inventory_service
 from .services.host_deployment_service import host_deployment_service
@@ -93,71 +93,84 @@ async def lifespan(app: FastAPI):
             if issue.hint:
                 logger.warning("Hint: %s", issue.hint)
 
+    kerberos_failed = False
+    kerberos_initialized = False
+
     # Initialize Kerberos if configured
     if settings.has_kerberos_config():
         logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
-        initialize_kerberos(
-            principal=settings.winrm_kerberos_principal,
-            keytab_b64=settings.winrm_keytab_b64,
-            realm=settings.winrm_kerberos_realm,
-            kdc=settings.winrm_kerberos_kdc,
-        )
-        logger.info("Kerberos authentication initialized successfully")
-
-        # Validate host Kerberos setup (WSMAN SPNs and delegation)
-        # We need to get cluster information for delegation checking
-        hyperv_hosts = settings.get_hyperv_hosts_list()
-        if hyperv_hosts:
-            logger.info("Validating Kerberos setup for %d configured host(s)", len(hyperv_hosts))
-            
-            # Import inventory service to get cluster information after it's started
-            # For now, do initial validation without cluster info (will re-validate later)
-            validation_result = validate_host_kerberos_setup(
-                hosts=hyperv_hosts,
+        try:
+            initialize_kerberos(
+                principal=settings.winrm_kerberos_principal,
+                keytab_b64=settings.winrm_keytab_b64,
                 realm=settings.winrm_kerberos_realm,
-                clusters=None  # Will be validated later after inventory refresh
+                kdc=settings.winrm_kerberos_kdc,
             )
-
-            # Log and collect validation issues
-            for warning in validation_result.get("warnings", []):
-                logger.warning("Kerberos host validation: %s", warning)
-
-            # Add errors with specific hints based on error type
-            if validation_result.get("errors"):
-                from .core.config_validation import ConfigIssue
-                
-                # Handle SPN errors
-                for error in validation_result.get("spn_errors", []):
-                    logger.warning("Kerberos SPN validation: %s", error)
-                    config_result.warnings.append(
-                        ConfigIssue(
-                            message=error,
-                            hint="Ensure WSMAN SPNs are registered in Active Directory for all Hyper-V hosts. "
-                                 "Use 'setspn -S WSMAN/<hostname> <hostname>' on a domain controller. "
-                                 "WinRM operations will fail until WSMAN SPNs are registered."
-                        )
-                    )
-                
-                # Handle delegation errors
-                for error in validation_result.get("delegation_errors", []):
-                    logger.warning("Kerberos delegation validation: %s", error)
-                    config_result.warnings.append(
-                        ConfigIssue(
-                            message=error,
-                            hint="Configure Resource-Based Constrained Delegation (RBCD) on cluster name objects. "
-                                 "Run: Set-ADComputer <cluster-name> -PrincipalsAllowedToDelegateToAccount (Get-ADComputer <host1>, Get-ADComputer <host2>, ...). "
-                                 "This allows Hyper-V hosts to delegate credentials for double-hop authentication."
-                        )
-                    )
-                
-                logger.warning(
-                    "Kerberos validation found %d issue(s) (%d SPN, %d delegation); application will start in degraded mode",
-                    len(validation_result["errors"]),
-                    len(validation_result.get("spn_errors", [])),
-                    len(validation_result.get("delegation_errors", []))
+        except KerberosManagerError as exc:
+            kerberos_failed = True
+            logger.error("Failed to initialize Kerberos authentication: %s", exc)
+            config_result.errors.append(
+                ConfigIssue(
+                    message=f"Kerberos initialization failed: {exc}",
+                    hint="Verify Kerberos principal, keytab, realm, and KDC settings.",
                 )
-            else:
-                logger.info("Kerberos host validation completed successfully")
+            )
+        else:
+            kerberos_initialized = True
+            logger.info("Kerberos authentication initialized successfully")
+
+            # Validate host Kerberos setup (WSMAN SPNs and delegation)
+            # We need to get cluster information for delegation checking
+            hyperv_hosts = settings.get_hyperv_hosts_list()
+            if hyperv_hosts:
+                logger.info("Validating Kerberos setup for %d configured host(s)", len(hyperv_hosts))
+
+                # Import inventory service to get cluster information after it's started
+                # For now, do initial validation without cluster info (will re-validate later)
+                validation_result = validate_host_kerberos_setup(
+                    hosts=hyperv_hosts,
+                    realm=settings.winrm_kerberos_realm,
+                    clusters=None  # Will be validated later after inventory refresh
+                )
+
+                # Log and collect validation issues
+                for warning in validation_result.get("warnings", []):
+                    logger.warning("Kerberos host validation: %s", warning)
+
+                # Add errors with specific hints based on error type
+                if validation_result.get("errors"):
+                    # Handle SPN errors
+                    for error in validation_result.get("spn_errors", []):
+                        logger.warning("Kerberos SPN validation: %s", error)
+                        config_result.warnings.append(
+                            ConfigIssue(
+                                message=error,
+                                hint="Ensure WSMAN SPNs are registered in Active Directory for all Hyper-V hosts. "
+                                     "Use 'setspn -S WSMAN/<hostname> <hostname>' on a domain controller. "
+                                     "WinRM operations will fail until WSMAN SPNs are registered.",
+                            )
+                        )
+
+                    # Handle delegation errors
+                    for error in validation_result.get("delegation_errors", []):
+                        logger.warning("Kerberos delegation validation: %s", error)
+                        config_result.warnings.append(
+                            ConfigIssue(
+                                message=error,
+                                hint="Configure Resource-Based Constrained Delegation (RBCD) on cluster name objects. "
+                                     "Run: Set-ADComputer <cluster-name> -PrincipalsAllowedToDelegateToAccount (Get-ADComputer <host1>, Get-ADComputer <host2>, ...). "
+                                     "This allows Hyper-V hosts to delegate credentials for double-hop authentication.",
+                            )
+                        )
+
+                    logger.warning(
+                        "Kerberos validation found %d issue(s) (%d SPN, %d delegation); application will start in degraded mode",
+                        len(validation_result["errors"]),
+                        len(validation_result.get("spn_errors", [])),
+                        len(validation_result.get("delegation_errors", []))
+                    )
+                else:
+                    logger.info("Kerberos host validation completed successfully")
     else:
         logger.warning("Kerberos credentials not configured; WinRM operations will fail")
 
@@ -166,8 +179,11 @@ async def lifespan(app: FastAPI):
     job_started = False
     inventory_started = False
 
-    await remote_task_service.start()
-    remote_started = True
+    if not kerberos_failed:
+        await remote_task_service.start()
+        remote_started = True
+    else:
+        logger.error("Skipping remote task service startup because Kerberos authentication is unavailable")
 
     await notification_service.start()
     notifications_started = True
@@ -177,24 +193,27 @@ async def lifespan(app: FastAPI):
 
     notification_service.publish_startup_configuration_result(config_result)
 
-    await host_deployment_service.start_startup_deployment(
-        settings.get_hyperv_hosts_list()
-    )
+    if not kerberos_failed:
+        await host_deployment_service.start_startup_deployment(
+            settings.get_hyperv_hosts_list()
+        )
 
-    async def _log_startup_deployment_summary() -> None:
-        try:
-            await host_deployment_service.wait_for_startup()
-            deployment_summary = host_deployment_service.get_startup_summary()
-            logger.info(
-                "Startup agent deployment finished with status=%s (success=%d failed=%d)",
-                deployment_summary.get("status"),
-                deployment_summary.get("successful_hosts", 0),
-                deployment_summary.get("failed_hosts", 0),
-            )
-        except Exception:  # pragma: no cover - defensive logging
-            logger.exception("Failed to record startup deployment summary")
+        async def _log_startup_deployment_summary() -> None:
+            try:
+                await host_deployment_service.wait_for_startup()
+                deployment_summary = host_deployment_service.get_startup_summary()
+                logger.info(
+                    "Startup agent deployment finished with status=%s (success=%d failed=%d)",
+                    deployment_summary.get("status"),
+                    deployment_summary.get("successful_hosts", 0),
+                    deployment_summary.get("failed_hosts", 0),
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to record startup deployment summary")
 
-    asyncio.create_task(_log_startup_deployment_summary())
+        asyncio.create_task(_log_startup_deployment_summary())
+    else:
+        logger.error("Skipping host deployment startup because Kerberos authentication is unavailable")
 
     if not config_result.has_errors:
         await inventory_service.start()
@@ -260,7 +279,7 @@ async def lifespan(app: FastAPI):
             await remote_task_service.stop()
         
         # Clean up Kerberos resources
-        if settings.has_kerberos_config():
+        if kerberos_initialized:
             logger.info("Cleaning up Kerberos resources")
             cleanup_kerberos()
         
