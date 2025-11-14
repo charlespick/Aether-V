@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
 import gssapi
+import gssapi.raw as gssapi_raw
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +70,18 @@ class KerberosManager:
             logger.debug("Set KRB5_CLIENT_KTNAME=%s", self._keytab_path)
 
             # Set cache location (also use temp file for security)
-            # Create a unique path for the credential cache but DO NOT pre-create the file
-            # GSSAPI will create the cache file itself in the correct format
+            # Use mkstemp to generate a secure random filename and keep the file
+            # to prevent symlink attacks (don't delete and recreate)
             cache_fd, cache_path_str = tempfile.mkstemp(prefix="krb5cc_aetherv_", suffix="")
-            os.close(cache_fd)  # Close the file descriptor
             self._cache_path = Path(cache_path_str)
-            # Remove the empty file created by mkstemp - GSSAPI will create it properly
-            self._cache_path.unlink()
+            
+            # Set restrictive permissions (owner read/write only)
+            os.chmod(self._cache_path, 0o600)
+            
+            # Close the file descriptor but keep the file
+            # GSSAPI/kinit will overwrite it, avoiding the symlink race condition
+            os.close(cache_fd)
+            
             logger.debug("Prepared credential cache path: %s", self._cache_path)
             os.environ["KRB5CCNAME"] = f"FILE:{self._cache_path}"
             logger.debug("Set KRB5CCNAME=FILE:%s", self._cache_path)
@@ -117,19 +123,19 @@ class KerberosManager:
             # Create secure temporary file for keytab
             # mkstemp creates the file with O_EXCL, preventing symlink attacks
             fd, keytab_path_str = tempfile.mkstemp(prefix="aetherv_", suffix=".keytab")
+            keytab_path = Path(keytab_path_str)
             
             try:
+                # Set restrictive permissions immediately (600 = rw-------)
+                # Do this before writing sensitive data
+                os.chmod(fd, 0o600)
+                logger.debug("Set keytab permissions to 600")
+                
                 # Write keytab data to the file descriptor
                 os.write(fd, keytab_bytes)
             finally:
                 # Always close the file descriptor
                 os.close(fd)
-            
-            keytab_path = Path(keytab_path_str)
-            
-            # Set restrictive permissions (600 = rw-------)
-            keytab_path.chmod(0o600)
-            logger.debug("Set keytab permissions to 600")
 
             return keytab_path
 
@@ -233,9 +239,23 @@ class KerberosManager:
             name = gssapi.Name(self.principal, gssapi.NameType.kerberos_principal)
             logger.debug("Parsed Kerberos principal: %s", name)
 
-            # Acquire credentials from the keytab
-            # This obtains a TGT and stores it in the credential cache
-            creds = gssapi.Credentials(name=name, usage='initiate')
+            # Acquire credentials from the keytab using the raw API
+            # This is the correct way to obtain a TGT from a keytab file
+            # The high-level gssapi.Credentials() only reads from existing cache
+            try:
+                creds_raw = gssapi_raw.acquire_cred_from(
+                    {'client_keytab': str(self._keytab_path), 'ccache': f'FILE:{self._cache_path}'},
+                    name=name.raw,
+                    usage='initiate'
+                )
+                # Wrap the raw credentials in the high-level API for convenience
+                creds = gssapi.Credentials(base=creds_raw.creds)
+            except AttributeError:
+                # Fallback: If acquire_cred_from is not available, use kinit
+                logger.warning("gssapi.raw.acquire_cred_from not available, falling back to kinit")
+                self._acquire_credentials_via_kinit()
+                # Verify credentials were acquired
+                creds = gssapi.Credentials(name=name, usage='initiate')
             
             logger.info("Successfully acquired Kerberos credentials for %s", self.principal)
             logger.debug("Credential lifetime: %s seconds", creds.lifetime)
@@ -246,6 +266,44 @@ class KerberosManager:
         except Exception as exc:
             logger.error("Unexpected error acquiring credentials: %s", exc)
             raise KerberosManagerError(f"Failed to acquire Kerberos credentials: {exc}") from exc
+
+    def _acquire_credentials_via_kinit(self) -> None:
+        """
+        Fallback method to acquire credentials using kinit command.
+        
+        This is used when gssapi.raw.acquire_cred_from is not available.
+        
+        Raises:
+            KerberosManagerError: If kinit fails
+        """
+        try:
+            cmd = [
+                'kinit',
+                '-k',  # Use keytab
+                '-t', str(self._keytab_path),  # Keytab file path
+                '-c', f'FILE:{self._cache_path}',  # Cache file path
+                self.principal
+            ]
+            
+            logger.debug("Running kinit command: %s", ' '.join(cmd))
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            if result.returncode != 0:
+                logger.error("kinit failed: %s", result.stderr)
+                raise KerberosManagerError(f"kinit failed: {result.stderr}")
+                
+            logger.debug("kinit succeeded: %s", result.stdout)
+            
+        except FileNotFoundError:
+            raise KerberosManagerError("kinit command not found - ensure Kerberos client tools are installed")
+        except subprocess.CalledProcessError as exc:
+            logger.error("kinit command failed: %s", exc.stderr)
+            raise KerberosManagerError(f"kinit failed: {exc.stderr}") from exc
 
     def cleanup(self) -> None:
         """Clean up Kerberos resources."""
