@@ -123,11 +123,22 @@ Remove-Item C:\temp\aetherv.keytab -Force
 
 ## Configuring Resource-Based Constrained Delegation (RBCD)
 
-RBCD allows the Aether-V service account to delegate credentials to Hyper-V hosts and cluster objects for double-hop operations.
+RBCD is **required** for Aether-V's Kerberos double-hop authentication (S4U2Proxy). This allows the Aether-V service to obtain delegated credentials when connecting to Hyper-V hosts and performing operations that require access to cluster resources.
 
-### Step 1: Configure Delegation for Hyper-V Hosts
+### Critical Understanding: Where to Configure RBCD
 
-For each Hyper-V host, configure RBCD to allow the service account to delegate:
+**IMPORTANT:** For Aether-V's S4U2Proxy to work, RBCD **MUST** be configured on the **Hyper-V host computer objects**, NOT on the Cluster Name Object (CNO).
+
+When Aether-V connects to a Hyper-V host's HTTP/WSMAN service:
+1. The KDC checks the **target service's account** (the host's computer object)
+2. The KDC looks at `msDS-AllowedToActOnBehalfOfOtherIdentity` on the **host's computer object**
+3. If the Aether-V service account's SID is in that attribute with proper rights, S4U2Proxy succeeds
+
+**Do NOT configure RBCD on the CNO** - the CNO is not the target for Aether-V's WinRM connections to hosts.
+
+### Step 1: Configure RBCD for Hyper-V Hosts
+
+For each Hyper-V host, configure RBCD to allow the Aether-V service account to act on behalf of other identities:
 
 ```powershell
 # Run on a domain controller or machine with AD PowerShell tools
@@ -137,44 +148,71 @@ For each Hyper-V host, configure RBCD to allow the service account to delegate:
 $ServiceAccount = "svc-aetherv"
 $HyperVHost = "hyperv01"
 
-# Get the service account
+# Get the service account and host computer objects
 $ServicePrincipal = Get-ADUser -Identity $ServiceAccount
 $HostComputer = Get-ADComputer $HyperVHost
 
-# Configure RBCD - allow service account to delegate to the host
+# Configure RBCD - this is the CORRECT configuration for Aether-V's double-hop
+# This sets msDS-AllowedToActOnBehalfOfOtherIdentity on the HOST
 Set-ADComputer $HostComputer -PrincipalsAllowedToDelegateToAccount $ServicePrincipal
 
-# Verify configuration
-Get-ADComputer $HostComputer -Properties PrincipalsAllowedToDelegateToAccount |
+# Verify configuration - check that msDS-AllowedToActOnBehalfOfOtherIdentity is set
+Get-ADComputer $HostComputer -Properties PrincipalsAllowedToDelegateToAccount, msDS-AllowedToActOnBehalfOfOtherIdentity |
     Select-Object Name, PrincipalsAllowedToDelegateToAccount
 ```
 
-### Step 2: Configure Delegation for Cluster Objects
+**What this does:**
+- Sets the `msDS-AllowedToActOnBehalfOfOtherIdentity` attribute on the Hyper-V host's computer object
+- The attribute contains a security descriptor with an ACE granting the Aether-V service account SID full control
+- When Aether-V requests S4U2Proxy tickets to the host, the KDC checks this attribute and allows delegation
 
-If using Hyper-V failover clusters, also configure RBCD for the cluster name object. Reuse the
-`$ServicePrincipal` value resolved with `Get-ADUser` above:
+### Step 2: Repeat for All Hyper-V Hosts
+
+**You MUST configure RBCD on every Hyper-V host** that Aether-V will manage. For clustered environments, this means every node in every cluster:
 
 ```powershell
-$ClusterName = "HV-CLUSTER01"
+# Example: Configure RBCD for all hosts in a cluster
+$ServiceAccount = "svc-aetherv"
+$ServicePrincipal = Get-ADUser -Identity $ServiceAccount
 
-# Get cluster computer object
-$ClusterComputer = Get-ADComputer $ClusterName
+$HyperVHosts = @("hyperv01", "hyperv02", "hyperv03")
 
-# Configure RBCD for cluster
-Set-ADComputer $ClusterComputer -PrincipalsAllowedToDelegateToAccount $ServicePrincipal
+foreach ($HostName in $HyperVHosts) {
+    $HostComputer = Get-ADComputer $HostName
+    Set-ADComputer $HostComputer -PrincipalsAllowedToDelegateToAccount $ServicePrincipal
+    Write-Host "Configured RBCD for $HostName"
+}
 
-# Verify
-Get-ADComputer $ClusterComputer -Properties PrincipalsAllowedToDelegateToAccount |
-    Select-Object Name, PrincipalsAllowedToDelegateToAccount
+# Verify all hosts
+foreach ($HostName in $HyperVHosts) {
+    Get-ADComputer $HostName -Properties PrincipalsAllowedToDelegateToAccount |
+        Select-Object Name, PrincipalsAllowedToDelegateToAccount
+}
 ```
 
-### Automatic cluster delegation verification
+### DO NOT Configure RBCD on the Cluster Name Object (CNO)
 
-Once the initial inventory synchronisation completes, Aether-V inspects the
-discovered cluster computer objects and verifies that `msDS-AllowedToDelegateTo`
-contains delegation targets. Missing delegation is surfaced through the system
-notification panel so administrators can remediate Active Directory configuration
-issues before running double-hop operations.
+**Common Mistake:** Configuring `PrincipalsAllowedToDelegateToAccount` or `msDS-AllowedToActOnBehalfOfOtherIdentity` on the Cluster Name Object (CNO).
+
+**Why this is wrong:**
+- Aether-V connects to the **HOST's** WinRM service (e.g., `HTTP/hyperv01.domain.com`)
+- The KDC validates S4U2Proxy requests against the **target service's account** (the host, not the CNO)
+- RBCD on the CNO does not help Aether-V obtain delegated credentials to the hosts
+
+**Correct configuration:** RBCD on **each Hyper-V host computer object**
+
+### Automatic RBCD Verification
+
+After the initial inventory synchronization completes, Aether-V automatically validates the RBCD configuration:
+
+1. Resolves the service account's SID from Active Directory
+2. For each discovered Hyper-V host (including cluster members):
+   - Queries the host's computer object in AD
+   - Reads `msDS-AllowedToActOnBehalfOfOtherIdentity` attribute
+   - Parses the security descriptor to extract ACEs
+   - Verifies the service account's SID has an Allow ACE with GenericAll rights
+
+If any host is missing proper RBCD configuration, Aether-V displays an error in the system notification panel with specific remediation steps.
 
 ### Step 3: Configure Service Principal Names (SPNs)
 
@@ -417,15 +455,91 @@ Get-WinEvent -LogName Security -FilterXPath "*[System[(EventID=4768 or EventID=4
 
 ### Issue: "Access Denied" during cluster operations
 
-**Symptoms:** VM operations fail with access denied on cluster resources
+**Symptoms:** VM operations fail with access denied on cluster resources, or errors about delegation
 
 **Solutions:**
-1. Verify RBCD is configured for both host AND cluster objects
-2. Check SPNs are properly registered
-3. Ensure service account has necessary permissions on cluster
-4. Test delegation: `Get-ADComputer <host> -Properties PrincipalsAllowedToDelegateToAccount`
+1. **Verify RBCD is configured on Hyper-V HOSTS, not the CNO:**
+   ```powershell
+   # Check each host's RBCD configuration
+   $ServiceAccount = "svc-aetherv"
+   $HostName = "hyperv01"
+   
+   $ServicePrincipal = Get-ADUser -Identity $ServiceAccount
+   $HostComputer = Get-ADComputer $HostName
+   
+   # Check if the service account is in PrincipalsAllowedToDelegateToAccount
+   Get-ADComputer $HostComputer -Properties PrincipalsAllowedToDelegateToAccount |
+       Select-Object Name, PrincipalsAllowedToDelegateToAccount
+   ```
+
+2. **Verify the service account SID is in the RBCD attribute:**
+   ```powershell
+   # Get the raw RBCD attribute
+   $HostComputer = Get-ADComputer $HostName -Properties msDS-AllowedToActOnBehalfOfOtherIdentity
+   
+   # If this is $null or empty, RBCD is not configured
+   if ($null -eq $HostComputer.'msDS-AllowedToActOnBehalfOfOtherIdentity') {
+       Write-Host "RBCD not configured on $HostName - configure using Set-ADComputer"
+   }
+   ```
+
+3. **Ensure SPNs are properly registered:**
+   ```powershell
+   setspn -L hyperv01
+   # Should show WSMAN/hyperv01.domain.com and WSMAN/hyperv01
+   ```
+
+4. **DO NOT configure RBCD on the CNO** - it will not help Aether-V and may cause confusion
+
+### Issue: "Resource-Based Constrained Delegation (RBCD) is not correctly configured"
+
+**Symptoms:** Aether-V shows an error notification about missing RBCD configuration
+
+**Solutions:**
+1. **This error means the service account's SID is NOT in the host's msDS-AllowedToActOnBehalfOfOtherIdentity attribute**
+
+2. **Configure RBCD on EACH Hyper-V host:**
+   ```powershell
+   $ServiceAccount = "svc-aetherv"  # Your service account name
+   $ServicePrincipal = Get-ADUser -Identity $ServiceAccount
+   
+   # Configure for each host
+   foreach ($HostName in @("hyperv01", "hyperv02", "hyperv03")) {
+       $HostComputer = Get-ADComputer $HostName
+       Set-ADComputer $HostComputer -PrincipalsAllowedToDelegateToAccount $ServicePrincipal
+       Write-Host "Configured RBCD for $HostName"
+   }
+   ```
+
+3. **Verify using Aether-V's validation:**
+   - Check the system notifications panel in Aether-V UI
+   - The error will list specific hosts that need configuration
+   - After configuring RBCD, wait for the next inventory refresh (or restart Aether-V)
 
 ### Issue: Legacy configuration detected
+
+**Symptoms:** "Legacy WinRM configuration detected" or "Delegation incorrectly applied to the Cluster Name Object"
+
+**Solutions:**
+This indicates you may have configured delegation on the wrong objects:
+
+1. **Remove RBCD from the CNO (if present):**
+   ```powershell
+   $ClusterName = "HV-CLUSTER01"
+   $ClusterComputer = Get-ADComputer $ClusterName
+   
+   # Clear the RBCD attribute
+   Set-ADComputer $ClusterComputer -PrincipalsAllowedToDelegateToAccount $null
+   ```
+
+2. **Configure RBCD on the hosts instead:**
+   ```powershell
+   # Follow the "Configure RBCD for Hyper-V Hosts" section above
+   ```
+
+3. **Remove any `msDS-AllowedToDelegateTo` entries on the service account** (these are for classic constrained delegation, not RBCD)
+
+### Issue: "Legacy WinRM configuration detected"
 
 **Symptoms:** "Legacy WinRM configuration detected" error on startup
 
