@@ -959,34 +959,75 @@ def _ldap_get_computer_delegation_info(
             logger.debug("Unable to determine LDAP base DN for '%s'", name)
             return None
 
-        sam_account = name if name.endswith("$") else f"{name}$"
-        search_filter = (
-            f"(&(objectClass=computer)(sAMAccountName={escape_filter_chars(sam_account)}))"
-        )
+        normalized_name = (name or "").strip()
+        search_candidates: List[str] = []
 
-        try:
-            connection.search(
-                base_dn,
-                search_filter,
-                search_scope=SUBTREE,
-                attributes=[
-                    "PrincipalsAllowedToDelegateToAccount",
-                    "msDS-AllowedToActOnBehalfOfOtherIdentity",
-                    "msDS-AllowedToDelegateTo",
-                    "TrustedToAuthForDelegation",
-                    "TrustedForDelegation",
-                    "objectSid",
-                ],
-                size_limit=1,
+        if normalized_name:
+            trimmed_name = normalized_name.rstrip("$")
+
+            if "." in trimmed_name:
+                short_candidate = trimmed_name.split(".", 1)[0]
+                if short_candidate:
+                    search_candidates.append(short_candidate)
+
+            if trimmed_name and trimmed_name not in search_candidates:
+                search_candidates.append(trimmed_name)
+
+        if not search_candidates:
+            logger.debug(
+                "Unable to derive LDAP search candidates for host '%s'", name
             )
-        except LDAPException as exc:  # pragma: no cover - environment specific
-            logger.debug("LDAP search for '%s' failed: %s", name, exc, exc_info=True)
             return None
 
-        if not connection.entries:
+        entry = None
+
+        for candidate in search_candidates:
+            sam_account = (
+                candidate if candidate.endswith("$") else f"{candidate}$"
+            )
+            search_filter = (
+                f"(&(objectClass=computer)(sAMAccountName={escape_filter_chars(sam_account)}))"
+            )
+
+            logger.debug(
+                "Searching for computer '%s' using candidate '%s' (sAMAccountName '%s')",
+                name,
+                candidate,
+                sam_account,
+            )
+
+            try:
+                connection.search(
+                    base_dn,
+                    search_filter,
+                    search_scope=SUBTREE,
+                    attributes=[
+                        "PrincipalsAllowedToDelegateToAccount",
+                        "msDS-AllowedToActOnBehalfOfOtherIdentity",
+                        "msDS-AllowedToDelegateTo",
+                        "TrustedToAuthForDelegation",
+                        "TrustedForDelegation",
+                        "objectSid",
+                    ],
+                    size_limit=1,
+                )
+            except LDAPException as exc:  # pragma: no cover - environment specific
+                logger.debug(
+                    "LDAP search for '%s' (candidate '%s') failed: %s",
+                    name,
+                    candidate,
+                    exc,
+                    exc_info=True,
+                )
+                return None
+
+            if connection.entries:
+                entry = connection.entries[0]
+                break
+
+        if entry is None:
             return {"exists": False}
 
-        entry = connection.entries[0]
         raw_attrs = entry.entry_raw_attributes or {}
         attr_dict = entry.entry_attributes_as_dict or {}
 
