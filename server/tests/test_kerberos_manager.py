@@ -585,6 +585,103 @@ def test_validate_host_kerberos_setup_success_when_principal_present(monkeypatch
     assert not result["warnings"]
 
 
+def test_validate_host_kerberos_setup_accepts_resolved_spn(monkeypatch):
+    """SPN principals should match delegation entries via resolved account identifiers."""
+
+    service_principal = "HTTP/hyperv06.example.com"
+    resolved_tokens = {"svc-winrm", "svc-winrm@example.com"}
+    lookup_arguments = []
+
+    def fake_resolve(principal, realm=None):
+        lookup_arguments.append((principal, realm))
+        return resolved_tokens
+
+    def fake_ldap(name, realm=None):
+        return {
+            "exists": True,
+            "delegation_present": True,
+            "delegation_principals": [
+                "CN=SVC-WINRM,OU=Service,DC=example,DC=com"
+            ],
+            "rbcd_present": False,
+            "rbcd_principals": [],
+            "rbcd_sid_strings": [],
+        }
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_resolve_service_principal_tokens",
+        fake_resolve,
+    )
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        fake_ldap,
+    )
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._check_wsman_spn",
+        lambda host, realm=None: (True, "WSMAN SPN validated"),
+    )
+
+    result = validate_host_kerberos_setup(
+        hosts=["hyperv06"],
+        realm="EXAMPLE.COM",
+        clusters=None,
+        service_principal=service_principal,
+    )
+
+    assert lookup_arguments == [(service_principal, "EXAMPLE.COM")]
+    assert not result["delegation_errors"]
+    assert not result["warnings"]
+
+
+def test_validate_host_kerberos_setup_rejects_unrelated_resolved_principal(monkeypatch):
+    """Resolved identifiers should not cause unrelated accounts in the same domain to match."""
+
+    service_principal = "HTTP/hyperv08.example.com"
+    resolved_tokens = {
+        "svc-winrm",
+        "svc-winrm@example.com",
+        "CN=SVC-WINRM,OU=Service,DC=example,DC=com",
+    }
+
+    def fake_resolve(principal, realm=None):
+        return resolved_tokens
+
+    def fake_ldap(name, realm=None):
+        return {
+            "exists": True,
+            "delegation_present": True,
+            "delegation_principals": [
+                "CN=OtherAccount,OU=Service,DC=example,DC=com"
+            ],
+            "rbcd_present": False,
+            "rbcd_principals": [],
+            "rbcd_sid_strings": [],
+        }
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_resolve_service_principal_tokens",
+        fake_resolve,
+    )
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        fake_ldap,
+    )
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._check_wsman_spn",
+        lambda host, realm=None: (True, "WSMAN SPN validated"),
+    )
+
+    result = validate_host_kerberos_setup(
+        hosts=["hyperv08"],
+        realm="EXAMPLE.COM",
+        clusters=None,
+        service_principal=service_principal,
+    )
+
+    assert result["delegation_errors"], "Expected unrelated account to trigger delegation error"
+    assert "hyperv08" in result["delegation_errors"][0]
+
+
 def test_validate_host_kerberos_setup_flags_cno_delegation(monkeypatch):
     """Delegation on the CNO should be reported even when hosts are configured."""
 
