@@ -521,7 +521,7 @@ def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
     """Discover LDAP hosts by querying AD domain controller SRV records."""
 
     manager = get_kerberos_manager()
-    kdc_override = getattr(manager, "kdc", None)
+    kdc_override = manager.kdc if manager else None
     if kdc_override:
         override_host, override_port = _parse_ldap_server_target(kdc_override)
         if override_host:
