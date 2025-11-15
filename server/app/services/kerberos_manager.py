@@ -520,6 +520,21 @@ def _candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
 def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
     """Discover LDAP hosts by querying AD domain controller SRV records."""
 
+    manager = get_kerberos_manager()
+    kdc_override = getattr(manager, "kdc", None)
+    if kdc_override:
+        override_host, _ = _parse_ldap_server_target(kdc_override)
+        if override_host:
+            logger.debug(
+                "Using configured Kerberos KDC override for LDAP checks: %s",
+                override_host,
+            )
+            return [override_host]
+        logger.warning(
+            "Configured Kerberos KDC override %r is not a valid LDAP target",
+            kdc_override,
+        )
+
     domains = _candidate_domains_for_ldap(realm)
     hosts: List[str] = []
 
@@ -569,18 +584,6 @@ def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
                     domain,
                     ", ".join(domain_hosts),
                 )
-
-    if not hosts:
-        manager = get_kerberos_manager()
-        kdc_override = getattr(manager, "kdc", None)
-        if kdc_override:
-            fallback_host, _ = _parse_ldap_server_target(kdc_override)
-            if fallback_host:
-                logger.debug(
-                    "Falling back to Kerberos KDC override for LDAP checks: %s",
-                    fallback_host,
-                )
-                hosts.append(fallback_host)
 
     return hosts
 

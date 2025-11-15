@@ -1017,10 +1017,13 @@ def test_discover_ldap_server_hosts_uses_dns(monkeypatch):
     assert hosts == ["dc1.example.com", "dc2.example.com"]
 
 
-def test_discover_ldap_server_hosts_falls_back_to_kdc(monkeypatch):
-    """When DNS discovery fails, use the configured KDC override."""
+def test_discover_ldap_server_hosts_prefers_kdc_override(monkeypatch):
+    """When a KDC override is configured, skip DNS discovery entirely."""
 
     from app.services import kerberos_manager as km
+
+    resolver = MagicMock()
+    resolver.resolve.side_effect = AssertionError("DNS should not be queried")
 
     manager = SimpleNamespace(
         principal="svc-account@EXAMPLE.COM",
@@ -1028,12 +1031,29 @@ def test_discover_ldap_server_hosts_falls_back_to_kdc(monkeypatch):
         kdc="dc3.example.com:88",
     )
 
-    monkeypatch.setattr(km, "dns_resolver", None)
+    monkeypatch.setattr(km, "dns_resolver", resolver)
     monkeypatch.setattr(km, "get_kerberos_manager", lambda: manager)
 
     hosts = km._discover_ldap_server_hosts("EXAMPLE.COM")
 
     assert hosts == ["dc3.example.com"]
+
+
+def test_discover_ldap_server_hosts_uses_override_without_domain(monkeypatch):
+    """The override should still provide a host when no realm or principal exists."""
+
+    from app.services import kerberos_manager as km
+
+    monkeypatch.setattr(km, "dns_resolver", MagicMock())
+    monkeypatch.setattr(
+        km,
+        "get_kerberos_manager",
+        lambda: SimpleNamespace(principal=None, realm=None, kdc="dc4.example.com"),
+    )
+
+    hosts = km._discover_ldap_server_hosts(None)
+
+    assert hosts == ["dc4.example.com"]
 
 
 def test_kdc_override_sets_krb5_config(monkeypatch, sample_keytab_b64):
