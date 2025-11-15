@@ -941,8 +941,8 @@ def test_establish_ldap_connection_ignores_kdc_port(monkeypatch):
     assert captured["connection_kwargs"]["sasl_mechanism"] is not None
 
 
-def test_establish_ldap_connection_respects_valid_ldap_port(monkeypatch):
-    """Valid LDAP ports should be passed to the ldap3 Server constructor."""
+def test_establish_ldap_connection_respects_ldaps_port(monkeypatch):
+    """LDAPS default port should be passed to the ldap3 Server constructor."""
 
     captured = {}
 
@@ -972,6 +972,41 @@ def test_establish_ldap_connection_respects_valid_ldap_port(monkeypatch):
     assert connection is not None
     assert captured["host"] == "dc01.ad.example.com"
     assert captured["kwargs"].get("port") == 636
+    assert captured["kwargs"].get("use_ssl") is True
+    assert captured["connection_kwargs"]["sasl_mechanism"] is not None
+
+
+def test_establish_ldap_connection_respects_global_catalog_ldaps_port(monkeypatch):
+    """LDAPS global catalog port 3269 should be honored when provided."""
+
+    captured = {}
+
+    class DummyServer:
+        def __init__(self, host, **kwargs):
+            captured["host"] = host
+            captured["kwargs"] = kwargs
+
+    class DummyConnection:
+        def __init__(self, server, **kwargs):
+            captured["server"] = server
+            captured["connection_kwargs"] = kwargs
+
+    monkeypatch.setattr("app.services.kerberos_manager.Server", DummyServer)
+    monkeypatch.setattr("app.services.kerberos_manager.Connection", DummyConnection)
+    monkeypatch.setattr("app.services.kerberos_manager.SASL", object())
+    monkeypatch.setattr("app.services.kerberos_manager.KERBEROS", object())
+    monkeypatch.setattr("app.services.kerberos_manager.BASE", object())
+    monkeypatch.setattr("app.services.kerberos_manager.SUBTREE", object())
+    monkeypatch.setattr("app.services.kerberos_manager.escape_filter_chars", lambda value: value)
+    monkeypatch.setattr("app.services.kerberos_manager.NONE", object())
+
+    from app.services.kerberos_manager import _establish_ldap_connection
+
+    connection = _establish_ldap_connection("dc01.ad.example.com:3269")
+
+    assert connection is not None
+    assert captured["host"] == "dc01.ad.example.com"
+    assert captured["kwargs"].get("port") == 3269
     assert captured["kwargs"].get("use_ssl") is True
     assert captured["connection_kwargs"]["sasl_mechanism"] is not None
 

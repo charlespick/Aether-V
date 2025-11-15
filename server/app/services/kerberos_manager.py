@@ -653,7 +653,9 @@ def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connectio
 
     server_kwargs = {"get_info": NONE, "use_ssl": True, "port": 636}
 
-    if override_port not in (None, 636):
+    if override_port in (636, 3269):
+        server_kwargs["port"] = override_port
+    elif override_port not in (None, 636, 3269):
         logger.debug(
             "Ignoring non-LDAPS port %s derived from %r when binding to LDAP",
             override_port,
