@@ -1,6 +1,8 @@
 import sys
 from unittest import IsolatedAsyncioTestCase, skipIf
 
+# Kerberos is disabled via environment variables in conftest.py
+
 try:
     from server.app.services.notification_service import NotificationService
     from server.app.core.models import NotificationLevel, NotificationCategory

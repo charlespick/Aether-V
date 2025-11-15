@@ -4,6 +4,8 @@ from datetime import datetime
 
 import pytest
 
+# Kerberos is disabled via environment variables in conftest.py
+
 try:  # pragma: no cover - environment guard for optional server package
     from app.core.config import settings
     from app.core.models import Notification, NotificationCategory, NotificationLevel

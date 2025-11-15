@@ -29,12 +29,12 @@ Aether-V enables automated, secure, and scalable management of Hyper-V virtual m
 ### Prerequisites
 
 - Kubernetes cluster
-- Hyper-V hosts with WinRM enabled
+- Hyper-V hosts with WinRM enabled and Kerberos authentication configured
 - OIDC provider (Azure AD recommended) or disable auth for development
+- Kerberos keytab for service account with WinRM access
 
 The orchestration service relies on the [`pypsrp`](https://github.com/jborean93/pypsrp) library for PowerShell Remoting Protocol
-(PSRP) communication. Ensure the configured WinRM endpoint and authentication method permit PSRP sessions (NTLM, Basic, or
-CredSSP as configured via `WINRM_TRANSPORT`).
+(PSRP) communication. Ensure the configured WinRM endpoint permits PSRP sessions with Kerberos authentication.
 
 ### Development Setup
 
@@ -61,12 +61,24 @@ All settings are managed via environment variables (ConfigMap/Secrets):
 - `DEBUG`, `APP_VERSION`
 - `AUTH_ENABLED`, `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_API_AUDIENCE`
 - `OIDC_READER_PERMISSIONS`, `OIDC_WRITER_PERMISSIONS`, `OIDC_ADMIN_PERMISSIONS`
-- `HYPERV_HOSTS`, `WINRM_USERNAME`, `WINRM_PASSWORD`, `WINRM_TRANSPORT`, `WINRM_PORT`
+- `HYPERV_HOSTS`, `WINRM_KERBEROS_PRINCIPAL`, `WINRM_KEYTAB_B64`, `WINRM_PORT`
 - `INVENTORY_REFRESH_INTERVAL`
 - `HOST_INSTALL_DIRECTORY`
 - `AGENT_DOWNLOAD_BASE_URL`
 
-See [Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details, plus
+**Important:** Aether-V requires Kerberos authentication for WinRM to support:
+- Secure double-hop operations for cluster management
+- Credential delegation to shared storage and cluster resources
+- Enhanced security over legacy NTLM/Basic/CredSSP
+
+**See [Docs/Kerberos-Authentication.md](Docs/Kerberos-Authentication.md)** for complete setup instructions including:
+- Keytab generation
+- Resource-Based Constrained Delegation (RBCD) configuration
+- Migration from legacy authentication
+- Security best practices
+
+Also see [Docs/Configuration.md](Docs/Configuration.md) for all environment variables,
+[Docs/Host-Setup.md](Docs/Host-Setup.md) for host configuration details, plus
 [Docs/vm-provisioning-service.md](Docs/vm-provisioning-service.md) and
 [Docs/vm-deletion-service.md](Docs/vm-deletion-service.md) for end-to-end job
 workflows.
