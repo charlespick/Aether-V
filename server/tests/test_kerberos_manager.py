@@ -446,33 +446,40 @@ def test_check_wsman_spn_reports_missing_tools(monkeypatch):
 
 
 def test_validate_host_kerberos_setup_flags_missing_service_principal(monkeypatch):
-    """Hosts without the WinRM service account in PADTA should be reported."""
+    """Hosts without the WinRM service account SID in RBCD should be reported."""
 
     service_principal = "svc-winrm@EXAMPLE.COM"
+    service_sid = _sid_from_components(21, 1001, 2002, 3003, 5001)
+    service_sid_str = _sid_bytes_to_str(service_sid)
+
+    def fake_resolve_sid(principal, realm=None):
+        return service_sid
 
     def fake_ldap(name, realm=None):
         if name.lower() == "hyperv01":
+            # Missing RBCD configuration
             return {
                 "exists": True,
-                "delegation_present": True,
-                "delegation_principals": [
-                    "CN=OtherAccount,OU=Service,DC=example,DC=com"
-                ],
+                "delegation_present": False,
+                "delegation_principals": [],
                 "rbcd_present": False,
                 "rbcd_principals": [],
                 "rbcd_sid_strings": [],
             }
+        # hyperv02 has correct RBCD configuration
         return {
             "exists": True,
-            "delegation_present": True,
-            "delegation_principals": [
-                "CN=svc-winrm,OU=Service,DC=example,DC=com"
-            ],
-            "rbcd_present": False,
-            "rbcd_principals": [],
-            "rbcd_sid_strings": [],
+            "delegation_present": False,
+            "delegation_principals": [],
+            "rbcd_present": True,
+            "rbcd_principals": ["svc-winrm"],
+            "rbcd_sid_strings": [service_sid_str],
         }
 
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_resolve_service_account_sid",
+        fake_resolve_sid,
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager._ldap_get_computer_delegation_info",
         fake_ldap,
@@ -491,29 +498,22 @@ def test_validate_host_kerberos_setup_flags_missing_service_principal(monkeypatc
 
     assert len(result["delegation_errors"]) == 1
     message = result["delegation_errors"][0]
-    assert message.startswith("Delegation missing on cluster hosts:")
+    assert "Resource-Based Constrained Delegation" in message
     assert "hyperv01" in message
     assert "hyperv02" not in message
-    assert "PrincipalsAllowedToDelegateToAccount" in message
+    assert "msDS-AllowedToActOnBehalfOfOtherIdentity" in message
 
 
 def test_validate_host_kerberos_setup_validates_cluster_members(monkeypatch):
-    """Delegation validation should include hosts discovered via cluster membership."""
+    """RBCD validation should include hosts discovered via cluster membership."""
 
-    lookup_targets = []
+    service_sid = _sid_from_components(21, 1001, 2002, 3003, 5001)
+
+    def fake_resolve_sid(principal, realm=None):
+        return service_sid
 
     def fake_ldap(name, realm=None):
-        lookup_targets.append(name)
-        lower_name = name.lower()
-        if lower_name == "clustera":
-            return {
-                "exists": True,
-                "delegation_present": False,
-                "delegation_principals": [],
-                "rbcd_present": False,
-                "rbcd_principals": [],
-                "rbcd_sid_strings": [],
-            }
+        # All hosts missing RBCD
         return {
             "exists": True,
             "delegation_present": False,
@@ -523,6 +523,10 @@ def test_validate_host_kerberos_setup_validates_cluster_members(monkeypatch):
             "rbcd_sid_strings": [],
         }
 
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_resolve_service_account_sid",
+        fake_resolve_sid,
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager._ldap_get_computer_delegation_info",
         fake_ldap,
@@ -539,32 +543,35 @@ def test_validate_host_kerberos_setup_validates_cluster_members(monkeypatch):
         service_principal="svc-winrm@EXAMPLE.COM",
     )
 
-    assert {target.lower() for target in lookup_targets} == {
-        "hyperv03",
-        "hyperv04",
-        "clustera",
-    }
     assert len(result["delegation_errors"]) == 1
     message = result["delegation_errors"][0]
-    assert message.startswith("Delegation missing on cluster hosts:")
+    assert "Resource-Based Constrained Delegation" in message
     assert "hyperv03" in message and "hyperv04" in message
 
 
 def test_validate_host_kerberos_setup_success_when_principal_present(monkeypatch):
-    """When every host grants delegation to the service account no errors are raised."""
+    """When every host has RBCD configured for the service account, no errors are raised."""
+
+    service_sid = _sid_from_components(21, 1001, 2002, 3003, 5001)
+    service_sid_str = _sid_bytes_to_str(service_sid)
+
+    def fake_resolve_sid(principal, realm=None):
+        return service_sid
 
     def fake_ldap(name, realm=None):
         return {
             "exists": True,
-            "delegation_present": True,
-            "delegation_principals": [
-                "CN=SVC-WINRM,OU=Service,DC=example,DC=com"
-            ],
-            "rbcd_present": False,
-            "rbcd_principals": [],
-            "rbcd_sid_strings": [],
+            "delegation_present": False,
+            "delegation_principals": [],
+            "rbcd_present": True,
+            "rbcd_principals": ["svc-winrm"],
+            "rbcd_sid_strings": [service_sid_str],
         }
 
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_resolve_service_account_sid",
+        fake_resolve_sid,
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager._ldap_get_computer_delegation_info",
         fake_ldap,
@@ -586,31 +593,28 @@ def test_validate_host_kerberos_setup_success_when_principal_present(monkeypatch
 
 
 def test_validate_host_kerberos_setup_accepts_resolved_spn(monkeypatch):
-    """SPN principals should match delegation entries via resolved account identifiers."""
+    """Service principal SPN validation should work with SID-based RBCD."""
 
     service_principal = "HTTP/hyperv06.example.com"
-    resolved_tokens = {"svc-winrm", "svc-winrm@example.com"}
-    lookup_arguments = []
+    service_sid = _sid_from_components(21, 1001, 2002, 3003, 5001)
+    service_sid_str = _sid_bytes_to_str(service_sid)
 
-    def fake_resolve(principal, realm=None):
-        lookup_arguments.append((principal, realm))
-        return resolved_tokens
+    def fake_resolve_sid(principal, realm=None):
+        return service_sid
 
     def fake_ldap(name, realm=None):
         return {
             "exists": True,
-            "delegation_present": True,
-            "delegation_principals": [
-                "CN=SVC-WINRM,OU=Service,DC=example,DC=com"
-            ],
-            "rbcd_present": False,
-            "rbcd_principals": [],
-            "rbcd_sid_strings": [],
+            "delegation_present": False,
+            "delegation_principals": [],
+            "rbcd_present": True,
+            "rbcd_principals": ["svc-winrm"],
+            "rbcd_sid_strings": [service_sid_str],
         }
 
     monkeypatch.setattr(
-        "app.services.kerberos_manager._ldap_resolve_service_principal_tokens",
-        fake_resolve,
+        "app.services.kerberos_manager._ldap_resolve_service_account_sid",
+        fake_resolve_sid,
     )
     monkeypatch.setattr(
         "app.services.kerberos_manager._ldap_get_computer_delegation_info",
@@ -628,39 +632,35 @@ def test_validate_host_kerberos_setup_accepts_resolved_spn(monkeypatch):
         service_principal=service_principal,
     )
 
-    assert lookup_arguments == [(service_principal, "EXAMPLE.COM")]
     assert not result["delegation_errors"]
     assert not result["warnings"]
 
 
 def test_validate_host_kerberos_setup_rejects_unrelated_resolved_principal(monkeypatch):
-    """Resolved identifiers should not cause unrelated accounts in the same domain to match."""
+    """RBCD validation should fail when the service account SID is not in the host's RBCD."""
 
     service_principal = "HTTP/hyperv08.example.com"
-    resolved_tokens = {
-        "svc-winrm",
-        "svc-winrm@example.com",
-        "CN=SVC-WINRM,OU=Service,DC=example,DC=com",
-    }
+    service_sid = _sid_from_components(21, 1001, 2002, 3003, 5001)
+    other_sid = _sid_from_components(21, 1001, 2002, 3003, 9999)
+    other_sid_str = _sid_bytes_to_str(other_sid)
 
-    def fake_resolve(principal, realm=None):
-        return resolved_tokens
+    def fake_resolve_sid(principal, realm=None):
+        return service_sid
 
     def fake_ldap(name, realm=None):
+        # Host has RBCD configured, but for a different account
         return {
             "exists": True,
-            "delegation_present": True,
-            "delegation_principals": [
-                "CN=OtherAccount,OU=Service,DC=example,DC=com"
-            ],
-            "rbcd_present": False,
-            "rbcd_principals": [],
-            "rbcd_sid_strings": [],
+            "delegation_present": False,
+            "delegation_principals": [],
+            "rbcd_present": True,
+            "rbcd_principals": ["other-account"],
+            "rbcd_sid_strings": [other_sid_str],
         }
 
     monkeypatch.setattr(
-        "app.services.kerberos_manager._ldap_resolve_service_principal_tokens",
-        fake_resolve,
+        "app.services.kerberos_manager._ldap_resolve_service_account_sid",
+        fake_resolve_sid,
     )
     monkeypatch.setattr(
         "app.services.kerberos_manager._ldap_get_computer_delegation_info",
@@ -678,37 +678,34 @@ def test_validate_host_kerberos_setup_rejects_unrelated_resolved_principal(monke
         service_principal=service_principal,
     )
 
-    assert result["delegation_errors"], "Expected unrelated account to trigger delegation error"
+    assert result["delegation_errors"], "Expected wrong SID to trigger delegation error"
     assert "hyperv08" in result["delegation_errors"][0]
 
 
 def test_validate_host_kerberos_setup_flags_cno_delegation(monkeypatch):
-    """Delegation on the CNO should be reported even when hosts are configured."""
+    """With new RBCD-based validation, CNO delegation is no longer checked."""
+
+    service_sid = _sid_from_components(21, 1001, 2002, 3003, 5001)
+    service_sid_str = _sid_bytes_to_str(service_sid)
+
+    def fake_resolve_sid(principal, realm=None):
+        return service_sid
 
     def fake_ldap(name, realm=None):
-        lower = name.lower()
-        if lower == "clusterbad":
-            return {
-                "exists": True,
-                "delegation_present": True,
-                "delegation_principals": [
-                    "CN=svc-winrm,OU=Service,DC=example,DC=com"
-                ],
-                "rbcd_present": False,
-                "rbcd_principals": [],
-                "rbcd_sid_strings": [],
-            }
+        # Hosts have proper RBCD configuration
         return {
             "exists": True,
-            "delegation_present": True,
-            "delegation_principals": [
-                "CN=svc-winrm,OU=Service,DC=example,DC=com"
-            ],
-            "rbcd_present": False,
-            "rbcd_principals": [],
-            "rbcd_sid_strings": [],
+            "delegation_present": False,
+            "delegation_principals": [],
+            "rbcd_present": True,
+            "rbcd_principals": ["svc-winrm"],
+            "rbcd_sid_strings": [service_sid_str],
         }
 
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_resolve_service_account_sid",
+        fake_resolve_sid,
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager._ldap_get_computer_delegation_info",
         fake_ldap,
@@ -725,29 +722,20 @@ def test_validate_host_kerberos_setup_flags_cno_delegation(monkeypatch):
         service_principal="svc-winrm@EXAMPLE.COM",
     )
 
-    assert len(result["delegation_errors"]) == 1
-    message = result["delegation_errors"][0]
-    assert message.startswith("Delegation incorrectly applied to the Cluster Name Object:")
-    assert "ClusterBad" in message
-    assert "hyperv06" not in message
+    # With correct RBCD on the host, no errors
+    assert not result["delegation_errors"]
 
 
 def test_validate_host_kerberos_setup_reports_combined_misconfiguration(monkeypatch):
-    """Delegation on the CNO plus missing host delegation should produce a combined message."""
+    """Missing RBCD on hosts should produce appropriate error."""
+
+    service_sid = _sid_from_components(21, 1001, 2002, 3003, 5001)
+
+    def fake_resolve_sid(principal, realm=None):
+        return service_sid
 
     def fake_ldap(name, realm=None):
-        lower = name.lower()
-        if lower == "clusterbad":
-            return {
-                "exists": True,
-                "delegation_present": True,
-                "delegation_principals": [
-                    "CN=svc-winrm,OU=Service,DC=example,DC=com"
-                ],
-                "rbcd_present": True,
-                "rbcd_principals": ["CN=Other,DC=example,DC=com"],
-                "rbcd_sid_strings": ["S-1-5-21-123"],
-            }
+        # Host missing RBCD
         return {
             "exists": True,
             "delegation_present": False,
@@ -757,6 +745,10 @@ def test_validate_host_kerberos_setup_reports_combined_misconfiguration(monkeypa
             "rbcd_sid_strings": [],
         }
 
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_resolve_service_account_sid",
+        fake_resolve_sid,
+    )
     monkeypatch.setattr(
         "app.services.kerberos_manager._ldap_get_computer_delegation_info",
         fake_ldap,
@@ -775,9 +767,8 @@ def test_validate_host_kerberos_setup_reports_combined_misconfiguration(monkeypa
 
     assert len(result["delegation_errors"]) == 1
     message = result["delegation_errors"][0]
-    assert message.startswith("Cluster delegation misconfigured:")
+    assert "Resource-Based Constrained Delegation" in message
     assert "hyperv07" in message
-    assert "ClusterBad" in message
 
 
 def test_check_host_delegation_legacy_reports_missing(monkeypatch):

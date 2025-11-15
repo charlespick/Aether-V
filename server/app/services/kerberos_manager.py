@@ -1100,6 +1100,128 @@ def _ldap_get_computer_delegation_info(
             connection.unbind()
 
 
+def _ldap_resolve_service_account_sid(
+    service_principal: str, realm: Optional[str]
+) -> Optional[bytes]:
+    """
+    Resolve the service account's SID via LDAP.
+    
+    This is essential for RBCD validation as msDS-AllowedToActOnBehalfOfOtherIdentity
+    contains ACEs with SIDs, not principal names or SPNs.
+    
+    Args:
+        service_principal: The service principal (UPN or SPN format)
+        realm: Optional Kerberos realm
+        
+    Returns:
+        Raw SID bytes if found, None otherwise
+    """
+    if not service_principal or Connection is None or escape_filter_chars is None:
+        return None
+
+    normalized = service_principal.strip()
+    if not normalized:
+        return None
+
+    server_hosts = _discover_ldap_server_hosts(realm)
+    if not server_hosts:
+        logger.warning(
+            "Unable to locate LDAP servers to resolve service account SID for '%s'",
+            service_principal,
+        )
+        return None
+
+    connection: Optional[Connection] = None
+    bound_host: Optional[str] = None
+
+    for server_host in server_hosts:
+        connection = _establish_ldap_connection(server_host)
+        if connection is not None:
+            bound_host = server_host
+            break
+
+    if connection is None:
+        logger.warning(
+            "LDAP connection unavailable for service account SID resolution"
+        )
+        return None
+
+    try:
+        manager = get_kerberos_manager()
+        base_hint = _realm_to_base_dn(realm or (manager.realm if manager else None))
+        base_dn = base_hint or _lookup_default_naming_context(connection)
+        if not base_dn:
+            logger.warning("Unable to determine LDAP base DN for SID resolution")
+            return None
+
+        # Try to resolve by UPN first (e.g., aetherv_srv@EXAMPLE.COM)
+        search_filter = None
+        if "@" in normalized:
+            search_filter = f"(&(objectClass=user)(userPrincipalName={escape_filter_chars(normalized)}))"
+        else:
+            # Fallback: try sAMAccountName
+            search_filter = f"(&(objectClass=user)(sAMAccountName={escape_filter_chars(normalized)}))"
+
+        logger.debug(
+            "Resolving service account SID for '%s' using filter: %s",
+            service_principal,
+            search_filter,
+        )
+
+        try:
+            connection.search(
+                base_dn,
+                search_filter,
+                search_scope=SUBTREE,
+                attributes=["objectSid", "sAMAccountName", "userPrincipalName"],
+                size_limit=1,
+            )
+        except LDAPException as exc:  # pragma: no cover - environment specific
+            logger.warning(
+                "LDAP search for service account '%s' failed: %s",
+                service_principal,
+                exc,
+                exc_info=True,
+            )
+            return None
+
+        if not connection.entries:
+            logger.warning(
+                "Service account '%s' not found in Active Directory",
+                service_principal,
+            )
+            return None
+
+        entry = connection.entries[0]
+        raw_attrs = entry.entry_raw_attributes or {}
+        sid_values = raw_attrs.get("objectSid")
+        
+        if not sid_values:
+            logger.warning(
+                "Service account '%s' found but has no objectSid attribute",
+                service_principal,
+            )
+            return None
+
+        sid_blob = sid_values[0]
+        if isinstance(sid_blob, memoryview):
+            sid_blob = sid_blob.tobytes()
+        
+        sid_str = _sid_bytes_to_str(sid_blob)
+        logger.info(
+            "Resolved service account '%s' to SID: %s",
+            service_principal,
+            sid_str,
+        )
+        
+        return bytes(sid_blob)
+
+    finally:
+        if connection is not None:
+            logger.debug("Unbinding LDAP connection to %s", bound_host or "<unknown>")
+            connection.unbind()
+
+
 def _ldap_resolve_service_principal_tokens(
     service_principal: str, realm: Optional[str]
 ) -> Set[str]:
@@ -1209,13 +1331,18 @@ def validate_host_kerberos_setup(
     service_principal: Optional[str] = None,
 ) -> Dict[str, List[str]]:
     """
-    Validate Kerberos setup for configured Hyper-V hosts.
+    Validate Kerberos setup for configured Hyper-V hosts using Resource-Based Constrained Delegation (RBCD).
 
-    Checks:
+    This validation checks the CORRECT delegation configuration for Aether-V's S4U2Proxy double-hop requirements:
+    
     1. WSMAN SPN exists for each host
-    2. Each Hyper-V host allows the WinRM service account in its
-       PrincipalsAllowedToDelegateToAccount attribute and Cluster Name Objects do not
-       contain delegation entries
+    2. **msDS-AllowedToActOnBehalfOfOtherIdentity** on each Hyper-V **host computer object** contains 
+       an Allow ACE with GenericAll rights for the Aether-V service account's SID
+
+    IMPORTANT: This function checks RBCD on HYPER-V HOSTS, not on the Cluster Name Object (CNO).
+    For Aether-V's S4U2Proxy to work when contacting HTTP/WSMAN on a host, the delegation must be 
+    configured on the HOST'S computer object, because that's what the KDC checks when issuing 
+    S4U2Proxy tickets.
 
     Args:
         hosts: List of hostnames to validate
@@ -1249,6 +1376,7 @@ def validate_host_kerberos_setup(
         # Only warn when we truly have nothing to validate
         result["warnings"].append("No Hyper-V hosts configured to validate")
 
+    # Collect all hosts that need RBCD validation (directly configured + cluster members)
     delegation_hosts: Set[str] = set(hosts)
     if clusters:
         for cluster_hosts in clusters.values():
@@ -1256,206 +1384,143 @@ def validate_host_kerberos_setup(
                 continue
             delegation_hosts.update(cluster_hosts)
 
-    cluster_names: Set[str] = set(clusters.keys()) if clusters else set()
+    if not delegation_hosts:
+        logger.debug("No hosts available for RBCD validation")
+        return result
 
-    if delegation_hosts or cluster_names:
-        if service_principal is None:
-            manager = get_kerberos_manager()
-            if manager is not None:
-                service_principal = manager.principal
+    # Get service principal and resolve its SID
+    if service_principal is None:
+        manager = get_kerberos_manager()
+        if manager is not None:
+            service_principal = manager.principal
 
-        service_principal_clean = service_principal.strip() if service_principal else ""
-        if not service_principal_clean and delegation_hosts:
+    service_principal_clean = service_principal.strip() if service_principal else ""
+    if not service_principal_clean:
+        warning_msg = (
+            "WinRM service account principal unavailable; skipping RBCD validation"
+        )
+        logger.warning(warning_msg)
+        result["warnings"].append(warning_msg)
+        return result
+
+    # Resolve the service account SID - this is critical for RBCD validation
+    lookup_realm = realm
+    if not lookup_realm and "@" in service_principal_clean:
+        lookup_realm = service_principal_clean.split("@", 1)[1]
+    
+    logger.info("Resolving service account SID for RBCD validation")
+    service_account_sid = _ldap_resolve_service_account_sid(
+        service_principal_clean,
+        lookup_realm,
+    )
+    
+    if not service_account_sid:
+        error_msg = (
+            f"Unable to resolve SID for service account '{service_principal_clean}'. "
+            "RBCD validation requires the service account's objectSid from Active Directory."
+        )
+        logger.error(error_msg)
+        result["errors"].append(error_msg)
+        result["delegation_errors"].append(error_msg)
+        return result
+
+    service_account_sid_str = _sid_bytes_to_str(service_account_sid)
+    logger.info(
+        "Service account '%s' resolved to SID %s for RBCD validation",
+        service_principal_clean,
+        service_account_sid_str,
+    )
+
+    # Validate RBCD on each Hyper-V host
+    hosts_missing_rbcd: List[str] = []
+    hosts_with_rbcd: List[str] = []
+
+    logger.info(
+        "Validating RBCD (msDS-AllowedToActOnBehalfOfOtherIdentity) for %d host(s)",
+        len(delegation_hosts),
+    )
+    
+    for host in sorted(delegation_hosts):
+        directory_info = _ldap_get_computer_delegation_info(host, realm)
+        if directory_info is None:
             warning_msg = (
-                "WinRM service account principal unavailable; skipping delegation validation"
+                f"Host '{host}': RBCD check skipped (LDAP connection unavailable)"
             )
             logger.warning(warning_msg)
             result["warnings"].append(warning_msg)
+            continue
 
-        missing_delegation_hosts: List[Tuple[str, List[str]]] = []
-        resolved_service_tokens: Set[str] = set()
-
-        if service_principal_clean:
-            lookup_realm = realm
-            if not lookup_realm and "@" in service_principal_clean:
-                lookup_realm = service_principal_clean.split("@", 1)[1]
-            resolved_service_tokens = _ldap_resolve_service_principal_tokens(
-                service_principal_clean,
-                lookup_realm,
+        if not directory_info.get("exists", True):
+            error_msg = (
+                f"Host '{host}': Computer object not found in Active Directory. "
+                "Ensure the host exists, then configure RBCD by setting "
+                f"msDS-AllowedToActOnBehalfOfOtherIdentity on the host's computer object "
+                f"to grant '{service_principal_clean}' with GenericAll rights."
             )
+            result["errors"].append(error_msg)
+            result["delegation_errors"].append(error_msg)
+            hosts_missing_rbcd.append(host)
+            continue
 
-            logger.info(
-                "Validating delegation permissions for %d host(s)",
-                len(delegation_hosts),
+        # Check if the host has RBCD configured
+        rbcd_present = directory_info.get("rbcd_present", False)
+        if not rbcd_present:
+            logger.warning(
+                "Host '%s': msDS-AllowedToActOnBehalfOfOtherIdentity is not set",
+                host,
             )
-            for host in sorted(delegation_hosts):
-                directory_info = _ldap_get_computer_delegation_info(host, realm)
-                if directory_info is None:
-                    warning_msg = (
-                        f"Host '{host}': Delegation check skipped (LDAP connection unavailable)"
-                    )
-                    logger.warning(warning_msg)
-                    result["warnings"].append(warning_msg)
-                    continue
+            hosts_missing_rbcd.append(host)
+            continue
 
-                if not directory_info.get("exists", True):
-                    error_msg = (
-                        f"Host '{host}': Computer object not found in Active Directory. "
-                        "Ensure the host exists and then add the WinRM service account "
-                        "to its 'PrincipalsAllowedToDelegateToAccount' attribute."
-                    )
-                    result["errors"].append(error_msg)
-                    result["delegation_errors"].append(error_msg)
-                    continue
-
-                allowed_principals = [
-                    str(principal)
-                    for principal in directory_info.get("delegation_principals", [])
-                    if principal
-                ]
-
-                if not allowed_principals:
-                    logger.warning(
-                        "Host '%s': PrincipalsAllowedToDelegateToAccount is empty", host
-                    )
-                    missing_delegation_hosts.append((host, allowed_principals))
-                    continue
-
-                if not _service_principal_in_allowed_list(
-                    service_principal_clean,
-                    allowed_principals,
-                    resolved_tokens=resolved_service_tokens,
-                ):
-                    logger.warning(
-                        "Host '%s': Service account '%s' absent from PrincipalsAllowedToDelegateToAccount",
-                        host,
-                        service_principal_clean,
-                    )
-                    missing_delegation_hosts.append((host, allowed_principals))
-                else:
-                    logger.info(
-                        "Host '%s': Delegation allows principal '%s'",
-                        host,
-                        service_principal_clean,
-                    )
-
-        cno_delegation_entries: List[Tuple[str, List[str], bool, List[str]]] = []
-
-        for cluster_name in sorted(cluster_names):
-            directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
-            if directory_info is None:
-                warning_msg = (
-                    f"Cluster '{cluster_name}': Delegation check skipped (LDAP connection unavailable)"
-                )
-                logger.warning(warning_msg)
-                result["warnings"].append(warning_msg)
-                continue
-
-            if not directory_info.get("exists", True):
-                warning_msg = (
-                    f"Cluster '{cluster_name}': Cluster Name Object not found in Active Directory"
-                )
-                logger.warning(warning_msg)
-                result["warnings"].append(warning_msg)
-                continue
-
-            cno_delegation_principals = [
-                str(principal)
-                for principal in directory_info.get("delegation_principals", [])
-                if principal
-            ]
-            cno_rbcd_principals = [
-                str(principal)
-                for principal in directory_info.get("rbcd_principals", [])
-                if principal
-            ]
-            if directory_info.get("rbcd_sid_strings"):
-                cno_rbcd_principals.extend(
-                    [
-                        str(sid)
-                        for sid in directory_info.get("rbcd_sid_strings", [])
-                        if sid
-                    ]
-                )
-
-            rbcd_present = bool(directory_info.get("rbcd_present"))
-
-            if cno_delegation_principals or rbcd_present:
-                cno_delegation_entries.append(
-                    (
-                        cluster_name,
-                        cno_delegation_principals,
-                        rbcd_present,
-                        cno_rbcd_principals,
-                    )
-                )
-
-        host_entries: List[str] = []
-        for host, principals in missing_delegation_hosts:
-            if principals:
-                host_entries.append(
-                    f"{host} (configured: {', '.join(principals)})"
-                )
-            else:
-                host_entries.append(host)
-
-        cno_entries: List[str] = []
-        for cluster_name, principals, rbcd_present, rbcd_values in cno_delegation_entries:
-            details: List[str] = []
-            if principals:
-                details.append(
-                    f"PrincipalsAllowedToDelegateToAccount={'; '.join(principals)}"
-                )
-            if rbcd_present:
-                rbcd_detail = "; ".join(rbcd_values) if rbcd_values else "<present>"
-                details.append(
-                    f"msDS-AllowedToActOnBehalfOfOtherIdentity={rbcd_detail}"
-                )
-            detail_suffix = f" ({'; '.join(details)})" if details else ""
-            cno_entries.append(f"{cluster_name}{detail_suffix}")
-
-        host_message = None
-        if host_entries and service_principal_clean:
-            host_list = ", ".join(host_entries)
-            host_message = (
-                "Delegation missing on cluster hosts: "
-                f"The WinRM service account '{service_principal_clean}' does not appear in the "
-                "PrincipalsAllowedToDelegateToAccount attribute on the following Hyper-V hosts: "
-                f"{host_list}. "
-                "Cluster operations require delegation on each host because cluster API calls "
-                "originate from the node computer account."
+        # Check if the service account's SID is in the RBCD ACEs
+        rbcd_sid_strings = directory_info.get("rbcd_sid_strings", [])
+        if service_account_sid_str not in rbcd_sid_strings:
+            logger.warning(
+                "Host '%s': Service account SID '%s' not found in msDS-AllowedToActOnBehalfOfOtherIdentity ACEs (found: %s)",
+                host,
+                service_account_sid_str,
+                rbcd_sid_strings,
             )
-
-        cno_message = None
-        if cno_entries:
-            cno_list = ", ".join(cno_entries)
-            cno_message = (
-                "Delegation incorrectly applied to the Cluster Name Object: "
-                f"The Cluster Name Object(s) {cno_list} contain delegation entries, but delegation must "
-                "be applied to the Hyper-V hosts instead. Please remove delegation from the CNO."
-            )
-
-        if host_message and cno_message:
-            combined_message = (
-                "Cluster delegation misconfigured: "
-                "Delegation is applied to the Cluster Name Object instead of the Hyper-V hosts, and "
-                "required delegation is missing on the hosts. Remove delegation from the CNO and add "
-                f"the WinRM service account '{service_principal_clean}' to each host's "
-                "PrincipalsAllowedToDelegateToAccount attribute. "
-                f"Affected hosts: {', '.join(host_entries)}. "
-                f"CNOs with delegation: {', '.join(cno_entries)}."
-            )
-            result["errors"].append(combined_message)
-            result["delegation_errors"].append(combined_message)
+            hosts_missing_rbcd.append(host)
         else:
-            if host_message:
-                result["errors"].append(host_message)
-                result["delegation_errors"].append(host_message)
-            if cno_message:
-                result["errors"].append(cno_message)
-                result["delegation_errors"].append(cno_message)
+            logger.info(
+                "Host '%s': RBCD correctly configured for service account '%s' (SID: %s)",
+                host,
+                service_principal_clean,
+                service_account_sid_str,
+            )
+            hosts_with_rbcd.append(host)
+
+    # Generate error messages for hosts missing RBCD
+    if hosts_missing_rbcd:
+        host_list = ", ".join(hosts_missing_rbcd)
+        error_msg = (
+            f"Resource-Based Constrained Delegation (RBCD) is not correctly configured for Aether-V's "
+            f"Kerberos double-hop authentication. The following Hyper-V host(s) are missing RBCD entries "
+            f"for the service account '{service_principal_clean}' (SID: {service_account_sid_str}): {host_list}. "
+            f"\n\n"
+            f"To fix this issue, configure RBCD on each host's computer object in Active Directory:\n"
+            f"  1. On a domain controller or machine with AD PowerShell tools, run:\n"
+            f"     $ServiceAccount = Get-ADUser -Identity {service_principal_clean.split('@')[0]}\n"
+            f"     $HostComputer = Get-ADComputer <hostname>\n"
+            f"     Set-ADComputer $HostComputer -PrincipalsAllowedToDelegateToAccount $ServiceAccount\n"
+            f"  2. Alternatively, use the msDS-AllowedToActOnBehalfOfOtherIdentity attribute directly.\n"
+            f"\n"
+            f"IMPORTANT: Configure RBCD on the HYPER-V HOST computer objects, NOT on the Cluster Name Object (CNO). "
+            f"Aether-V's S4U2Proxy requires delegation to the host's HTTP/WSMAN service, and the KDC checks "
+            f"the TARGET host's computer object when issuing S4U2Proxy tickets."
+        )
+        result["errors"].append(error_msg)
+        result["delegation_errors"].append(error_msg)
+        logger.error(
+            "RBCD validation failed: %d host(s) missing proper delegation configuration",
+            len(hosts_missing_rbcd),
+        )
     else:
-        logger.debug("No hosts available for delegation validation")
+        logger.info(
+            "RBCD validation passed: All %d host(s) have correct delegation configuration",
+            len(hosts_with_rbcd),
+        )
 
     return result
 
