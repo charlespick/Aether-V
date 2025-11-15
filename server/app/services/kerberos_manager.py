@@ -1100,6 +1100,107 @@ def _ldap_get_computer_delegation_info(
             connection.unbind()
 
 
+def _ldap_resolve_service_principal_tokens(
+    service_principal: str, realm: Optional[str]
+) -> Set[str]:
+    """Resolve additional identifiers for a service principal via LDAP."""
+
+    tokens: Set[str] = set()
+
+    normalized = (service_principal or "").strip()
+    if not normalized or "/" not in normalized:
+        return tokens
+
+    if Connection is None or escape_filter_chars is None:
+        return tokens
+
+    server_hosts = _discover_ldap_server_hosts(realm)
+    if not server_hosts:
+        return tokens
+
+    connection: Optional[Connection] = None
+    bound_host: Optional[str] = None
+
+    for server_host in server_hosts:
+        connection = _establish_ldap_connection(server_host)
+        if connection is not None:
+            bound_host = server_host
+            break
+
+    if connection is None:
+        return tokens
+
+    try:
+        manager = get_kerberos_manager()
+        base_hint = _realm_to_base_dn(realm or (manager.realm if manager else None))
+        base_dn = base_hint or _lookup_default_naming_context(connection)
+        if not base_dn:
+            return tokens
+
+        escaped_spn = escape_filter_chars(normalized)
+        search_filter = (
+            f"(&(objectClass=*)(servicePrincipalName={escaped_spn}))"
+        )
+
+        try:
+            connection.search(
+                base_dn,
+                search_filter,
+                search_scope=SUBTREE,
+                attributes=[
+                    "servicePrincipalName",
+                    "sAMAccountName",
+                    "userPrincipalName",
+                    "distinguishedName",
+                    "cn",
+                    "name",
+                ],
+                size_limit=5,
+            )
+        except LDAPException as exc:  # pragma: no cover - environment specific
+            logger.debug(
+                "LDAP search for service principal '%s' failed: %s",
+                service_principal,
+                exc,
+                exc_info=True,
+            )
+            return tokens
+
+        def _collect(value: object) -> None:
+            if value is None:
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    _collect(item)
+                return
+
+            candidate = str(value).strip()
+            if not candidate:
+                return
+
+            candidate_lower = candidate.lower()
+            tokens.add(candidate_lower)
+            tokens.update(_normalize_principal_tokens(candidate_lower))
+
+        for entry in connection.entries:
+            attr_dict = entry.entry_attributes_as_dict or {}
+
+            _collect(entry.entry_dn)
+            _collect(attr_dict.get("sAMAccountName"))
+            _collect(attr_dict.get("userPrincipalName"))
+            _collect(attr_dict.get("servicePrincipalName"))
+            _collect(attr_dict.get("distinguishedName"))
+            _collect(attr_dict.get("cn"))
+            _collect(attr_dict.get("name"))
+
+    finally:
+        if connection is not None:
+            logger.debug("Unbinding LDAP connection to %s", bound_host or "<unknown>")
+            connection.unbind()
+
+    return tokens
+
+
 def validate_host_kerberos_setup(
     hosts: List[str],
     realm: Optional[str] = None,
@@ -1171,8 +1272,17 @@ def validate_host_kerberos_setup(
             result["warnings"].append(warning_msg)
 
         missing_delegation_hosts: List[Tuple[str, List[str]]] = []
+        resolved_service_tokens: Set[str] = set()
 
         if service_principal_clean:
+            lookup_realm = realm
+            if not lookup_realm and "@" in service_principal_clean:
+                lookup_realm = service_principal_clean.split("@", 1)[1]
+            resolved_service_tokens = _ldap_resolve_service_principal_tokens(
+                service_principal_clean,
+                lookup_realm,
+            )
+
             logger.info(
                 "Validating delegation permissions for %d host(s)",
                 len(delegation_hosts),
@@ -1211,7 +1321,9 @@ def validate_host_kerberos_setup(
                     continue
 
                 if not _service_principal_in_allowed_list(
-                    service_principal_clean, allowed_principals
+                    service_principal_clean,
+                    allowed_principals,
+                    resolved_tokens=resolved_service_tokens,
                 ):
                     logger.warning(
                         "Host '%s': Service account '%s' absent from PrincipalsAllowedToDelegateToAccount",
@@ -1453,7 +1565,10 @@ def _normalize_principal_tokens(principal: str) -> Set[str]:
 
 
 def _service_principal_in_allowed_list(
-    service_principal: str, allowed_principals: List[str]
+    service_principal: str,
+    allowed_principals: List[str],
+    *,
+    resolved_tokens: Optional[Set[str]] = None,
 ) -> bool:
     """Return True when the service principal appears in the allowed principals list."""
 
@@ -1467,16 +1582,27 @@ def _service_principal_in_allowed_list(
     if "@" in service_principal_lower:
         service_tokens.add(service_principal_lower.split("@", 1)[0])
 
+    combined_tokens = set(service_tokens)
+    if resolved_tokens:
+        for token in resolved_tokens:
+            if token is None:
+                continue
+            token_lower = str(token).strip().lower()
+            if not token_lower:
+                continue
+            combined_tokens.add(token_lower)
+            combined_tokens.update(_normalize_principal_tokens(token_lower))
+
     for principal in allowed_principals:
         candidate = str(principal).strip()
         if not candidate:
             continue
         candidate_lower = candidate.lower()
-        if candidate_lower == service_principal_lower:
+        if candidate_lower == service_principal_lower or candidate_lower in combined_tokens:
             return True
         candidate_tokens = _normalize_principal_tokens(candidate)
         candidate_tokens.add(candidate_lower)
-        if not candidate_tokens.isdisjoint(service_tokens):
+        if not candidate_tokens.isdisjoint(combined_tokens):
             return True
 
     return False
