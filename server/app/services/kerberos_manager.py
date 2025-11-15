@@ -10,7 +10,10 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Set
 
-from dns import resolver as dns_resolver  # type: ignore[import]
+try:
+    from dns import resolver as dns_resolver  # type: ignore[import]
+except ImportError:  # pragma: no cover - optional dependency safeguard
+    dns_resolver = None  # type: ignore[assignment]
 
 import gssapi
 import gssapi.raw as gssapi_raw
