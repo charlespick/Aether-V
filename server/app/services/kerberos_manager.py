@@ -500,11 +500,11 @@ def _candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
     domains: List[str] = []
     manager = get_kerberos_manager()
 
-    principal_domain = _extract_domain_from_principal(getattr(manager, "principal", None))
+    principal_domain = _extract_domain_from_principal(manager.principal if manager else None)
     if principal_domain:
         domains.append(principal_domain)
 
-    for candidate in (realm, getattr(manager, "realm", None)):
+    for candidate in (realm, manager.realm if manager else None):
         if not candidate:
             continue
         cleaned = candidate.strip().strip(".")
