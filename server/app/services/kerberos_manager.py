@@ -542,17 +542,21 @@ def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connectio
         or BASE is None
         or SUBTREE is None
     ):
-        logger.debug("ldap3 module unavailable - skipping LDAP-based delegation checks")
+        logger.warning(
+            "ldap3 module unavailable - skipping LDAP-based delegation checks"
+        )
         return None
 
     if not server_host:
-        logger.debug("Unable to derive LDAP server host - skipping LDAP-based delegation checks")
+        logger.warning(
+            "Unable to derive LDAP server host - skipping LDAP-based delegation checks"
+        )
         return None
 
     host, override_port = _parse_ldap_server_target(server_host)
 
     if not host:
-        logger.debug("Unable to determine LDAP hostname from %r", server_host)
+        logger.warning("Unable to determine LDAP hostname from %r", server_host)
         return None
 
     server_kwargs = {"get_info": NONE}
@@ -578,7 +582,12 @@ def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connectio
         )
         return connection
     except LDAPException as exc:  # pragma: no cover - environment specific
-        logger.debug("LDAP bind to %s failed: %s", server_host, exc, exc_info=True)
+        logger.warning(
+            "LDAP bind to %s failed: %s",
+            server_host,
+            exc,
+            exc_info=True,
+        )
         return None
 
 
@@ -819,6 +828,11 @@ def _ldap_get_computer_delegation_info(
     server_host = _derive_ldap_server_host(realm)
     connection = _establish_ldap_connection(server_host)
     if connection is None:
+        logger.warning(
+            "LDAP connection unavailable for '%s' in realm '%s'",
+            name,
+            realm or "<default>",
+        )
         return None
 
     try:
