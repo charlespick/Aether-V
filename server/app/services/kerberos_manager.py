@@ -10,10 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Set
 
-try:
-    from dns import resolver as dns_resolver  # type: ignore[import]
-except ImportError:  # pragma: no cover - optional dependency safeguard
-    dns_resolver = None  # type: ignore[assignment]
+from dns import resolver as dns_resolver
 
 import gssapi
 import gssapi.raw as gssapi_raw
@@ -546,48 +543,43 @@ def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
         logger.warning("Unable to determine AD domain for LDAP discovery")
         return hosts
 
-    if dns_resolver is None:
-        logger.warning(
-            "dnspython module unavailable - cannot perform LDAP domain controller discovery"
-        )
-    else:
-        for domain in domains:
-            srv_record = f"_ldap._tcp.dc._msdcs.{domain}"
-            try:
-                answers = dns_resolver.resolve(srv_record, "SRV")
-            except Exception as exc:  # pragma: no cover - environment specific
-                logger.warning(
-                    "Failed to resolve LDAP SRV records for %s: %s",
-                    srv_record,
-                    exc,
-                )
+    for domain in domains:
+        srv_record = f"_ldap._tcp.dc._msdcs.{domain}"
+        try:
+            answers = dns_resolver.resolve(srv_record, "SRV")
+        except Exception as exc:  # pragma: no cover - environment specific
+            logger.warning(
+                "Failed to resolve LDAP SRV records for %s: %s",
+                srv_record,
+                exc,
+            )
+            continue
+
+        ordered: List[Tuple[int, int, str, str]] = []
+        domain_hosts: List[str] = []
+        for rdata in answers:
+            target = getattr(rdata, "target", None)
+            if not target:
                 continue
+            host = str(target).rstrip(".")
+            if not host:
+                continue
+            priority = getattr(rdata, "priority", 0)
+            weight = getattr(rdata, "weight", 0)
+            ordered.append((int(priority), int(weight), host.lower(), host))
 
-            ordered: List[Tuple[int, int, str, str]] = []
-            domain_hosts: List[str] = []
-            for rdata in answers:
-                target = getattr(rdata, "target", None)
-                if not target:
-                    continue
-                host = str(target).rstrip(".")
-                if not host:
-                    continue
-                priority = getattr(rdata, "priority", 0)
-                weight = getattr(rdata, "weight", 0)
-                ordered.append((int(priority), int(weight), host.lower(), host))
+        for _, _, _, host in sorted(ordered, key=lambda item: (item[0], -item[1], item[2])):
+            if host not in hosts:
+                hosts.append(host)
+            if host not in domain_hosts:
+                domain_hosts.append(host)
 
-            for _, _, _, host in sorted(ordered, key=lambda item: (item[0], -item[1], item[2])):
-                if host not in hosts:
-                    hosts.append(host)
-                if host not in domain_hosts:
-                    domain_hosts.append(host)
-
-            if domain_hosts:
-                logger.debug(
-                    "Discovered LDAP domain controllers for %s: %s",
-                    domain,
-                    ", ".join(domain_hosts),
-                )
+        if domain_hosts:
+            logger.debug(
+                "Discovered LDAP domain controllers for %s: %s",
+                domain,
+                ", ".join(domain_hosts),
+            )
 
     return hosts
 
