@@ -7,8 +7,9 @@ import re
 import struct
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Set
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from dns import resolver as dns_resolver
 
@@ -40,6 +41,55 @@ except ImportError:  # pragma: no cover - optional dependency safeguard
     escape_filter_chars = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+
+GENERIC_ALL_ACCESS_MASK = 0x10000000
+
+
+@dataclass(frozen=True)
+class ServiceAccountInfo:
+    """Resolved information about the Aether-V service account."""
+
+    distinguished_name: str
+    sid: bytes
+    sid_string: str
+    sam_account_name: Optional[str] = None
+    user_principal_name: Optional[str] = None
+
+    @property
+    def display_name(self) -> str:
+        """Return a human-friendly identifier for the account."""
+
+        return (
+            self.user_principal_name
+            or self.sam_account_name
+            or self.distinguished_name
+            or self.sid_string
+        )
+
+
+@dataclass(frozen=True)
+class ResolvedRbcdEntry:
+    """Representation of an ACE within msDS-AllowedToActOnBehalfOfOtherIdentity."""
+
+    sid: bytes
+    sid_string: str
+    access_mask: int
+    resolved_name: Optional[str] = None
+
+    @property
+    def display_name(self) -> str:
+        return self.resolved_name or self.sid_string
+
+    def grants_generic_all(self) -> bool:
+        return bool(self.access_mask & GENERIC_ALL_ACCESS_MASK)
+
+
+class AllowedAce(NamedTuple):
+    """Simplified representation of an ACCESS_ALLOWED ACE."""
+
+    sid: bytes
+    mask: int
 
 
 class KerberosManagerError(RuntimeError):
@@ -717,8 +767,8 @@ def _lookup_default_naming_context(connection: Connection) -> Optional[str]:
     return None
 
 
-def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[bytes]:
-    """Return SID blobs from ACCESS_ALLOWED ACEs (including object ACEs)."""
+def _extract_allowed_aces_from_security_descriptor(descriptor: bytes) -> List[AllowedAce]:
+    """Return simplified ACEs extracted from ACCESS_ALLOWED entries."""
 
     if not descriptor:
         return []
@@ -744,7 +794,7 @@ def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[by
 
     ace_count = struct.unpack_from("<H", data, dacl_offset + 4)[0]
     cursor = dacl_offset + 8
-    sids: List[bytes] = []
+    aces: List[AllowedAce] = []
 
     ACE_OBJECT_TYPE_PRESENT = 0x1
     ACE_INHERITED_OBJECT_TYPE_PRESENT = 0x2
@@ -760,16 +810,18 @@ def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[by
             break
 
         if ace_type == 0x00:  # ACCESS_ALLOWED_ACE_TYPE
+            access_mask = struct.unpack_from("<I", data, cursor + 4)[0]
             sid_start = cursor + 8
             sid_blob = data[sid_start: cursor + ace_size]
             if sid_blob:
-                sids.append(sid_blob)
+                aces.append(AllowedAce(bytes(sid_blob), access_mask))
         elif ace_type == 0x05:  # ACCESS_ALLOWED_OBJECT_ACE_TYPE
             if ace_size < 12:
                 cursor += ace_size
                 continue
 
             flags = struct.unpack_from("<I", data, cursor + 8)[0]
+            access_mask = struct.unpack_from("<I", data, cursor + 4)[0]
             sid_start = cursor + 12
 
             # Object ACEs may include optional GUIDs depending on the flags
@@ -784,11 +836,11 @@ def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[by
 
             sid_blob = data[sid_start: cursor + ace_size]
             if sid_blob:
-                sids.append(sid_blob)
+                aces.append(AllowedAce(bytes(sid_blob), access_mask))
 
         cursor += ace_size
 
-    return sids
+    return aces
 
 
 def _sid_bytes_to_str(sid: bytes) -> Optional[str]:
@@ -920,6 +972,175 @@ def _normalize_ldap_boolean(value: object) -> Optional[bool]:
     return None
 
 
+def _ldap_get_service_account_info(
+    service_principal: str, realm: Optional[str]
+) -> Optional[ServiceAccountInfo]:
+    """Resolve the WinRM service account via LDAP and return its SID."""
+
+    if Connection is None or escape_filter_chars is None:
+        return None
+
+    normalized = (service_principal or "").strip()
+    if not normalized:
+        return None
+
+    server_hosts = _discover_ldap_server_hosts(realm)
+    if not server_hosts:
+        return None
+
+    connection: Optional[Connection] = None
+    bound_host: Optional[str] = None
+
+    for server_host in server_hosts:
+        connection = _establish_ldap_connection(server_host)
+        if connection is not None:
+            bound_host = server_host
+            break
+
+    if connection is None:
+        return None
+
+    try:
+        manager = get_kerberos_manager()
+        base_hint = _realm_to_base_dn(realm or (manager.realm if manager else None))
+        base_dn = base_hint or _lookup_default_naming_context(connection)
+        if not base_dn:
+            return None
+
+        conditions: Set[str] = set()
+
+        if "/" in normalized:
+            conditions.add(
+                f"(servicePrincipalName={escape_filter_chars(normalized)})"
+            )
+
+        if "@" in normalized and "/" not in normalized:
+            conditions.add(
+                f"(userPrincipalName={escape_filter_chars(normalized)})"
+            )
+
+        sam_candidate = normalized
+        if "@" in sam_candidate:
+            sam_candidate = sam_candidate.split("@", 1)[0]
+
+        if sam_candidate and "/" not in sam_candidate:
+            conditions.add(
+                f"(sAMAccountName={escape_filter_chars(sam_candidate)})"
+            )
+            if not sam_candidate.endswith("$"):
+                conditions.add(
+                    f"(sAMAccountName={escape_filter_chars(sam_candidate + '$')})"
+                )
+
+        if not conditions:
+            return None
+
+        if len(conditions) == 1:
+            condition_filter = next(iter(conditions))
+        else:
+            condition_filter = "(|" + "".join(sorted(conditions)) + ")"
+
+        search_filter = (
+            f"(&(|(objectClass=user)(objectClass=computer)){condition_filter})"
+        )
+
+        try:
+            connection.search(
+                base_dn,
+                search_filter,
+                search_scope=SUBTREE,
+                attributes=[
+                    "objectSid",
+                    "distinguishedName",
+                    "sAMAccountName",
+                    "userPrincipalName",
+                ],
+                size_limit=5,
+            )
+        except LDAPException as exc:  # pragma: no cover - environment specific
+            logger.debug(
+                "LDAP search for service principal '%s' failed: %s",
+                service_principal,
+                exc,
+                exc_info=True,
+            )
+            return None
+
+        best_entry = None
+        for entry in connection.entries:
+            raw_attrs = entry.entry_raw_attributes or {}
+            sid_values = raw_attrs.get("objectSid")
+            if not sid_values:
+                continue
+            attr_dict = entry.entry_attributes_as_dict or {}
+            object_classes = {
+                str(value).strip().lower()
+                for value in attr_dict.get("objectClass", [])
+                if value
+            }
+            if "user" in object_classes:
+                best_entry = entry
+                break
+            if best_entry is None:
+                best_entry = entry
+
+        if best_entry is None:
+            return None
+
+        raw_attrs = best_entry.entry_raw_attributes or {}
+        attr_dict = best_entry.entry_attributes_as_dict or {}
+
+        sid_values = raw_attrs.get("objectSid") or []
+        sid_bytes: Optional[bytes] = None
+        if sid_values:
+            first_value = sid_values[0]
+            if isinstance(first_value, memoryview):
+                sid_bytes = first_value.tobytes()
+            elif isinstance(first_value, bytearray):
+                sid_bytes = bytes(first_value)
+            elif isinstance(first_value, bytes):
+                sid_bytes = first_value
+
+        if not sid_bytes:
+            return None
+
+        sid_string = _sid_bytes_to_str(sid_bytes)
+        if not sid_string:
+            return None
+
+        def _attr_str(name: str) -> Optional[str]:
+            value = attr_dict.get(name)
+            if value is None:
+                return None
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    candidate = str(item).strip()
+                    if candidate:
+                        return candidate
+                return None
+            candidate = str(value).strip()
+            return candidate or None
+
+        dn = (
+            _attr_str("distinguishedName")
+            or str(best_entry.entry_dn)
+            if getattr(best_entry, "entry_dn", None)
+            else ""
+        )
+
+        return ServiceAccountInfo(
+            distinguished_name=dn,
+            sid=sid_bytes,
+            sid_string=sid_string,
+            sam_account_name=_attr_str("sAMAccountName"),
+            user_principal_name=_attr_str("userPrincipalName"),
+        )
+    finally:
+        if connection is not None:
+            logger.debug("Unbinding LDAP connection to %s", bound_host or "<unknown>")
+            connection.unbind()
+
+
 def _ldap_get_computer_delegation_info(
     name: str, realm: Optional[str]
 ) -> Optional[Dict[str, object]]:
@@ -1008,6 +1229,9 @@ def _ldap_get_computer_delegation_info(
                         "TrustedToAuthForDelegation",
                         "TrustedForDelegation",
                         "objectSid",
+                        "dNSHostName",
+                        "sAMAccountName",
+                        "distinguishedName",
                     ],
                     size_limit=1,
                 )
@@ -1031,6 +1255,26 @@ def _ldap_get_computer_delegation_info(
         raw_attrs = entry.entry_raw_attributes or {}
         attr_dict = entry.entry_attributes_as_dict or {}
 
+        def _first_str(value: object) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    candidate = _first_str(item)
+                    if candidate:
+                        return candidate
+                return None
+            candidate = str(value).strip()
+            return candidate or None
+
+        sam_account_name = _first_str(attr_dict.get("sAMAccountName"))
+        dns_host_name = _first_str(attr_dict.get("dNSHostName"))
+        distinguished_name = _first_str(attr_dict.get("distinguishedName")) or (
+            str(entry.entry_dn)
+            if getattr(entry, "entry_dn", None)
+            else None
+        )
+
         delegation_principals = attr_dict.get("PrincipalsAllowedToDelegateToAccount") or []
         if isinstance(delegation_principals, str):
             delegation_principals = [delegation_principals]
@@ -1044,9 +1288,13 @@ def _ldap_get_computer_delegation_info(
         ]
 
         rbcd_values = raw_attrs.get("msDS-AllowedToActOnBehalfOfOtherIdentity") or []
-        sid_blobs: List[bytes] = []
+        rbcd_aces: List[AllowedAce] = []
         for descriptor in rbcd_values:
-            sid_blobs.extend(_extract_allowed_sids_from_security_descriptor(descriptor))
+            rbcd_aces.extend(
+                _extract_allowed_aces_from_security_descriptor(descriptor)
+            )
+
+        sid_blobs: List[bytes] = [ace.sid for ace in rbcd_aces if ace.sid]
 
         sid_strings = [
             sid_str
@@ -1066,6 +1314,20 @@ def _ldap_get_computer_delegation_info(
             if display not in seen_principals:
                 seen_principals.add(display)
                 allowed_principals.append(display)
+
+        resolved_rbcd_entries: List[ResolvedRbcdEntry] = []
+        for ace in rbcd_aces:
+            sid_str = _sid_bytes_to_str(ace.sid)
+            if not sid_str:
+                continue
+            resolved_rbcd_entries.append(
+                ResolvedRbcdEntry(
+                    sid=ace.sid,
+                    sid_string=sid_str,
+                    access_mask=ace.mask,
+                    resolved_name=principal_lookup.get(sid_str),
+                )
+            )
 
         delegate_targets = attr_dict.get("msDS-AllowedToDelegateTo") or []
         if isinstance(delegate_targets, str):
@@ -1089,6 +1351,10 @@ def _ldap_get_computer_delegation_info(
             "rbcd_present": bool(rbcd_values),
             "rbcd_principals": allowed_principals,
             "rbcd_sid_strings": sid_strings,
+            "rbcd_entries": resolved_rbcd_entries,
+            "sam_account_name": sam_account_name,
+            "dns_host_name": dns_host_name,
+            "distinguished_name": distinguished_name,
             "delegate_targets": delegate_targets,
             "delegate_present": bool(delegate_targets),
             "trusted_to_auth": bool(trusted_to_auth),
@@ -1100,107 +1366,6 @@ def _ldap_get_computer_delegation_info(
             connection.unbind()
 
 
-def _ldap_resolve_service_principal_tokens(
-    service_principal: str, realm: Optional[str]
-) -> Set[str]:
-    """Resolve additional identifiers for a service principal via LDAP."""
-
-    tokens: Set[str] = set()
-
-    normalized = (service_principal or "").strip()
-    if not normalized or "/" not in normalized:
-        return tokens
-
-    if Connection is None or escape_filter_chars is None:
-        return tokens
-
-    server_hosts = _discover_ldap_server_hosts(realm)
-    if not server_hosts:
-        return tokens
-
-    connection: Optional[Connection] = None
-    bound_host: Optional[str] = None
-
-    for server_host in server_hosts:
-        connection = _establish_ldap_connection(server_host)
-        if connection is not None:
-            bound_host = server_host
-            break
-
-    if connection is None:
-        return tokens
-
-    try:
-        manager = get_kerberos_manager()
-        base_hint = _realm_to_base_dn(realm or (manager.realm if manager else None))
-        base_dn = base_hint or _lookup_default_naming_context(connection)
-        if not base_dn:
-            return tokens
-
-        escaped_spn = escape_filter_chars(normalized)
-        search_filter = (
-            f"(&(objectClass=*)(servicePrincipalName={escaped_spn}))"
-        )
-
-        try:
-            connection.search(
-                base_dn,
-                search_filter,
-                search_scope=SUBTREE,
-                attributes=[
-                    "servicePrincipalName",
-                    "sAMAccountName",
-                    "userPrincipalName",
-                    "cn",
-                    "name",
-                ],
-                size_limit=5,
-            )
-        except LDAPException as exc:  # pragma: no cover - environment specific
-            logger.debug(
-                "LDAP search for service principal '%s' failed: %s",
-                service_principal,
-                exc,
-                exc_info=True,
-            )
-            return tokens
-
-        def _collect(attr: str, value: object) -> None:
-            if value is None:
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    _collect(attr, item)
-                return
-
-            candidate = str(value).strip()
-            if not candidate:
-                return
-
-            candidate_lower = candidate.lower()
-            tokens.add(candidate_lower)
-
-            if attr == "userPrincipalName" and "@" in candidate_lower:
-                tokens.add(candidate_lower.split("@", 1)[0])
-            if attr in {"sAMAccountName", "cn", "name"} and candidate_lower.endswith("$"):
-                tokens.add(candidate_lower[:-1])
-
-        for entry in connection.entries:
-            attr_dict = entry.entry_attributes_as_dict or {}
-
-            _collect("sAMAccountName", attr_dict.get("sAMAccountName"))
-            _collect("userPrincipalName", attr_dict.get("userPrincipalName"))
-            _collect("servicePrincipalName", attr_dict.get("servicePrincipalName"))
-            _collect("cn", attr_dict.get("cn"))
-            _collect("name", attr_dict.get("name"))
-
-    finally:
-        if connection is not None:
-            logger.debug("Unbinding LDAP connection to %s", bound_host or "<unknown>")
-            connection.unbind()
-
-    return tokens
-
 
 def validate_host_kerberos_setup(
     hosts: List[str],
@@ -1208,254 +1373,203 @@ def validate_host_kerberos_setup(
     clusters: Optional[Dict[str, List[str]]] = None,
     service_principal: Optional[str] = None,
 ) -> Dict[str, List[str]]:
+    """Validate Kerberos prerequisites for Hyper-V hosts.
+
+    Checks performed:
+    1. Ensure each host exposes the expected WSMAN SPN.
+    2. Confirm resource-based constrained delegation (RBCD) on every host computer
+       object grants the Aether-V service account GenericAll rights.
     """
-    Validate Kerberos setup for configured Hyper-V hosts.
 
-    Checks:
-    1. WSMAN SPN exists for each host
-    2. Each Hyper-V host allows the WinRM service account in its
-       PrincipalsAllowedToDelegateToAccount attribute and Cluster Name Objects do not
-       contain delegation entries
-
-    Args:
-        hosts: List of hostnames to validate
-        realm: Kerberos realm (optional, auto-detected from principal if not provided)
-        clusters: Optional dict mapping cluster names to list of member hostnames
-        service_principal: Optional WinRM service account principal override
-
-    Returns:
-        Dictionary with 'errors', 'warnings', 'spn_errors', and 'delegation_errors' lists
-    """
     result = {
         "errors": [],
         "warnings": [],
         "spn_errors": [],
-        "delegation_errors": []
+        "delegation_errors": [],
     }
 
-    if hosts:
-        logger.info("Validating Kerberos setup for %d host(s)", len(hosts))
-
-        # Check WSMAN SPNs for all hosts
-        for host in hosts:
-            spn_check = _check_wsman_spn(host, realm)
-            if not spn_check[0]:
-                error_msg = f"Host '{host}': {spn_check[1]}"
+    host_list = [host for host in hosts if host]
+    if host_list:
+        logger.info("Validating Kerberos setup for %d host(s)", len(host_list))
+        for host in host_list:
+            success, message = _check_wsman_spn(host, realm)
+            if not success:
+                error_msg = f"Host '{host}': {message}"
                 result["errors"].append(error_msg)
                 result["spn_errors"].append(error_msg)
             else:
                 logger.info("Host '%s': WSMAN SPN validated", host)
     elif not clusters:
-        # Only warn when we truly have nothing to validate
         result["warnings"].append("No Hyper-V hosts configured to validate")
 
-    delegation_hosts: Set[str] = set(hosts)
+    delegation_hosts: Dict[str, str] = {}
+    host_clusters: Dict[str, Set[str]] = {}
+
+    def _add_host(name: Optional[str]) -> Optional[str]:
+        if not name:
+            return None
+        candidate = name.strip()
+        if not candidate:
+            return None
+        key = candidate.lower()
+        if key not in delegation_hosts:
+            delegation_hosts[key] = candidate
+        return key
+
+    for host in host_list:
+        _add_host(host)
+
     if clusters:
-        for cluster_hosts in clusters.values():
+        for cluster_name, cluster_hosts in clusters.items():
             if not cluster_hosts:
                 continue
-            delegation_hosts.update(cluster_hosts)
+            for cluster_host in cluster_hosts:
+                host_key = _add_host(cluster_host)
+                if host_key is None:
+                    continue
+                host_clusters.setdefault(host_key, set()).add(cluster_name)
 
-    cluster_names: Set[str] = set(clusters.keys()) if clusters else set()
+    if not delegation_hosts:
+        logger.debug("No hosts available for delegation validation")
+        return result
 
-    if delegation_hosts or cluster_names:
-        if service_principal is None:
-            manager = get_kerberos_manager()
-            if manager is not None:
-                service_principal = manager.principal
+    resolved_principal = service_principal
+    if resolved_principal is None:
+        manager = get_kerberos_manager()
+        if manager is not None:
+            resolved_principal = manager.principal
 
-        service_principal_clean = service_principal.strip() if service_principal else ""
-        if not service_principal_clean and delegation_hosts:
+    service_principal_clean = (
+        resolved_principal.strip() if resolved_principal else ""
+    )
+    if not service_principal_clean:
+        warning_msg = (
+            "WinRM service account principal unavailable; skipping delegation validation"
+        )
+        logger.warning(warning_msg)
+        result["warnings"].append(warning_msg)
+        return result
+
+    service_account_info = _ldap_get_service_account_info(
+        service_principal_clean, realm
+    )
+    if service_account_info is None:
+        warning_msg = (
+            f"Unable to resolve service account '{service_principal_clean}' in Active Directory; "
+            "skipping delegation validation"
+        )
+        logger.warning(warning_msg)
+        result["warnings"].append(warning_msg)
+        return result
+
+    logger.info(
+        "Validating resource-based delegation for %d host(s)",
+        len(delegation_hosts),
+    )
+
+    service_sid = service_account_info.sid_string
+    service_display = service_account_info.display_name
+
+    def _format_host_prefix(host_label: str, clusters_for_host: Set[str]) -> str:
+        if clusters_for_host:
+            sorted_clusters = sorted(clusters_for_host)
+            if len(sorted_clusters) == 1:
+                return f"Cluster '{sorted_clusters[0]}': Host '{host_label}'"
+            cluster_list = ", ".join(f"'{name}'" for name in sorted_clusters)
+            return f"Clusters {cluster_list}: Host '{host_label}'"
+        return f"Host '{host_label}'"
+
+    def _format_existing(entries: List[ResolvedRbcdEntry]) -> str:
+        if not entries:
+            return "none"
+        return ", ".join(
+            f"{entry.display_name} (mask=0x{entry.access_mask:08x})"
+            for entry in entries
+        )
+
+    for host_key, original_host in sorted(delegation_hosts.items()):
+        directory_info = _ldap_get_computer_delegation_info(original_host, realm)
+        if directory_info is None:
             warning_msg = (
-                "WinRM service account principal unavailable; skipping delegation validation"
+                f"Host '{original_host}': Delegation check skipped (LDAP connection unavailable)"
             )
             logger.warning(warning_msg)
             result["warnings"].append(warning_msg)
+            continue
 
-        missing_delegation_hosts: List[Tuple[str, List[str]]] = []
-        resolved_service_tokens: Set[str] = set()
+        clusters_for_host = host_clusters.get(host_key, set())
+        host_label = directory_info.get("dns_host_name") or original_host
+        host_prefix = _format_host_prefix(host_label, clusters_for_host)
 
-        if service_principal_clean:
-            lookup_realm = realm
-            if not lookup_realm and "@" in service_principal_clean:
-                lookup_realm = service_principal_clean.split("@", 1)[1]
-            resolved_service_tokens = _ldap_resolve_service_principal_tokens(
-                service_principal_clean,
-                lookup_realm,
+        if not directory_info.get("exists", True):
+            error_msg = (
+                f"{host_prefix}: Computer account not found in Active Directory. "
+                f"Create the host computer object and grant '{service_display}' (SID {service_sid}) "
+                "delegation via msDS-AllowedToActOnBehalfOfOtherIdentity."
             )
+            result["errors"].append(error_msg)
+            result["delegation_errors"].append(error_msg)
+            continue
 
-            logger.info(
-                "Validating delegation permissions for %d host(s)",
-                len(delegation_hosts),
+        rbcd_entries: List[ResolvedRbcdEntry] = list(
+            directory_info.get("rbcd_entries") or []
+        )
+        attribute_present = bool(directory_info.get("rbcd_present"))
+        sam_account_name = directory_info.get("sam_account_name")
+        distinguished_name = directory_info.get("distinguished_name")
+        computer_descriptor = (
+            sam_account_name
+            or distinguished_name
+            or host_label
+        )
+
+        if not attribute_present or not rbcd_entries:
+            reason = (
+                "msDS-AllowedToActOnBehalfOfOtherIdentity is not set"
+                if not attribute_present
+                else "msDS-AllowedToActOnBehalfOfOtherIdentity has no delegation entries"
             )
-            for host in sorted(delegation_hosts):
-                directory_info = _ldap_get_computer_delegation_info(host, realm)
-                if directory_info is None:
-                    warning_msg = (
-                        f"Host '{host}': Delegation check skipped (LDAP connection unavailable)"
-                    )
-                    logger.warning(warning_msg)
-                    result["warnings"].append(warning_msg)
-                    continue
-
-                if not directory_info.get("exists", True):
-                    error_msg = (
-                        f"Host '{host}': Computer object not found in Active Directory. "
-                        "Ensure the host exists and then add the WinRM service account "
-                        "to its 'PrincipalsAllowedToDelegateToAccount' attribute."
-                    )
-                    result["errors"].append(error_msg)
-                    result["delegation_errors"].append(error_msg)
-                    continue
-
-                allowed_principals = [
-                    str(principal)
-                    for principal in directory_info.get("delegation_principals", [])
-                    if principal
-                ]
-
-                if not allowed_principals:
-                    logger.warning(
-                        "Host '%s': PrincipalsAllowedToDelegateToAccount is empty", host
-                    )
-                    missing_delegation_hosts.append((host, allowed_principals))
-                    continue
-
-                if not _service_principal_in_allowed_list(
-                    service_principal_clean,
-                    allowed_principals,
-                    resolved_tokens=resolved_service_tokens,
-                ):
-                    logger.warning(
-                        "Host '%s': Service account '%s' absent from PrincipalsAllowedToDelegateToAccount",
-                        host,
-                        service_principal_clean,
-                    )
-                    missing_delegation_hosts.append((host, allowed_principals))
-                else:
-                    logger.info(
-                        "Host '%s': Delegation allows principal '%s'",
-                        host,
-                        service_principal_clean,
-                    )
-
-        cno_delegation_entries: List[Tuple[str, List[str], bool, List[str]]] = []
-
-        for cluster_name in sorted(cluster_names):
-            directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
-            if directory_info is None:
-                warning_msg = (
-                    f"Cluster '{cluster_name}': Delegation check skipped (LDAP connection unavailable)"
-                )
-                logger.warning(warning_msg)
-                result["warnings"].append(warning_msg)
-                continue
-
-            if not directory_info.get("exists", True):
-                warning_msg = (
-                    f"Cluster '{cluster_name}': Cluster Name Object not found in Active Directory"
-                )
-                logger.warning(warning_msg)
-                result["warnings"].append(warning_msg)
-                continue
-
-            cno_delegation_principals = [
-                str(principal)
-                for principal in directory_info.get("delegation_principals", [])
-                if principal
-            ]
-            cno_rbcd_principals = [
-                str(principal)
-                for principal in directory_info.get("rbcd_principals", [])
-                if principal
-            ]
-            if directory_info.get("rbcd_sid_strings"):
-                cno_rbcd_principals.extend(
-                    [
-                        str(sid)
-                        for sid in directory_info.get("rbcd_sid_strings", [])
-                        if sid
-                    ]
-                )
-
-            rbcd_present = bool(directory_info.get("rbcd_present"))
-
-            if cno_delegation_principals or rbcd_present:
-                cno_delegation_entries.append(
-                    (
-                        cluster_name,
-                        cno_delegation_principals,
-                        rbcd_present,
-                        cno_rbcd_principals,
-                    )
-                )
-
-        host_entries: List[str] = []
-        for host, principals in missing_delegation_hosts:
-            if principals:
-                host_entries.append(
-                    f"{host} (configured: {', '.join(principals)})"
-                )
-            else:
-                host_entries.append(host)
-
-        cno_entries: List[str] = []
-        for cluster_name, principals, rbcd_present, rbcd_values in cno_delegation_entries:
-            details: List[str] = []
-            if principals:
-                details.append(
-                    f"PrincipalsAllowedToDelegateToAccount={'; '.join(principals)}"
-                )
-            if rbcd_present:
-                rbcd_detail = "; ".join(rbcd_values) if rbcd_values else "<present>"
-                details.append(
-                    f"msDS-AllowedToActOnBehalfOfOtherIdentity={rbcd_detail}"
-                )
-            detail_suffix = f" ({'; '.join(details)})" if details else ""
-            cno_entries.append(f"{cluster_name}{detail_suffix}")
-
-        host_message = None
-        if host_entries and service_principal_clean:
-            host_list = ", ".join(host_entries)
-            host_message = (
-                "Delegation missing on cluster hosts: "
-                f"The WinRM service account '{service_principal_clean}' does not appear in the "
-                "PrincipalsAllowedToDelegateToAccount attribute on the following Hyper-V hosts: "
-                f"{host_list}. "
-                "Cluster operations require delegation on each host because cluster API calls "
-                "originate from the node computer account."
+            error_msg = (
+                f"{host_prefix}: {reason}. Add '{service_display}' (SID {service_sid}) "
+                f"to msDS-AllowedToActOnBehalfOfOtherIdentity on computer object '{computer_descriptor}'."
             )
+            result["errors"].append(error_msg)
+            result["delegation_errors"].append(error_msg)
+            continue
 
-        cno_message = None
-        if cno_entries:
-            cno_list = ", ".join(cno_entries)
-            cno_message = (
-                "Delegation incorrectly applied to the Cluster Name Object: "
-                f"The Cluster Name Object(s) {cno_list} contain delegation entries, but delegation must "
-                "be applied to the Hyper-V hosts instead. Please remove delegation from the CNO."
-            )
+        matching_entry = next(
+            (entry for entry in rbcd_entries if entry.sid_string == service_sid),
+            None,
+        )
 
-        if host_message and cno_message:
-            combined_message = (
-                "Cluster delegation misconfigured: "
-                "Delegation is applied to the Cluster Name Object instead of the Hyper-V hosts, and "
-                "required delegation is missing on the hosts. Remove delegation from the CNO and add "
-                f"the WinRM service account '{service_principal_clean}' to each host's "
-                "PrincipalsAllowedToDelegateToAccount attribute. "
-                f"Affected hosts: {', '.join(host_entries)}. "
-                f"CNOs with delegation: {', '.join(cno_entries)}."
+        if matching_entry is None:
+            existing_summary = _format_existing(rbcd_entries)
+            error_msg = (
+                f"{host_prefix}: msDS-AllowedToActOnBehalfOfOtherIdentity does not include "
+                f"the Aether-V service account '{service_display}' (SID {service_sid}). "
+                f"Current entries: {existing_summary}. Update computer object '{computer_descriptor}' "
+                "to delegate to the service account."
             )
-            result["errors"].append(combined_message)
-            result["delegation_errors"].append(combined_message)
-        else:
-            if host_message:
-                result["errors"].append(host_message)
-                result["delegation_errors"].append(host_message)
-            if cno_message:
-                result["errors"].append(cno_message)
-                result["delegation_errors"].append(cno_message)
-    else:
-        logger.debug("No hosts available for delegation validation")
+            result["errors"].append(error_msg)
+            result["delegation_errors"].append(error_msg)
+            continue
+
+        if not matching_entry.grants_generic_all():
+            error_msg = (
+                f"{host_prefix}: Delegation entry for '{service_display}' grants access mask "
+                f"0x{matching_entry.access_mask:08x} which does not include GenericAll. "
+                f"Update msDS-AllowedToActOnBehalfOfOtherIdentity on computer object '{computer_descriptor}' "
+                "to grant GenericAll to the service account."
+            )
+            result["errors"].append(error_msg)
+            result["delegation_errors"].append(error_msg)
+            continue
+
+        logger.info(
+            "%s: Resource-based delegation validated for service account '%s'",
+            host_prefix,
+            service_display,
+        )
 
     return result
 
@@ -1529,121 +1643,6 @@ def _check_wsman_spn(host: str, realm: Optional[str] = None) -> Tuple[bool, str]
     except Exception as exc:
         return (False, f"WSMAN SPN check failed: {exc}")
 
-
-def _normalize_principal_tokens(principal: str) -> Set[str]:
-    """Return a set of comparable tokens derived from an allowed principal entry."""
-
-    tokens: Set[str] = set()
-    queue: List[str] = []
-
-    if principal:
-        queue.append(principal.strip().lower())
-
-    while queue:
-        current = queue.pop()
-        if not current or current in tokens:
-            continue
-
-        tokens.add(current)
-
-        if "\\" in current:
-            queue.append(current.split("\\", 1)[1])
-        if "/" in current:
-            queue.append(current.split("/", 1)[1])
-        if "@" in current:
-            queue.append(current.split("@", 1)[0])
-        if current.endswith("$"):
-            queue.append(current[:-1])
-        if "." in current:
-            queue.append(current.split(".", 1)[0])
-        if "=" in current:
-            for part in current.split(","):
-                part = part.strip()
-                if "=" in part:
-                    queue.append(part.split("=", 1)[1])
-
-    return tokens
-
-
-def _service_principal_in_allowed_list(
-    service_principal: str,
-    allowed_principals: List[str],
-    *,
-    resolved_tokens: Optional[Set[str]] = None,
-) -> bool:
-    """Return True when the service principal appears in the allowed principals list."""
-
-    if not service_principal:
-        return False
-
-    service_principal_lower = service_principal.strip().lower()
-    service_tokens = _normalize_principal_tokens(service_principal_lower)
-    if service_principal_lower:
-        service_tokens.add(service_principal_lower)
-    if "@" in service_principal_lower:
-        service_tokens.add(service_principal_lower.split("@", 1)[0])
-
-    combined_tokens = set(service_tokens)
-    if resolved_tokens:
-        for token in resolved_tokens:
-            if token is None:
-                continue
-            token_lower = str(token).strip().lower()
-            if not token_lower:
-                continue
-            combined_tokens.add(token_lower)
-            if "@" in token_lower:
-                combined_tokens.add(token_lower.split("@", 1)[0])
-            if token_lower.endswith("$"):
-                combined_tokens.add(token_lower[:-1])
-
-    for principal in allowed_principals:
-        candidate = str(principal).strip()
-        if not candidate:
-            continue
-        candidate_lower = candidate.lower()
-        if candidate_lower == service_principal_lower or candidate_lower in combined_tokens:
-            return True
-        candidate_tokens = _normalize_principal_tokens(candidate)
-        candidate_tokens.add(candidate_lower)
-        if not candidate_tokens.isdisjoint(combined_tokens):
-            return True
-
-    return False
-
-
-def _normalize_host_tokens(host: str, realm: Optional[str]) -> Set[str]:
-    """Return a set of expected tokens for a Hyper-V host entry."""
-
-    tokens: Set[str] = set()
-
-    if not host:
-        return tokens
-
-    host_lower = host.strip().lower()
-    if not host_lower:
-        return tokens
-
-    short_name = host_lower.split(".", 1)[0]
-    realm_lower = realm.lower() if realm else None
-
-    candidates = {
-        host_lower,
-        short_name,
-        f"{short_name}$",
-    }
-
-    if realm_lower:
-        candidates.update(
-            {
-                f"{short_name}$@{realm_lower}",
-                f"{short_name}@{realm_lower}",
-            }
-        )
-
-    tokens.update(candidate for candidate in candidates if candidate)
-
-    return tokens
 
 
 def _check_host_delegation_legacy(

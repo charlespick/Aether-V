@@ -160,10 +160,11 @@ async def lifespan(app: FastAPI):
                         config_result.warnings.append(
                             ConfigIssue(
                                 message=error,
-                                hint="Add the WinRM service account to each Hyper-V host's \"Principals allowed to delegate\" "
-                                     "list (PrincipalsAllowedToDelegateToAccount). For example: "
-                                     "Set-ADComputer <host> -PrincipalsAllowedToDelegateToAccount (Get-ADUser <service-account>). "
-                                     "This allows WinRM operations to perform double-hop authentication.",
+                                hint="Grant resource-based constrained delegation by adding the WinRM service account "
+                                     "to each Hyper-V computer object's msDS-AllowedToActOnBehalfOfOtherIdentity attribute. "
+                                     "For example: Set-ADComputer <host> -PrincipalsAllowedToDelegateToAccount "
+                                     "(Get-ADUser <service-account>) and verify the resulting ACE grants GenericAll to the "
+                                     "service SID so double-hop operations succeed.",
                             )
                         )
 

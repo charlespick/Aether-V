@@ -123,11 +123,11 @@ Remove-Item C:\temp\aetherv.keytab -Force
 
 ## Configuring Resource-Based Constrained Delegation (RBCD)
 
-RBCD allows the Aether-V service account to delegate credentials to Hyper-V hosts and cluster objects for double-hop operations.
+RBCD allows the Aether-V service account to delegate credentials directly to the Hyper-V host computer accounts for double-hop operations. Each host's `msDS-AllowedToActOnBehalfOfOtherIdentity` attribute must include the Aether-V service account SID with **GenericAll** rights.
 
 ### Step 1: Configure Delegation for Hyper-V Hosts
 
-For each Hyper-V host, configure RBCD to allow the service account to delegate:
+For each Hyper-V host, configure RBCD so that the service account can delegate to that host:
 
 ```powershell
 # Run on a domain controller or machine with AD PowerShell tools
@@ -144,37 +144,19 @@ $HostComputer = Get-ADComputer $HyperVHost
 # Configure RBCD - allow service account to delegate to the host
 Set-ADComputer $HostComputer -PrincipalsAllowedToDelegateToAccount $ServicePrincipal
 
-# Verify configuration
+# Verify the service account is listed
 Get-ADComputer $HostComputer -Properties PrincipalsAllowedToDelegateToAccount |
     Select-Object Name, PrincipalsAllowedToDelegateToAccount
+
+# Confirm the ACE grants GenericAll (FullControl) to the service SID
+$acl = Get-Acl "AD:$($HostComputer.DistinguishedName)"
+$acl.Access | Where-Object { $_.IdentityReference -like "$ServiceAccount*" }
 ```
 
-### Step 2: Configure Delegation for Cluster Objects
-
-If using Hyper-V failover clusters, also configure RBCD for the cluster name object. Reuse the
-`$ServicePrincipal` value resolved with `Get-ADUser` above:
-
-```powershell
-$ClusterName = "HV-CLUSTER01"
-
-# Get cluster computer object
-$ClusterComputer = Get-ADComputer $ClusterName
-
-# Configure RBCD for cluster
-Set-ADComputer $ClusterComputer -PrincipalsAllowedToDelegateToAccount $ServicePrincipal
-
-# Verify
-Get-ADComputer $ClusterComputer -Properties PrincipalsAllowedToDelegateToAccount |
-    Select-Object Name, PrincipalsAllowedToDelegateToAccount
-```
-
-### Automatic cluster delegation verification
-
-Once the initial inventory synchronisation completes, Aether-V inspects the
-discovered cluster computer objects and verifies that `msDS-AllowedToDelegateTo`
-contains delegation targets. Missing delegation is surfaced through the system
-notification panel so administrators can remediate Active Directory configuration
-issues before running double-hop operations.
+> **Note:** The Active Directory PowerShell parameter `-PrincipalsAllowedToDelegateToAccount` writes to the
+> `msDS-AllowedToActOnBehalfOfOtherIdentity` attribute. Aether-V validates that the resulting ACE
+> references the service account SID and grants GenericAll. Cluster Name Objects do not need RBCD entries
+> for Aether-V's double-hop operations—only the Hyper-V node computer accounts are evaluated.
 
 ### Step 3: Configure Service Principal Names (SPNs)
 
@@ -420,10 +402,10 @@ Get-WinEvent -LogName Security -FilterXPath "*[System[(EventID=4768 or EventID=4
 **Symptoms:** VM operations fail with access denied on cluster resources
 
 **Solutions:**
-1. Verify RBCD is configured for both host AND cluster objects
-2. Check SPNs are properly registered
-3. Ensure service account has necessary permissions on cluster
-4. Test delegation: `Get-ADComputer <host> -Properties PrincipalsAllowedToDelegateToAccount`
+1. Verify RBCD is configured on every Hyper-V host computer object (`msDS-AllowedToActOnBehalfOfOtherIdentity` contains the Aether-V service account SID with GenericAll).
+2. Check SPNs are properly registered.
+3. Ensure the service account has necessary permissions on the cluster resources being accessed.
+4. Test delegation: `Get-ADComputer <host> -Properties PrincipalsAllowedToDelegateToAccount` and inspect the ACE with `Get-Acl` to confirm the service SID retains GenericAll.
 
 ### Issue: Legacy configuration detected
 
