@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Set
 
+from dns import resolver as dns_resolver
+
 import gssapi
 import gssapi.raw as gssapi_raw
 
@@ -479,21 +481,107 @@ def _realm_to_base_dn(realm: Optional[str]) -> Optional[str]:
     return ",".join(f"DC={part.lower()}" for part in parts)
 
 
-def _derive_ldap_server_host(realm: Optional[str]) -> Optional[str]:
-    """Pick an LDAP host using Kerberos manager hints or the provided realm."""
+def _extract_domain_from_principal(principal: Optional[str]) -> Optional[str]:
+    """Convert a Kerberos principal into an AD DNS domain name."""
 
+    if not principal or "@" not in principal:
+        return None
+
+    realm = principal.split("@", 1)[1].strip().strip(".")
+    if not realm:
+        return None
+
+    return realm.lower()
+
+
+def _candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
+    """Gather potential AD domains from configuration hints."""
+
+    domains: List[str] = []
     manager = get_kerberos_manager()
 
-    if manager and manager.kdc:
-        return manager.kdc
+    principal_domain = _extract_domain_from_principal(manager.principal if manager else None)
+    if principal_domain:
+        domains.append(principal_domain)
 
-    if manager and manager.realm:
-        return manager.realm.lower()
+    for candidate in (realm, manager.realm if manager else None):
+        if not candidate:
+            continue
+        cleaned = candidate.strip().strip(".")
+        if not cleaned:
+            continue
+        domain = cleaned.lower()
+        if domain not in domains:
+            domains.append(domain)
 
-    if realm:
-        return realm.lower()
+    return domains
 
-    return None
+
+def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
+    """Discover LDAP hosts by querying AD domain controller SRV records."""
+
+    manager = get_kerberos_manager()
+    kdc_override = manager.kdc if manager else None
+    if kdc_override:
+        override_host, override_port = _parse_ldap_server_target(kdc_override)
+        if override_host:
+            target = _format_ldap_server_target(override_host, override_port)
+            logger.debug(
+                "Using configured Kerberos KDC override for LDAP checks: %s",
+                target,
+            )
+            return [target]
+        logger.warning(
+            "Configured Kerberos KDC override %r is not a valid LDAP target",
+            kdc_override,
+        )
+
+    domains = _candidate_domains_for_ldap(realm)
+    hosts: List[str] = []
+
+    if not domains:
+        logger.warning("Unable to determine AD domain for LDAP discovery")
+        return hosts
+
+    for domain in domains:
+        srv_record = f"_ldap._tcp.dc._msdcs.{domain}"
+        try:
+            answers = dns_resolver.resolve(srv_record, "SRV")
+        except Exception as exc:  # pragma: no cover - environment specific
+            logger.warning(
+                "Failed to resolve LDAP SRV records for %s: %s",
+                srv_record,
+                exc,
+            )
+            continue
+
+        ordered: List[Tuple[int, int, str, str]] = []
+        domain_hosts: List[str] = []
+        for rdata in answers:
+            target = getattr(rdata, "target", None)
+            if not target:
+                continue
+            host = str(target).rstrip(".")
+            if not host:
+                continue
+            priority = getattr(rdata, "priority", 0)
+            weight = getattr(rdata, "weight", 0)
+            ordered.append((int(priority), int(weight), host.lower(), host))
+
+        for _, _, _, host in sorted(ordered, key=lambda item: (item[0], -item[1], item[2])):
+            if host not in hosts:
+                hosts.append(host)
+            if host not in domain_hosts:
+                domain_hosts.append(host)
+
+        if domain_hosts:
+            logger.debug(
+                "Discovered LDAP domain controllers for %s: %s",
+                domain,
+                ", ".join(domain_hosts),
+            )
+
+    return hosts
 
 
 def _parse_ldap_server_target(server_host: str) -> Tuple[Optional[str], Optional[int]]:
@@ -530,6 +618,19 @@ def _parse_ldap_server_target(server_host: str) -> Tuple[Optional[str], Optional
     return cleaned_host, port
 
 
+def _format_ldap_server_target(host: str, port: Optional[int]) -> str:
+    """Return a normalized LDAP target preserving optional port information."""
+
+    if port is None:
+        return host
+
+    if ":" in host and not host.startswith("["):
+        # IPv6 literals must be enclosed in brackets when a port is supplied
+        return f"[{host}]:{port}"
+
+    return f"{host}:{port}"
+
+
 def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connection]:
     """Bind to LDAP using the existing Kerberos ticket cache."""
 
@@ -559,17 +660,16 @@ def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connectio
         logger.warning("Unable to determine LDAP hostname from %r", server_host)
         return None
 
-    server_kwargs = {"get_info": NONE}
+    server_kwargs = {"get_info": NONE, "use_ssl": True, "port": 636}
 
-    if override_port is not None:
-        if override_port in {389, 636, 3268, 3269}:
-            server_kwargs["port"] = override_port
-        else:
-            logger.debug(
-                "Ignoring non-LDAP port %s derived from %r when binding to LDAP",
-                override_port,
-                server_host,
-            )
+    if override_port in (636, 3269):
+        server_kwargs["port"] = override_port
+    elif override_port not in (None, 636, 3269):
+        logger.debug(
+            "Ignoring non-LDAPS port %s derived from %r when binding to LDAP",
+            override_port,
+            server_host,
+        )
 
     try:
         server = Server(host, **server_kwargs)
@@ -825,8 +925,24 @@ def _ldap_get_computer_delegation_info(
 ) -> Optional[Dict[str, object]]:
     """Fetch delegation-related attributes for a computer account via LDAP."""
 
-    server_host = _derive_ldap_server_host(realm)
-    connection = _establish_ldap_connection(server_host)
+    server_hosts = _discover_ldap_server_hosts(realm)
+    if not server_hosts:
+        logger.warning(
+            "Unable to locate any LDAP servers for '%s' in realm '%s'",
+            name,
+            realm or "<default>",
+        )
+        return None
+
+    connection: Optional[Connection] = None
+    bound_host: Optional[str] = None
+
+    for server_host in server_hosts:
+        connection = _establish_ldap_connection(server_host)
+        if connection is not None:
+            bound_host = server_host
+            break
+
     if connection is None:
         logger.warning(
             "LDAP connection unavailable for '%s' in realm '%s'",
@@ -923,7 +1039,9 @@ def _ldap_get_computer_delegation_info(
             "trusted_for_delegation": bool(trusted_for_delegation),
         }
     finally:
-        connection.unbind()
+        if connection is not None:
+            logger.debug("Unbinding LDAP connection to %s", bound_host or "<unknown>")
+            connection.unbind()
 
 
 def validate_host_kerberos_setup(

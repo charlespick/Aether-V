@@ -11,10 +11,6 @@ from types import SimpleNamespace
 
 from unittest.mock import MagicMock, patch
 
-# Provide stub gssapi modules when the real package is unavailable
-sys.modules.setdefault("gssapi", MagicMock())
-sys.modules.setdefault("gssapi.raw", MagicMock())
-
 import pytest
 
 from app.services.kerberos_manager import (
@@ -25,6 +21,7 @@ from app.services.kerberos_manager import (
     _check_host_delegation_legacy,
     _check_wsman_spn,
     _extract_allowed_sids_from_security_descriptor,
+    _format_ldap_server_target,
     _normalize_ldap_boolean,
     _parse_ldap_server_target,
     _sid_bytes_to_str,
@@ -161,6 +158,21 @@ def test_parse_ldap_server_target(target, expected_host, expected_port):
     host, port = _parse_ldap_server_target(target)
     assert host == expected_host
     assert port == expected_port
+
+
+@pytest.mark.parametrize(
+    "host, port, expected",
+    [
+        ("dc01.ad.example.com", None, "dc01.ad.example.com"),
+        ("dc01.ad.example.com", 636, "dc01.ad.example.com:636"),
+        ("2001:db8::10", 3269, "[2001:db8::10]:3269"),
+        ("[2001:db8::10]", 636, "[2001:db8::10]:636"),
+    ],
+)
+def test_format_ldap_server_target(host, port, expected):
+    """Formatting should preserve ports and ensure IPv6 literals are bracketed."""
+
+    assert _format_ldap_server_target(host, port) == expected
 
 
 def test_extract_allowed_sids_handles_object_ace():
@@ -940,12 +952,13 @@ def test_establish_ldap_connection_ignores_kdc_port(monkeypatch):
 
     assert connection is not None
     assert captured["host"] == "dc01.ad.example.com"
-    assert "port" not in captured["kwargs"]
+    assert captured["kwargs"].get("port") == 636
+    assert captured["kwargs"].get("use_ssl") is True
     assert captured["connection_kwargs"]["sasl_mechanism"] is not None
 
 
-def test_establish_ldap_connection_respects_valid_ldap_port(monkeypatch):
-    """Valid LDAP ports should be passed to the ldap3 Server constructor."""
+def test_establish_ldap_connection_respects_ldaps_port(monkeypatch):
+    """LDAPS default port should be passed to the ldap3 Server constructor."""
 
     captured = {}
 
@@ -975,7 +988,123 @@ def test_establish_ldap_connection_respects_valid_ldap_port(monkeypatch):
     assert connection is not None
     assert captured["host"] == "dc01.ad.example.com"
     assert captured["kwargs"].get("port") == 636
+    assert captured["kwargs"].get("use_ssl") is True
     assert captured["connection_kwargs"]["sasl_mechanism"] is not None
+
+
+def test_establish_ldap_connection_respects_global_catalog_ldaps_port(monkeypatch):
+    """LDAPS global catalog port 3269 should be honored when provided."""
+
+    captured = {}
+
+    class DummyServer:
+        def __init__(self, host, **kwargs):
+            captured["host"] = host
+            captured["kwargs"] = kwargs
+
+    class DummyConnection:
+        def __init__(self, server, **kwargs):
+            captured["server"] = server
+            captured["connection_kwargs"] = kwargs
+
+    monkeypatch.setattr("app.services.kerberos_manager.Server", DummyServer)
+    monkeypatch.setattr("app.services.kerberos_manager.Connection", DummyConnection)
+    monkeypatch.setattr("app.services.kerberos_manager.SASL", object())
+    monkeypatch.setattr("app.services.kerberos_manager.KERBEROS", object())
+    monkeypatch.setattr("app.services.kerberos_manager.BASE", object())
+    monkeypatch.setattr("app.services.kerberos_manager.SUBTREE", object())
+    monkeypatch.setattr("app.services.kerberos_manager.escape_filter_chars", lambda value: value)
+    monkeypatch.setattr("app.services.kerberos_manager.NONE", object())
+
+    from app.services.kerberos_manager import _establish_ldap_connection
+
+    connection = _establish_ldap_connection("dc01.ad.example.com:3269")
+
+    assert connection is not None
+    assert captured["host"] == "dc01.ad.example.com"
+    assert captured["kwargs"].get("port") == 3269
+    assert captured["kwargs"].get("use_ssl") is True
+    assert captured["connection_kwargs"]["sasl_mechanism"] is not None
+
+
+def test_extract_domain_from_principal_lowercases_realm():
+    """Kerberos principals should map to lowercase AD domains."""
+
+    from app.services.kerberos_manager import _extract_domain_from_principal
+
+    assert _extract_domain_from_principal("svc-account@EXAMPLE.COM") == "example.com"
+    assert _extract_domain_from_principal("invalid") is None
+
+
+def test_discover_ldap_server_hosts_uses_dns(monkeypatch):
+    """LDAP discovery should query SRV records and return ordered DCs."""
+
+    from app.services import kerberos_manager as km
+
+    class DummyAnswer:
+        def __init__(self, target: str, priority: int = 0, weight: int = 0):
+            self.target = target
+            self.priority = priority
+            self.weight = weight
+
+    class DummyResolver:
+        def resolve(self, record: str, record_type: str):
+            assert record == "_ldap._tcp.dc._msdcs.example.com"
+            assert record_type == "SRV"
+            return [
+                DummyAnswer("dc2.example.com."),
+                DummyAnswer("dc1.example.com.", priority=0, weight=10),
+            ]
+
+    monkeypatch.setattr(km, "dns_resolver", DummyResolver())
+    monkeypatch.setattr(
+        km,
+        "get_kerberos_manager",
+        lambda: SimpleNamespace(principal="svc-account@EXAMPLE.COM", realm=None, kdc=None),
+    )
+
+    hosts = km._discover_ldap_server_hosts("EXAMPLE.COM")
+
+    assert hosts == ["dc1.example.com", "dc2.example.com"]
+
+
+def test_discover_ldap_server_hosts_prefers_kdc_override(monkeypatch):
+    """When a KDC override is configured, skip DNS discovery entirely."""
+
+    from app.services import kerberos_manager as km
+
+    resolver = MagicMock()
+    resolver.resolve.side_effect = AssertionError("DNS should not be queried")
+
+    manager = SimpleNamespace(
+        principal="svc-account@EXAMPLE.COM",
+        realm="EXAMPLE.COM",
+        kdc="dc3.example.com:88",
+    )
+
+    monkeypatch.setattr(km, "dns_resolver", resolver)
+    monkeypatch.setattr(km, "get_kerberos_manager", lambda: manager)
+
+    hosts = km._discover_ldap_server_hosts("EXAMPLE.COM")
+
+    assert hosts == ["dc3.example.com:88"]
+
+
+def test_discover_ldap_server_hosts_uses_override_without_domain(monkeypatch):
+    """The override should still provide a host when no realm or principal exists."""
+
+    from app.services import kerberos_manager as km
+
+    monkeypatch.setattr(km, "dns_resolver", MagicMock())
+    monkeypatch.setattr(
+        km,
+        "get_kerberos_manager",
+        lambda: SimpleNamespace(principal=None, realm=None, kdc="dc4.example.com"),
+    )
+
+    hosts = km._discover_ldap_server_hosts(None)
+
+    assert hosts == ["dc4.example.com"]
 
 
 def test_kdc_override_sets_krb5_config(monkeypatch, sample_keytab_b64):
