@@ -1151,7 +1151,6 @@ def _ldap_resolve_service_principal_tokens(
                     "servicePrincipalName",
                     "sAMAccountName",
                     "userPrincipalName",
-                    "distinguishedName",
                     "cn",
                     "name",
                 ],
@@ -1166,12 +1165,12 @@ def _ldap_resolve_service_principal_tokens(
             )
             return tokens
 
-        def _collect(value: object) -> None:
+        def _collect(attr: str, value: object) -> None:
             if value is None:
                 return
             if isinstance(value, (list, tuple, set)):
                 for item in value:
-                    _collect(item)
+                    _collect(attr, item)
                 return
 
             candidate = str(value).strip()
@@ -1180,18 +1179,20 @@ def _ldap_resolve_service_principal_tokens(
 
             candidate_lower = candidate.lower()
             tokens.add(candidate_lower)
-            tokens.update(_normalize_principal_tokens(candidate_lower))
+
+            if attr == "userPrincipalName" and "@" in candidate_lower:
+                tokens.add(candidate_lower.split("@", 1)[0])
+            if attr in {"sAMAccountName", "cn", "name"} and candidate_lower.endswith("$"):
+                tokens.add(candidate_lower[:-1])
 
         for entry in connection.entries:
             attr_dict = entry.entry_attributes_as_dict or {}
 
-            _collect(entry.entry_dn)
-            _collect(attr_dict.get("sAMAccountName"))
-            _collect(attr_dict.get("userPrincipalName"))
-            _collect(attr_dict.get("servicePrincipalName"))
-            _collect(attr_dict.get("distinguishedName"))
-            _collect(attr_dict.get("cn"))
-            _collect(attr_dict.get("name"))
+            _collect("sAMAccountName", attr_dict.get("sAMAccountName"))
+            _collect("userPrincipalName", attr_dict.get("userPrincipalName"))
+            _collect("servicePrincipalName", attr_dict.get("servicePrincipalName"))
+            _collect("cn", attr_dict.get("cn"))
+            _collect("name", attr_dict.get("name"))
 
     finally:
         if connection is not None:
@@ -1591,7 +1592,10 @@ def _service_principal_in_allowed_list(
             if not token_lower:
                 continue
             combined_tokens.add(token_lower)
-            combined_tokens.update(_normalize_principal_tokens(token_lower))
+            if "@" in token_lower:
+                combined_tokens.add(token_lower.split("@", 1)[0])
+            if token_lower.endswith("$"):
+                combined_tokens.add(token_lower[:-1])
 
     for principal in allowed_principals:
         candidate = str(principal).strip()
