@@ -970,6 +970,7 @@ def _ldap_get_computer_delegation_info(
                 search_filter,
                 search_scope=SUBTREE,
                 attributes=[
+                    "PrincipalsAllowedToDelegateToAccount",
                     "msDS-AllowedToActOnBehalfOfOtherIdentity",
                     "msDS-AllowedToDelegateTo",
                     "TrustedToAuthForDelegation",
@@ -988,6 +989,18 @@ def _ldap_get_computer_delegation_info(
         entry = connection.entries[0]
         raw_attrs = entry.entry_raw_attributes or {}
         attr_dict = entry.entry_attributes_as_dict or {}
+
+        delegation_principals = attr_dict.get("PrincipalsAllowedToDelegateToAccount") or []
+        if isinstance(delegation_principals, str):
+            delegation_principals = [delegation_principals]
+        elif isinstance(delegation_principals, (tuple, set)):
+            delegation_principals = list(delegation_principals)
+
+        delegation_principals = [
+            str(principal)
+            for principal in delegation_principals
+            if principal
+        ]
 
         rbcd_values = raw_attrs.get("msDS-AllowedToActOnBehalfOfOtherIdentity") or []
         sid_blobs: List[bytes] = []
@@ -1030,6 +1043,8 @@ def _ldap_get_computer_delegation_info(
 
         return {
             "exists": True,
+            "delegation_present": bool(delegation_principals),
+            "delegation_principals": delegation_principals,
             "rbcd_present": bool(rbcd_values),
             "rbcd_principals": allowed_principals,
             "rbcd_sid_strings": sid_strings,
@@ -1047,26 +1062,30 @@ def _ldap_get_computer_delegation_info(
 def validate_host_kerberos_setup(
     hosts: List[str],
     realm: Optional[str] = None,
-    clusters: Optional[Dict[str, List[str]]] = None
+    clusters: Optional[Dict[str, List[str]]] = None,
+    service_principal: Optional[str] = None,
 ) -> Dict[str, List[str]]:
     """
-    Validate Kerberos setup for configured Hyper-V hosts and clusters.
+    Validate Kerberos setup for configured Hyper-V hosts.
 
     Checks:
     1. WSMAN SPN exists for each host
-    2. Resource-Based Constrained Delegation (RBCD) is configured on cluster objects
+    2. Each Hyper-V host allows the WinRM service account in its
+       PrincipalsAllowedToDelegateToAccount attribute and Cluster Name Objects do not
+       contain delegation entries
 
     Args:
         hosts: List of hostnames to validate
         realm: Kerberos realm (optional, auto-detected from principal if not provided)
         clusters: Optional dict mapping cluster names to list of member hostnames
+        service_principal: Optional WinRM service account principal override
 
     Returns:
         Dictionary with 'errors', 'warnings', 'spn_errors', and 'delegation_errors' lists
     """
     result = {
-        "errors": [], 
-        "warnings": [], 
+        "errors": [],
+        "warnings": [],
         "spn_errors": [],
         "delegation_errors": []
     }
@@ -1087,59 +1106,202 @@ def validate_host_kerberos_setup(
         # Only warn when we truly have nothing to validate
         result["warnings"].append("No Hyper-V hosts configured to validate")
 
-    # Check delegation on cluster objects (if clusters provided)
+    delegation_hosts: Set[str] = set(hosts)
     if clusters:
-        logger.info("Checking delegation for %d cluster(s)", len(clusters))
-        for cluster_name, cluster_hosts in clusters.items():
-            # Skip "Default" cluster (represents hosts not in a cluster)
-            if cluster_name == "Default":
-                logger.debug(
-                    "Skipping delegation check for 'Default' cluster (non-clustered hosts)"
+        for cluster_hosts in clusters.values():
+            if not cluster_hosts:
+                continue
+            delegation_hosts.update(cluster_hosts)
+
+    cluster_names: Set[str] = set(clusters.keys()) if clusters else set()
+
+    if delegation_hosts or cluster_names:
+        if service_principal is None:
+            manager = get_kerberos_manager()
+            if manager is not None:
+                service_principal = manager.principal
+
+        service_principal_clean = service_principal.strip() if service_principal else ""
+        if not service_principal_clean and delegation_hosts:
+            warning_msg = (
+                "WinRM service account principal unavailable; skipping delegation validation"
+            )
+            logger.warning(warning_msg)
+            result["warnings"].append(warning_msg)
+
+        missing_delegation_hosts: List[Tuple[str, List[str]]] = []
+
+        if service_principal_clean:
+            logger.info(
+                "Validating delegation permissions for %d host(s)",
+                len(delegation_hosts),
+            )
+            for host in sorted(delegation_hosts):
+                directory_info = _ldap_get_computer_delegation_info(host, realm)
+                if directory_info is None:
+                    warning_msg = (
+                        f"Host '{host}': Delegation check skipped (LDAP connection unavailable)"
+                    )
+                    logger.warning(warning_msg)
+                    result["warnings"].append(warning_msg)
+                    continue
+
+                if not directory_info.get("exists", True):
+                    error_msg = (
+                        f"Host '{host}': Computer object not found in Active Directory. "
+                        "Ensure the host exists and then add the WinRM service account "
+                        "to its 'PrincipalsAllowedToDelegateToAccount' attribute."
+                    )
+                    result["errors"].append(error_msg)
+                    result["delegation_errors"].append(error_msg)
+                    continue
+
+                allowed_principals = [
+                    str(principal)
+                    for principal in directory_info.get("delegation_principals", [])
+                    if principal
+                ]
+
+                if not allowed_principals:
+                    logger.warning(
+                        "Host '%s': PrincipalsAllowedToDelegateToAccount is empty", host
+                    )
+                    missing_delegation_hosts.append((host, allowed_principals))
+                    continue
+
+                if not _service_principal_in_allowed_list(
+                    service_principal_clean, allowed_principals
+                ):
+                    logger.warning(
+                        "Host '%s': Service account '%s' absent from PrincipalsAllowedToDelegateToAccount",
+                        host,
+                        service_principal_clean,
+                    )
+                    missing_delegation_hosts.append((host, allowed_principals))
+                else:
+                    logger.info(
+                        "Host '%s': Delegation allows principal '%s'",
+                        host,
+                        service_principal_clean,
+                    )
+
+        cno_delegation_entries: List[Tuple[str, List[str], bool, List[str]]] = []
+
+        for cluster_name in sorted(cluster_names):
+            directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
+            if directory_info is None:
+                warning_msg = (
+                    f"Cluster '{cluster_name}': Delegation check skipped (LDAP connection unavailable)"
                 )
+                logger.warning(warning_msg)
+                result["warnings"].append(warning_msg)
                 continue
 
-            directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
-
-            delegation_check = _check_cluster_delegation(
-                cluster_name,
-                cluster_hosts,
-                realm,
-                cluster_directory_info=directory_info,
-            )
-            if delegation_check[0] is False:
-                error_msg = f"Cluster '{cluster_name}': {delegation_check[1]}"
-                result["errors"].append(error_msg)
-                result["delegation_errors"].append(error_msg)
-            elif delegation_check[0] is None:
-                # Could not determine - add warning
-                warning_msg = f"Cluster '{cluster_name}': {delegation_check[1]}"
-                result["warnings"].append(warning_msg)
-            else:
-                logger.info("Cluster '%s': Delegation validated", cluster_name)
-
-            delegation_targets_check = _check_cluster_allowed_to_delegate(
-                cluster_name,
-                cluster_hosts,
-                realm,
-                cluster_directory_info=directory_info,
-            )
-            if delegation_targets_check[0] is False:
-                error_msg = (
-                    f"Cluster '{cluster_name}': {delegation_targets_check[1]}"
-                )
-                result["errors"].append(error_msg)
-                result["delegation_errors"].append(error_msg)
-            elif delegation_targets_check[0] is None:
+            if not directory_info.get("exists", True):
                 warning_msg = (
-                    f"Cluster '{cluster_name}': {delegation_targets_check[1]}"
+                    f"Cluster '{cluster_name}': Cluster Name Object not found in Active Directory"
                 )
+                logger.warning(warning_msg)
                 result["warnings"].append(warning_msg)
-            else:
-                logger.info(
-                    "Cluster '%s': msDS-AllowedToDelegateTo configured", cluster_name
+                continue
+
+            cno_delegation_principals = [
+                str(principal)
+                for principal in directory_info.get("delegation_principals", [])
+                if principal
+            ]
+            cno_rbcd_principals = [
+                str(principal)
+                for principal in directory_info.get("rbcd_principals", [])
+                if principal
+            ]
+            if directory_info.get("rbcd_sid_strings"):
+                cno_rbcd_principals.extend(
+                    [
+                        str(sid)
+                        for sid in directory_info.get("rbcd_sid_strings", [])
+                        if sid
+                    ]
                 )
+
+            rbcd_present = bool(directory_info.get("rbcd_present"))
+
+            if cno_delegation_principals or rbcd_present:
+                cno_delegation_entries.append(
+                    (
+                        cluster_name,
+                        cno_delegation_principals,
+                        rbcd_present,
+                        cno_rbcd_principals,
+                    )
+                )
+
+        host_entries: List[str] = []
+        for host, principals in missing_delegation_hosts:
+            if principals:
+                host_entries.append(
+                    f"{host} (configured: {', '.join(principals)})"
+                )
+            else:
+                host_entries.append(host)
+
+        cno_entries: List[str] = []
+        for cluster_name, principals, rbcd_present, rbcd_values in cno_delegation_entries:
+            details: List[str] = []
+            if principals:
+                details.append(
+                    f"PrincipalsAllowedToDelegateToAccount={'; '.join(principals)}"
+                )
+            if rbcd_present:
+                rbcd_detail = "; ".join(rbcd_values) if rbcd_values else "<present>"
+                details.append(
+                    f"msDS-AllowedToActOnBehalfOfOtherIdentity={rbcd_detail}"
+                )
+            detail_suffix = f" ({'; '.join(details)})" if details else ""
+            cno_entries.append(f"{cluster_name}{detail_suffix}")
+
+        host_message = None
+        if host_entries and service_principal_clean:
+            host_list = ", ".join(host_entries)
+            host_message = (
+                "Delegation missing on cluster hosts: "
+                f"The WinRM service account '{service_principal_clean}' does not appear in the "
+                "PrincipalsAllowedToDelegateToAccount attribute on the following Hyper-V hosts: "
+                f"{host_list}. "
+                "Cluster operations require delegation on each host because cluster API calls "
+                "originate from the node computer account."
+            )
+
+        cno_message = None
+        if cno_entries:
+            cno_list = ", ".join(cno_entries)
+            cno_message = (
+                "Delegation incorrectly applied to the Cluster Name Object: "
+                f"The Cluster Name Object(s) {cno_list} contain delegation entries, but delegation must "
+                "be applied to the Hyper-V hosts instead. Please remove delegation from the CNO."
+            )
+
+        if host_message and cno_message:
+            combined_message = (
+                "Cluster delegation misconfigured: "
+                "Delegation is applied to the Cluster Name Object instead of the Hyper-V hosts, and "
+                "required delegation is missing on the hosts. Remove delegation from the CNO and add "
+                f"the WinRM service account '{service_principal_clean}' to each host's "
+                "PrincipalsAllowedToDelegateToAccount attribute. "
+                f"Affected hosts: {', '.join(host_entries)}. "
+                f"CNOs with delegation: {', '.join(cno_entries)}."
+            )
+            result["errors"].append(combined_message)
+            result["delegation_errors"].append(combined_message)
+        else:
+            if host_message:
+                result["errors"].append(host_message)
+                result["delegation_errors"].append(host_message)
+            if cno_message:
+                result["errors"].append(cno_message)
+                result["delegation_errors"].append(cno_message)
     else:
-        logger.debug("No cluster information provided; skipping delegation checks")
+        logger.debug("No hosts available for delegation validation")
 
     return result
 
@@ -1240,8 +1402,43 @@ def _normalize_principal_tokens(principal: str) -> Set[str]:
             queue.append(current[:-1])
         if "." in current:
             queue.append(current.split(".", 1)[0])
+        if "=" in current:
+            for part in current.split(","):
+                part = part.strip()
+                if "=" in part:
+                    queue.append(part.split("=", 1)[1])
 
     return tokens
+
+
+def _service_principal_in_allowed_list(
+    service_principal: str, allowed_principals: List[str]
+) -> bool:
+    """Return True when the service principal appears in the allowed principals list."""
+
+    if not service_principal:
+        return False
+
+    service_principal_lower = service_principal.strip().lower()
+    service_tokens = _normalize_principal_tokens(service_principal_lower)
+    if service_principal_lower:
+        service_tokens.add(service_principal_lower)
+    if "@" in service_principal_lower:
+        service_tokens.add(service_principal_lower.split("@", 1)[0])
+
+    for principal in allowed_principals:
+        candidate = str(principal).strip()
+        if not candidate:
+            continue
+        candidate_lower = candidate.lower()
+        if candidate_lower == service_principal_lower:
+            return True
+        candidate_tokens = _normalize_principal_tokens(candidate)
+        candidate_tokens.add(candidate_lower)
+        if not candidate_tokens.isdisjoint(service_tokens):
+            return True
+
+    return False
 
 
 def _normalize_host_tokens(host: str, realm: Optional[str]) -> Set[str]:
@@ -1278,155 +1475,6 @@ def _normalize_host_tokens(host: str, realm: Optional[str]) -> Set[str]:
     return tokens
 
 
-def _find_missing_delegation_hosts(
-    cluster_hosts: List[str], allowed_principals: List[str], realm: Optional[str]
-) -> List[str]:
-    """Identify cluster hosts that do not have delegation entries configured."""
-
-    if not cluster_hosts:
-        return []
-
-    allowed_tokens: Set[str] = set()
-    for principal in allowed_principals:
-        allowed_tokens.update(_normalize_principal_tokens(principal))
-
-    missing_hosts: List[str] = []
-    for host in cluster_hosts:
-        host_tokens = _normalize_host_tokens(host, realm)
-        if not host_tokens or allowed_tokens.isdisjoint(host_tokens):
-            missing_hosts.append(host)
-
-    return missing_hosts
-
-
-def _check_cluster_delegation(
-    cluster_name: str,
-    cluster_hosts: List[str],
-    realm: Optional[str] = None,
-    *,
-    cluster_directory_info: Optional[Dict[str, object]] = None,
-) -> Tuple[Optional[bool], str]:
-    """Check if Resource-Based Constrained Delegation (RBCD) is configured for a cluster.
-
-    RBCD should be configured on the cluster name object (CNO) to allow the Hyper-V hosts
-    to delegate credentials when performing double-hop operations (e.g., accessing shared storage).
-
-    Args:
-        cluster_name: Name of the cluster
-        cluster_hosts: List of hostnames that are members of this cluster
-        realm: Optional Kerberos realm
-
-    Returns:
-        Tuple of (success: Optional[bool], message: str)
-        - True: RBCD confirmed on cluster object
-        - False: RBCD confirmed absent or misconfigured
-        - None: Unable to determine
-    """
-
-    if cluster_directory_info is None:
-        cluster_directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
-
-    if cluster_directory_info is None:
-        return (
-            None,
-            "RBCD check skipped (LDAP connection unavailable)",
-        )
-
-    if not cluster_directory_info.get("exists", True):
-        return (
-            False,
-            f"Cluster object '{cluster_name}' not found in Active Directory. "
-            "Ensure the cluster is properly configured and the cluster name object exists.",
-        )
-
-    if not cluster_directory_info.get("rbcd_present"):
-        return (
-            False,
-            f"No Resource-Based Constrained Delegation (RBCD) configured on cluster object. "
-            f"Configure RBCD on the cluster name object '{cluster_name}' to allow Hyper-V hosts "
-            f"({', '.join(cluster_hosts)}) to delegate credentials for double-hop authentication.",
-        )
-
-    allowed_principals = (
-        cluster_directory_info.get("rbcd_principals")
-        or cluster_directory_info.get("rbcd_sid_strings")
-        or []
-    )
-    allowed_principals_list = [
-        str(principal) for principal in allowed_principals if principal
-    ]
-    principals_info = ""
-    if allowed_principals_list:
-        principals_info = f" (Principals: {', '.join(allowed_principals_list)})"
-
-    missing_hosts = _find_missing_delegation_hosts(
-        cluster_hosts, allowed_principals_list, realm
-    )
-
-    if missing_hosts:
-        missing_display = ", ".join(sorted(missing_hosts))
-        message = (
-            "Resource-Based Constrained Delegation (RBCD) configured but missing "
-            f"delegation entries for hosts: {missing_display}. Add the Hyper-V "
-            "computer accounts to the msDS-AllowedToActOnBehalfOfOtherIdentity ACL "
-            "on the cluster name object."
-        )
-        if principals_info:
-            message = f"{message}{principals_info}"
-        return (False, message)
-
-    return (
-        True,
-        f"Resource-Based Constrained Delegation (RBCD) configured{principals_info}",
-    )
-
-
-def _check_cluster_allowed_to_delegate(
-    cluster_name: str,
-    cluster_hosts: List[str],
-    realm: Optional[str] = None,
-    *,
-    cluster_directory_info: Optional[Dict[str, object]] = None,
-) -> Tuple[Optional[bool], str]:
-    """Validate that the cluster computer object can delegate to required SPNs."""
-
-    host_hint = ", ".join(cluster_hosts) if cluster_hosts else "configured Hyper-V hosts"
-
-    if cluster_directory_info is None:
-        cluster_directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
-
-    if cluster_directory_info is None:
-        return (
-            None,
-            "msDS-AllowedToDelegateTo check skipped (LDAP connection unavailable)",
-        )
-
-    if not cluster_directory_info.get("exists", True):
-        return (
-            False,
-            f"Cluster object '{cluster_name}' not found in Active Directory. "
-            "Ensure the cluster name object exists before configuring delegation.",
-        )
-
-    delegate_targets = [
-        str(target)
-        for target in cluster_directory_info.get("delegate_targets", [])
-        if target
-    ]
-    if cluster_directory_info.get("delegate_present"):
-        details = ""
-        if delegate_targets:
-            details = f" (Targets: {', '.join(delegate_targets)})"
-        return (True, f"msDS-AllowedToDelegateTo configured{details}")
-
-    return (
-        False,
-        "Cluster computer object is missing msDS-AllowedToDelegateTo entries. "
-        f"Grant delegation to the Hyper-V hosts ({host_hint}) so migration "
-        "operations can perform double-hop authentication.",
-    )
-
-
 def _check_host_delegation_legacy(
     host: str,
     realm: Optional[str] = None,
@@ -1434,10 +1482,10 @@ def _check_host_delegation_legacy(
     directory_info: Optional[Dict[str, object]] = None,
 ) -> Tuple[Optional[bool], str]:
     """
-    Check if delegation is configured for a host (LEGACY - not used for cluster validation).
+    Check if delegation is configured for a host (LEGACY - not used for host validation).
 
-    This checks the old-style delegation on individual host objects, which is NOT the recommended
-    approach for failover clusters. Use _check_cluster_delegation instead.
+    This checks the old-style delegation on individual host objects. Prefer
+    validate_host_kerberos_setup for modern Resource-Based Constrained Delegation checks.
 
     This is a best-effort check. Returns None if unable to determine.
 
