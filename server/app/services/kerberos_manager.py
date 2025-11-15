@@ -523,13 +523,14 @@ def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
     manager = get_kerberos_manager()
     kdc_override = getattr(manager, "kdc", None)
     if kdc_override:
-        override_host, _ = _parse_ldap_server_target(kdc_override)
+        override_host, override_port = _parse_ldap_server_target(kdc_override)
         if override_host:
+            target = _format_ldap_server_target(override_host, override_port)
             logger.debug(
                 "Using configured Kerberos KDC override for LDAP checks: %s",
-                override_host,
+                target,
             )
-            return [override_host]
+            return [target]
         logger.warning(
             "Configured Kerberos KDC override %r is not a valid LDAP target",
             kdc_override,
@@ -620,6 +621,19 @@ def _parse_ldap_server_target(server_host: str) -> Tuple[Optional[str], Optional
         return None, None
 
     return cleaned_host, port
+
+
+def _format_ldap_server_target(host: str, port: Optional[int]) -> str:
+    """Return a normalized LDAP target preserving optional port information."""
+
+    if port is None:
+        return host
+
+    if ":" in host and not host.startswith("["):
+        # IPv6 literals must be enclosed in brackets when a port is supplied
+        return f"[{host}]:{port}"
+
+    return f"{host}:{port}"
 
 
 def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connection]:

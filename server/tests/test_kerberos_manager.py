@@ -21,6 +21,7 @@ from app.services.kerberos_manager import (
     _check_host_delegation_legacy,
     _check_wsman_spn,
     _extract_allowed_sids_from_security_descriptor,
+    _format_ldap_server_target,
     _normalize_ldap_boolean,
     _parse_ldap_server_target,
     _sid_bytes_to_str,
@@ -157,6 +158,21 @@ def test_parse_ldap_server_target(target, expected_host, expected_port):
     host, port = _parse_ldap_server_target(target)
     assert host == expected_host
     assert port == expected_port
+
+
+@pytest.mark.parametrize(
+    "host, port, expected",
+    [
+        ("dc01.ad.example.com", None, "dc01.ad.example.com"),
+        ("dc01.ad.example.com", 636, "dc01.ad.example.com:636"),
+        ("2001:db8::10", 3269, "[2001:db8::10]:3269"),
+        ("[2001:db8::10]", 636, "[2001:db8::10]:636"),
+    ],
+)
+def test_format_ldap_server_target(host, port, expected):
+    """Formatting should preserve ports and ensure IPv6 literals are bracketed."""
+
+    assert _format_ldap_server_target(host, port) == expected
 
 
 def test_extract_allowed_sids_handles_object_ace():
@@ -1071,7 +1087,7 @@ def test_discover_ldap_server_hosts_prefers_kdc_override(monkeypatch):
 
     hosts = km._discover_ldap_server_hosts("EXAMPLE.COM")
 
-    assert hosts == ["dc3.example.com"]
+    assert hosts == ["dc3.example.com:88"]
 
 
 def test_discover_ldap_server_hosts_uses_override_without_domain(monkeypatch):
