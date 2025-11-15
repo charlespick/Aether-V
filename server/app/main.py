@@ -132,7 +132,8 @@ async def lifespan(app: FastAPI):
                 validation_result = validate_host_kerberos_setup(
                     hosts=hyperv_hosts,
                     realm=kerberos_realm,
-                    clusters=None  # Will be validated later after inventory refresh
+                    clusters=None,  # Will be validated later after inventory refresh
+                    service_principal=settings.winrm_kerberos_principal,
                 )
 
                 # Log and collect validation issues
@@ -159,9 +160,10 @@ async def lifespan(app: FastAPI):
                         config_result.warnings.append(
                             ConfigIssue(
                                 message=error,
-                                hint="Configure Resource-Based Constrained Delegation (RBCD) on cluster name objects. "
-                                     "Run: Set-ADComputer <cluster-name> -PrincipalsAllowedToDelegateToAccount (Get-ADComputer <host1>, Get-ADComputer <host2>, ...). "
-                                     "This allows Hyper-V hosts to delegate credentials for double-hop authentication.",
+                                hint="Add the WinRM service account to each Hyper-V host's \"Principals allowed to delegate\" "
+                                     "list (PrincipalsAllowedToDelegateToAccount). For example: "
+                                     "Set-ADComputer <host> -PrincipalsAllowedToDelegateToAccount (Get-ADUser <service-account>). "
+                                     "This allows WinRM operations to perform double-hop authentication.",
                             )
                         )
 
@@ -241,19 +243,28 @@ async def lifespan(app: FastAPI):
                         clusters_dict[cluster.name] = cluster.hosts
 
                 if clusters_dict and settings.has_kerberos_config():
-                    logger.info("Running delegation validation for %d cluster(s)", len(clusters_dict))
+                    cluster_host_set = {
+                        host
+                        for hosts in clusters_dict.values()
+                        for host in (hosts or [])
+                    }
+                    logger.info(
+                        "Running delegation validation for %d discovered host(s)",
+                        len(cluster_host_set),
+                    )
                     delegation_validation = validate_host_kerberos_setup(
                         hosts=[],  # Already validated SPNs at startup
                         realm=kerberos_realm_for_delegation,
-                        clusters=clusters_dict
+                        clusters=clusters_dict,
+                        service_principal=settings.winrm_kerberos_principal,
                     )
 
                     # Log any delegation issues found
                     for error in delegation_validation.get("delegation_errors", []):
-                        logger.warning("Cluster delegation validation: %s", error)
+                        logger.warning("Kerberos delegation validation: %s", error)
 
                     for warning in delegation_validation.get("warnings", []):
-                        logger.warning("Cluster delegation validation: %s", warning)
+                        logger.warning("Kerberos delegation validation: %s", warning)
 
                     if delegation_validation.get("delegation_errors") or delegation_validation.get("warnings"):
                         issues = []
@@ -268,30 +279,31 @@ async def lifespan(app: FastAPI):
                             else NotificationLevel.WARNING
                         )
                         title = (
-                            "Kerberos cluster delegation errors detected"
+                            "Kerberos delegation errors detected"
                             if level is NotificationLevel.ERROR
-                            else "Kerberos cluster delegation warnings"
+                            else "Kerberos delegation warnings"
                         )
 
                         notification_service.upsert_system_notification(
-                            "kerberos-cluster-validation",
+                            "kerberos-delegation-validation",
                             title=title,
                             message="\n".join(issues),
                             level=level,
                             metadata={
                                 "clusters_checked": len(clusters_dict),
+                                "hosts_checked": len(cluster_host_set),
                                 "errors": len(delegation_validation.get("delegation_errors", [])),
                                 "warnings": len(delegation_validation.get("warnings", [])),
                             },
                         )
                     else:
-                        logger.info("Cluster delegation validation completed successfully")
+                        logger.info("Kerberos delegation validation completed successfully")
                         notification_service.clear_system_notification(
-                            "kerberos-cluster-validation"
+                            "kerberos-delegation-validation"
                         )
                 else:
                     notification_service.clear_system_notification(
-                        "kerberos-cluster-validation"
+                        "kerberos-delegation-validation"
                     )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to validate cluster delegation")
