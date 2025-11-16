@@ -585,8 +585,6 @@ end {
             'cnf_ansible_ssh_key',
             'network',
             'storage_class',
-            'vm_path',
-            'storage_path',
             'vm_clustered'
         )
 
@@ -622,10 +620,7 @@ end {
 
         # Resolve storage path
         $storagePath = $null
-        if ($values.ContainsKey('storage_path') -and (Test-ProvisioningValuePresent -Value $values['storage_path'])) {
-            $storagePath = [string]$values['storage_path']
-        }
-        elseif ($values.ContainsKey('storage_class') -and (Test-ProvisioningValuePresent -Value $values['storage_class'])) {
+        if ($values.ContainsKey('storage_class') -and (Test-ProvisioningValuePresent -Value $values['storage_class'])) {
             $storagePath = Resolve-StorageClassPath -HostConfig $hostConfig -StorageClassName ([string]$values['storage_class'])
         }
         else {
@@ -633,15 +628,9 @@ end {
         }
 
         # Resolve VM path
-        $vmBasePath = $null
-        if ($values.ContainsKey('vm_path') -and (Test-ProvisioningValuePresent -Value $values['vm_path'])) {
-            $vmBasePath = [string]$values['vm_path']
-        }
-        else {
-            $vmBasePath = $hostConfig['virtual_machines_path']
-            if ([string]::IsNullOrWhiteSpace($vmBasePath)) {
-                throw "No virtual_machines_path defined in host configuration and no vm_path provided"
-            }
+        $vmBasePath = $hostConfig['virtual_machines_path']
+        if ([string]::IsNullOrWhiteSpace($vmBasePath)) {
+            throw "No virtual_machines_path defined in host configuration"
         }
 
         $fieldReport = Get-ProvisioningFieldReport -KnownFields $knownFields -Values $values

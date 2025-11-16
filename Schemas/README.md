@@ -80,8 +80,6 @@ When submitting a VM provisioning job, users can now specify:
 
 - **network** (optional): Name of a network defined in the host configuration (e.g., "Production")
 - **storage_class** (optional): Name of a storage class (e.g., "fast-ssd")
-- **vm_path** (optional): Override the default virtual_machines_path
-- **storage_path** (optional): Override the storage_class path
 
 Example job submission:
 ```json
