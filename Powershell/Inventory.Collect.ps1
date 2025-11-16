@@ -7,57 +7,6 @@ $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.Management.Automation
 
-function Get-VMOperatingSystem {
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$ComputerName,
-
-        [Parameter(Mandatory = $true)]
-        [string]$VMName,
-
-        [Parameter(Mandatory = $false)]
-        [Microsoft.Management.Infrastructure.CimSession]$CimSession
-    )
-
-    $session = $CimSession
-    $sessionCreatedLocally = $false
-
-    if (-not $session) {
-        try {
-            $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
-            $session = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
-            $sessionCreatedLocally = $true
-        } catch {
-            Write-Warning "Failed to establish delegated CIM session to ${ComputerName}: $($_.Exception.Message)"
-        }
-    }
-
-    try {
-        $vm = if ($session) {
-            Get-CimInstance -CimSession $session -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
-        } else {
-            Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
-        }
-
-        $info = Get-CimAssociatedInstance -InputObject $vm
-        $osName = $info | Where-Object GuestOperatingSystem | Select-Object -First 1 -ExpandProperty GuestOperatingSystem
-        return $osName
-    }
-    catch {
-        Write-Warning "Could not retrieve OS information for $VMName on $ComputerName. Error: $_"
-        return $null
-    }
-    finally {
-        if ($sessionCreatedLocally -and $session) {
-            try {
-                Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue
-            } catch {
-                # Ignore cleanup failures
-            }
-        }
-    }
-}
-
 $result = @{
     Host = @{
         ComputerName = $ComputerName
@@ -180,27 +129,23 @@ try {
                 Notes                = $vm.Notes
             }
 
-            # Operating system lookup – create the CIM session inside this runspace to preserve delegation
+            # Operating system lookup – NO remote CimSession, just local CIM
             $osName = $null
-            $cim = $null
             try {
-                $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
-                $cim = New-CimSession -ComputerName $Computer -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
+                $vmCim = Get-CimInstance -Namespace root\virtualization\v2 `
+                                        -ClassName Msvm_ComputerSystem `
+                                        -Filter "ElementName='$($vm.Name)'" `
+                                        -ErrorAction Stop
 
-                $vmCim = Get-CimInstance -CimSession $cim -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$($vm.Name)'" -ErrorAction Stop
                 $info = Get-CimAssociatedInstance -InputObject $vmCim
-                $osName = $info | Where-Object GuestOperatingSystem | Select-Object -First 1 -ExpandProperty GuestOperatingSystem
-                
+                $osName = $info | Where-Object GuestOperatingSystem |
+                        Select-Object -First 1 -ExpandProperty GuestOperatingSystem
+
                 if (-not $osName) {
-                    throw "OS lookup returned null/empty for VM $($vm.Name). GuestOperatingSystem property not found via CIM."
+                    $vmWarnings += "OS lookup returned null/empty for VM $($vm.Name). GuestOperatingSystem property not found via CIM (KVP may not be working)."
                 }
             } catch {
-                # Hard fail - do not fall back, do not omit, crash with clear error
-                throw "CRITICAL: Failed to retrieve operating system for VM $($vm.Name) on host ${Computer}. Error: $($_.Exception.Message)"
-            } finally {
-                if ($cim) {
-                    try { Remove-CimSession -CimSession $cim -ErrorAction SilentlyContinue } catch {}
-                }
+                $vmWarnings += "Failed to retrieve operating system for VM $($vm.Name): $($_.Exception.Message)"
             }
 
             $vmInfo.OperatingSystem = $osName
