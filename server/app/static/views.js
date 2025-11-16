@@ -93,20 +93,11 @@ class ViewManager {
                 return `/host/${encodeURIComponent(hostname)}`;
             }
             case 'vm': {
-                const vmName = viewData && viewData.name ? String(viewData.name) : '';
-                if (!vmName) {
+                const vmId = viewData && viewData.id ? String(viewData.id) : '';
+                if (!vmId) {
                     return null;
                 }
-                let url = `/virtual-machine/${encodeURIComponent(vmName)}`;
-                if (viewData && viewData.host) {
-                    const params = new URLSearchParams();
-                    params.set('host', String(viewData.host));
-                    const query = params.toString();
-                    if (query) {
-                        url += `?${query}`;
-                    }
-                }
-                return url;
+                return `/virtual-machine/${encodeURIComponent(vmId)}`;
             }
             case 'disconnected-hosts':
                 return '/disconnected-hosts';
@@ -231,11 +222,7 @@ class ViewManager {
         }
 
         if (section === 'virtual-machine' && remainder) {
-            const data = { name: this.safeDecode(remainder) };
-            const hostParam = params.get('host');
-            if (hostParam) {
-                data.host = hostParam;
-            }
+            const data = { id: this.safeDecode(remainder) };
             return { viewName: 'vm', data, matched: true };
         }
 
@@ -377,10 +364,9 @@ class ViewManager {
         } else if (viewName === 'host' && viewData?.hostname) {
             const selector = escapeForSelector(viewData.hostname);
             navItem = document.querySelector(`.sub-item.group-header[data-nav-type="host"][data-hostname="${selector}"]`);
-        } else if (viewName === 'vm' && viewData?.name && viewData?.host) {
-            const nameSelector = escapeForSelector(viewData.name);
-            const hostSelector = escapeForSelector(viewData.host);
-            navItem = document.querySelector(`.vm-item[data-nav-type="vm"][data-vm-name="${nameSelector}"][data-vm-host="${hostSelector}"]`);
+        } else if (viewName === 'vm' && viewData?.id) {
+            const idSelector = escapeForSelector(viewData.id);
+            navItem = document.querySelector(`.vm-item[data-nav-type="vm"][data-vm-id="${idSelector}"]`);
         }
 
         if (navItem) {
@@ -732,6 +718,7 @@ class ClusterView extends BaseView {
         const rows = vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
             const vmName = vm.name || 'Virtual Machine';
+            const vmId = vm.id || '';
             const hostName = vm.host || '';
             const hostDisplay = formatHostnamePrefix(hostName);
             const safeHostDisplay = hostDisplay ? sanitizeHtml(hostDisplay) : '—';
@@ -740,7 +727,7 @@ class ClusterView extends BaseView {
                 <tr class="vm-table-row">
                     <td>
                         <button type="button" class="vm-table-link"
-                            onclick="viewManager.switchView('vm', { name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
+                            onclick="viewManager.switchView('vm', { id: '${escapeJsString(vmId)}', name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
                             <span class="vm-status-dot ${meta.dotClass}"></span>
                             <span class="vm-name-text">${sanitizeHtml(vmName)}</span>
                         </button>
@@ -873,12 +860,13 @@ class HostView extends BaseView {
         const rows = vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
             const vmName = vm.name || 'Virtual Machine';
+            const vmId = vm.id || '';
             const hostName = vm.host || fallbackHost || '';
             return `
                 <tr class="vm-table-row">
                     <td>
                         <button type="button" class="vm-table-link"
-                            onclick="viewManager.switchView('vm', { name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
+                            onclick="viewManager.switchView('vm', { id: '${escapeJsString(vmId)}', name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
                             <span class="vm-status-dot ${meta.dotClass}"></span>
                             <span class="vm-name-text">${sanitizeHtml(vmName)}</span>
                         </button>
@@ -923,20 +911,29 @@ class HostView extends BaseView {
 // VM View
 class VMView extends BaseView {
     async render() {
-        const vmName = this.data.name || 'Unknown VM';
-        const requestedHost = this.data.host || null;
-        const inventory = await this.fetchInventory();
-        const vm = this.findVm(inventory, vmName, requestedHost);
+        const vmId = this.data.id || '';
+        
+        if (!vmId) {
+            return `
+                <h1 class="page-title">VM Not Found</h1>
+                <p class="empty">Virtual machine ID not provided</p>
+            `;
+        }
+        
+        const vm = await this.fetchVmById(vmId);
 
         if (!vm) {
             return `
                 <h1 class="page-title">VM Not Found</h1>
-                <p class="empty">Virtual machine "${vmName}" not found</p>
+                <p class="empty">Virtual machine with ID "${vmId}" not found</p>
             `;
         }
 
         this.vmData = vm;
         this.vmHost = vm.host;
+        
+        // Fetch full inventory for host/cluster context
+        const inventory = await this.fetchInventory();
         this.lastInventory = inventory;
 
         const meta = getVmStateMeta(vm.state);
@@ -978,17 +975,30 @@ class VMView extends BaseView {
             `;
 
         const networkRows = networks.length
-            ? networks.map(adapter => `
+            ? networks.map(adapter => {
+                // Determine network display value
+                let networkDisplay = '—';
+                if (adapter.network_name) {
+                    networkDisplay = adapter.network_name;
+                } else if (adapter.virtual_switch && adapter.vlan) {
+                    networkDisplay = `${adapter.virtual_switch}/${adapter.vlan}`;
+                } else if (adapter.vlan) {
+                    networkDisplay = `VLAN ${adapter.vlan}`;
+                } else if (adapter.virtual_switch) {
+                    networkDisplay = adapter.virtual_switch;
+                }
+                
+                return `
                 <tr>
                     <td>${this.escapeHtml(adapter.adapter_name || adapter.name || 'Adapter')}</td>
                     <td>${this.escapeHtml(this.extractAdapterAddresses(adapter))}</td>
-                    <td>${this.escapeHtml(adapter.network_name || adapter.vlan || '—')}</td>
-                    <td>${this.escapeHtml(adapter.network || adapter.virtual_switch || '—')}</td>
+                    <td>${this.escapeHtml(networkDisplay)}</td>
                 </tr>
-            `).join('')
+                `;
+            }).join('')
             : `
                 <tr class="vm-empty-row">
-                    <td colspan="4">Network details not available yet.</td>
+                    <td colspan="3">Network details not available yet.</td>
                 </tr>
             `;
 
@@ -1077,7 +1087,6 @@ class VMView extends BaseView {
                                         <th scope="col">Adapter</th>
                                         <th scope="col">IP Address</th>
                                         <th scope="col">Network</th>
-                                        <th scope="col">Connected Switch</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1775,7 +1784,11 @@ class VMView extends BaseView {
                 this.updateActionButtonStates();
 
                 setTimeout(() => {
-                    viewManager.switchView('vm', { name: this.vmData.name, host }, { skipHistory: true });
+                    viewManager.switchView('vm', { 
+                        id: this.vmData.id,
+                        name: this.vmData.name, 
+                        host 
+                    }, { skipHistory: true });
                 }, 400);
             } else {
                 const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
@@ -1841,7 +1854,11 @@ class VMView extends BaseView {
                 this.updateActionButtonStates();
 
                 setTimeout(() => {
-                    viewManager.switchView('vm', { name: this.vmData.name, host }, { skipHistory: true });
+                    viewManager.switchView('vm', { 
+                        id: this.vmData.id,
+                        name: this.vmData.name, 
+                        host 
+                    }, { skipHistory: true });
                 }, 400);
             } else {
                 const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
@@ -2022,41 +2039,6 @@ class VMView extends BaseView {
         return { value: labelText, isHtml: false };
     }
 
-    findVm(inventory, vmName, requestedHost) {
-        if (!inventory) {
-            return null;
-        }
-
-        const vms = Array.isArray(inventory.vms) ? inventory.vms : [];
-        if (vms.length === 0) {
-            return null;
-        }
-
-        const normalizedName = String(vmName || '').toLowerCase();
-        const normalizedHost = requestedHost ? String(requestedHost).toLowerCase() : null;
-
-        if (normalizedHost) {
-            const hostMatch = vms.find(vm => {
-                if (!vm) {
-                    return false;
-                }
-                const hostValue = String(vm.host || '').toLowerCase();
-                const nameValue = String(vm.name || '').toLowerCase();
-                return nameValue === normalizedName && hostValue === normalizedHost;
-            });
-            if (hostMatch) {
-                return hostMatch;
-            }
-        }
-
-        return vms.find(vm => {
-            if (!vm) {
-                return false;
-            }
-            return String(vm.name || '').toLowerCase() === normalizedName;
-        }) || null;
-    }
-
     findHost(inventory, hostname) {
         if (!inventory || !hostname) {
             return null;
@@ -2145,6 +2127,20 @@ class VMView extends BaseView {
             console.error('Error:', error);
         }
         return { hosts: [], vms: [] };
+    }
+
+    async fetchVmById(vmId) {
+        try {
+            const response = await fetch(`/api/v1/vms/by-id/${encodeURIComponent(vmId)}`, { 
+                credentials: 'same-origin' 
+            });
+            if (response.ok) {
+                return await response.json();
+            }
+        } catch (error) {
+            console.error('Error fetching VM by ID:', error);
+        }
+        return null;
     }
 }
 

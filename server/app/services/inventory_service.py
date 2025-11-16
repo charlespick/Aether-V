@@ -1378,6 +1378,7 @@ class InventoryService:
                 memory_gb = memory_startup_gb
 
             cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
+            vm_id = self._coerce_str(vm_data.get("Id"))
             os_name = self._coerce_str(
                 vm_data.get("OperatingSystem") or vm_data.get("OsName")
             )
@@ -1395,6 +1396,7 @@ class InventoryService:
                 primary_ip = ip_addresses[0]
 
             vm = VM(
+                id=vm_id,
                 name=vm_data.get("Name", ""),
                 host=hostname,
                 state=state,
@@ -1613,6 +1615,7 @@ class InventoryService:
                     or adapter_data.get("virtual_switch")
                     or adapter_data.get("SwitchName"),
                     vlan=self._coerce_str(adapter_data.get("Vlan")),
+                    network_name=self._coerce_str(adapter_data.get("NetworkName")),
                     ip_addresses=ip_addresses,
                     mac_address=self._coerce_str(
                         adapter_data.get("MacAddress") or adapter_data.get("MACAddress")
@@ -1771,6 +1774,13 @@ class InventoryService:
         """Get a specific VM."""
         key = f"{hostname}:{vm_name}"
         return self.vms.get(key)
+
+    def get_vm_by_id(self, vm_id: str) -> Optional[VM]:
+        """Get a specific VM by its ID."""
+        for vm in self.vms.values():
+            if vm.id and vm.id.lower() == vm_id.lower():
+                return vm
+        return None
 
     def has_completed_initial_refresh(self) -> bool:
         return self._initial_refresh_event.is_set()

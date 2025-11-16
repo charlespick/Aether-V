@@ -418,6 +418,20 @@ async def get_vm(hostname: str, vm_name: str, user: dict = Depends(require_permi
     return vm
 
 
+@router.get("/api/v1/vms/by-id/{vm_id}", response_model=VM, tags=["VMs"])
+async def get_vm_by_id(vm_id: str, user: dict = Depends(require_permission(Permission.READER))):
+    """Get details of a specific VM by its ID."""
+    vm = inventory_service.get_vm_by_id(vm_id)
+
+    if not vm:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"VM with ID {vm_id} not found"
+        )
+
+    return vm
+
+
 @router.post(
     "/api/v1/vms/{hostname}/{vm_name}/start",
     status_code=status.HTTP_202_ACCEPTED,
