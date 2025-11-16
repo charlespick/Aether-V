@@ -777,6 +777,7 @@ end {
 
         Write-Host "[VERBOSE] ====== Preparing VM Registration Parameters ======"
         $registerParams = @{
+            VMName       = $vmName
             OSFamily     = $osFamily
             GBRam        = $gbRam
             CPUcores     = $cpuCores
@@ -785,6 +786,7 @@ end {
         }
 
         Write-Host "[VERBOSE] Base registration parameters:"
+        Write-Host "[VERBOSE]   - VM Name: $vmName"
         Write-Host "[VERBOSE]   - OS Family: $osFamily"
         Write-Host "[VERBOSE]   - RAM (GB): $gbRam"
         Write-Host "[VERBOSE]   - CPU Cores: $cpuCores"
@@ -806,7 +808,7 @@ end {
         }
 
         Write-Host "[VERBOSE] ====== Registering VM with Hyper-V ======"
-        Write-Host "[VERBOSE] About to call New-VM with path: $(Split-Path -Path $vmDataFolder -Parent)"
+        Write-Host "[VERBOSE] About to call New-VM with path: $vmDataFolder"
 
         Invoke-ProvisioningRegisterVm @registerParams | Out-Null
         Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName | Out-Null
