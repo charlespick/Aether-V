@@ -34,18 +34,70 @@ end {
             [object]$InputObject
         )
 
+        if ($null -eq $InputObject) {
+            return $null
+        }
+
         if ($InputObject -is [System.Collections.IDictionary]) {
             $result = @{}
             foreach ($key in $InputObject.Keys) {
-                $result[$key] = $InputObject[$key]
+                $value = $InputObject[$key]
+                # Recursively convert nested objects
+                if ($value -is [System.Management.Automation.PSObject] -or $value -is [System.Collections.IDictionary]) {
+                    $result[$key] = ConvertTo-Hashtable -InputObject $value
+                }
+                elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    # Handle arrays - convert each element
+                    $result[$key] = @($value | ForEach-Object { 
+                        if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                            ConvertTo-Hashtable -InputObject $_
+                        }
+                        else {
+                            $_
+                        }
+                    })
+                }
+                else {
+                    $result[$key] = $value
+                }
             }
             return $result
+        }
+
+        if ($InputObject -is [System.Collections.IEnumerable] -and -not ($InputObject -is [string])) {
+            # Handle arrays at the top level
+            return @($InputObject | ForEach-Object { 
+                if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                    ConvertTo-Hashtable -InputObject $_
+                }
+                else {
+                    $_
+                }
+            })
         }
 
         if ($InputObject -is [System.Management.Automation.PSObject]) {
             $result = @{}
             foreach ($property in $InputObject.PSObject.Properties) {
-                $result[$property.Name] = $property.Value
+                $value = $property.Value
+                # Recursively convert nested objects
+                if ($value -is [System.Management.Automation.PSObject] -or $value -is [System.Collections.IDictionary]) {
+                    $result[$property.Name] = ConvertTo-Hashtable -InputObject $value
+                }
+                elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    # Handle arrays - convert each element
+                    $result[$property.Name] = @($value | ForEach-Object { 
+                        if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                            ConvertTo-Hashtable -InputObject $_
+                        }
+                        else {
+                            $_
+                        }
+                    })
+                }
+                else {
+                    $result[$property.Name] = $value
+                }
             }
             return $result
         }
@@ -474,20 +526,19 @@ end {
 
         Write-Host "[VERBOSE] Searching through $($networks.Count) available network(s)..."
         foreach ($network in $networks) {
-            $netHashtable = ConvertTo-Hashtable -InputObject $network
-            if ($netHashtable['name'] -eq $NetworkName) {
+            # Network objects are already converted to hashtables by Get-HostResourcesConfiguration
+            if ($network['name'] -eq $NetworkName) {
                 Write-Host "[VERBOSE] Found matching network: $NetworkName"
-                Write-Host "[VERBOSE]   - Virtual Switch: $($netHashtable['configuration']['virtual_switch'])"
-                if ($netHashtable['configuration'].ContainsKey('vlan_id')) {
-                    Write-Host "[VERBOSE]   - VLAN ID: $($netHashtable['configuration']['vlan_id'])"
+                Write-Host "[VERBOSE]   - Virtual Switch: $($network['configuration']['virtual_switch'])"
+                if ($network['configuration'].ContainsKey('vlan_id')) {
+                    Write-Host "[VERBOSE]   - VLAN ID: $($network['configuration']['vlan_id'])"
                 }
-                return $netHashtable
+                return $network
             }
         }
 
         $availableNetworks = ($networks | ForEach-Object { 
-            $n = ConvertTo-Hashtable -InputObject $_
-            $n['name']
+            $_['name']
         }) -join ', '
         Write-Host "[ERROR] Network '$NetworkName' not found in configuration"
         throw "Network '$NetworkName' not found in host configuration. Available networks: $availableNetworks"
@@ -509,7 +560,8 @@ end {
             # Return first storage class if no specific one requested
             $storageClasses = $HostConfig['storage_classes']
             if ($storageClasses -and $storageClasses.Count -gt 0) {
-                $firstClass = ConvertTo-Hashtable -InputObject $storageClass[0]
+                # Storage classes are already converted to hashtables
+                $firstClass = $storageClasses[0]
                 Write-Host "[VERBOSE] Selected default storage class: $($firstClass['name'])"
                 Write-Host "[VERBOSE] Storage path: $($firstClass['path'])"
                 return $firstClass['path']
@@ -526,17 +578,16 @@ end {
 
         Write-Host "[VERBOSE] Searching through $($storageClasses.Count) available storage class(es)..."
         foreach ($storageClass in $storageClasses) {
-            $scHashtable = ConvertTo-Hashtable -InputObject $storageClass
-            if ($scHashtable['name'] -eq $StorageClassName) {
+            # Storage class objects are already converted to hashtables
+            if ($storageClass['name'] -eq $StorageClassName) {
                 Write-Host "[VERBOSE] Found matching storage class: $StorageClassName"
-                Write-Host "[VERBOSE] Storage path: $($scHashtable['path'])"
-                return $scHashtable['path']
+                Write-Host "[VERBOSE] Storage path: $($storageClass['path'])"
+                return $storageClass['path']
             }
         }
 
         $availableClasses = ($storageClasses | ForEach-Object { 
-            $sc = ConvertTo-Hashtable -InputObject $_
-            $sc['name']
+            $_['name']
         }) -join ', '
         Write-Host "[ERROR] Storage class '$StorageClassName' not found in configuration"
         throw "Storage class '$StorageClassName' not found in host configuration. Available classes: $availableClasses"
@@ -742,12 +793,12 @@ end {
 
         if ($null -ne $networkConfig) {
             Write-Host "[VERBOSE] Adding network configuration to registration..."
-            $config = ConvertTo-Hashtable -InputObject $networkConfig['configuration']
-            $registerParams.VirtualSwitch = $config['virtual_switch']
-            Write-Host "[VERBOSE]   - Virtual Switch: $($config['virtual_switch'])"
-            if ($config.ContainsKey('vlan_id') -and $null -ne $config['vlan_id']) {
-                $registerParams.VLANId = [int]$config['vlan_id']
-                Write-Host "[VERBOSE]   - VLAN ID: $($config['vlan_id'])"
+            # $networkConfig is already a fully converted hashtable from Resolve-NetworkConfiguration
+            $registerParams.VirtualSwitch = $networkConfig['configuration']['virtual_switch']
+            Write-Host "[VERBOSE]   - Virtual Switch: $($networkConfig['configuration']['virtual_switch'])"
+            if ($networkConfig['configuration'].ContainsKey('vlan_id') -and $null -ne $networkConfig['configuration']['vlan_id']) {
+                $registerParams.VLANId = [int]$networkConfig['configuration']['vlan_id']
+                Write-Host "[VERBOSE]   - VLAN ID: $($networkConfig['configuration']['vlan_id'])"
             }
         }
         else {
