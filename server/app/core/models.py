@@ -127,6 +127,9 @@ class VMNetworkAdapter(BaseModel):
     mac_address: Optional[str] = None
 
 
+VM.model_rebuild()
+
+
 class VMDeleteRequest(BaseModel):
     """Request to delete a VM."""
     vm_name: str
