@@ -86,8 +86,11 @@ class NotificationService:
         notification_message = "\n".join(lines)
         level = NotificationLevel.ERROR if getattr(result, "has_errors", False) else NotificationLevel.WARNING
 
+        # Set appropriate title based on severity
+        title = "Configuration errors on startup" if getattr(result, "has_errors", False) else "Configuration warnings on startup"
+
         notification = self.create_notification(
-            title="Configuration warnings on startup",
+            title=title,
             message=notification_message,
             level=level,
             category=NotificationCategory.SYSTEM,

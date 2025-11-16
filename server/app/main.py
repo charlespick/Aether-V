@@ -23,7 +23,7 @@ from .core.config import (
     AGENT_HTTP_MOUNT_PATH,
 )
 from .core.build_info import build_metadata
-from .core.config_validation import run_config_checks
+from .core.config_validation import ConfigIssue, run_config_checks
 from .api.routes import router
 from .services.inventory_service import inventory_service
 from .services.host_deployment_service import host_deployment_service
@@ -32,6 +32,13 @@ from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
 from .services.websocket_service import websocket_manager
 from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
+from .services.kerberos_manager import (
+    initialize_kerberos,
+    cleanup_kerberos,
+    KerberosManagerError,
+    validate_host_kerberos_setup,
+)
+from .core.models import NotificationLevel
 
 # Configure logging
 logging.basicConfig(
@@ -87,13 +94,100 @@ async def lifespan(app: FastAPI):
             if issue.hint:
                 logger.warning("Hint: %s", issue.hint)
 
+    kerberos_failed = False
+    kerberos_initialized = False
+    kerberos_realm = settings.get_kerberos_realm()
+
+    # Initialize Kerberos if configured
+    if settings.has_kerberos_config():
+        logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
+        try:
+            initialize_kerberos(
+                principal=settings.winrm_kerberos_principal,
+                keytab_b64=settings.winrm_keytab_b64,
+                realm=kerberos_realm,
+                kdc=settings.winrm_kerberos_kdc,
+            )
+        except KerberosManagerError as exc:
+            kerberos_failed = True
+            logger.error("Failed to initialize Kerberos authentication: %s", exc)
+            config_result.errors.append(
+                ConfigIssue(
+                    message=f"Kerberos initialization failed: {exc}",
+                    hint="Verify Kerberos principal, keytab, realm, and KDC settings.",
+                )
+            )
+        else:
+            kerberos_initialized = True
+            logger.info("Kerberos authentication initialized successfully")
+
+            # Validate host Kerberos setup (WSMAN SPNs and delegation)
+            # We need to get cluster information for delegation checking
+            hyperv_hosts = settings.get_hyperv_hosts_list()
+            if hyperv_hosts:
+                logger.info("Validating Kerberos setup for %d configured host(s)", len(hyperv_hosts))
+
+                # Import inventory service to get cluster information after it's started
+                # For now, do initial validation without cluster info (will re-validate later)
+                validation_result = validate_host_kerberos_setup(
+                    hosts=hyperv_hosts,
+                    realm=kerberos_realm,
+                    clusters=None,  # Will be validated later after inventory refresh
+                    service_principal=settings.winrm_kerberos_principal,
+                )
+
+                # Log and collect validation issues
+                for warning in validation_result.get("warnings", []):
+                    logger.warning("Kerberos host validation: %s", warning)
+
+                # Add errors with specific hints based on error type
+                if validation_result.get("errors"):
+                    # Handle SPN errors
+                    for error in validation_result.get("spn_errors", []):
+                        logger.warning("Kerberos SPN validation: %s", error)
+                        config_result.warnings.append(
+                            ConfigIssue(
+                                message=error,
+                                hint="Ensure WSMAN SPNs are registered in Active Directory for all Hyper-V hosts. "
+                                     "Use 'setspn -S WSMAN/<hostname> <hostname>' on a domain controller. "
+                                     "WinRM operations will fail until WSMAN SPNs are registered.",
+                            )
+                        )
+
+                    # Handle delegation errors
+                    for error in validation_result.get("delegation_errors", []):
+                        logger.warning("Kerberos delegation validation: %s", error)
+                        config_result.warnings.append(
+                            ConfigIssue(
+                                message=error,
+                                hint="Add the WinRM service account to each Hyper-V host's \"Principals allowed to delegate\" "
+                                     "list (PrincipalsAllowedToDelegateToAccount). For example: "
+                                     "Set-ADComputer <host> -PrincipalsAllowedToDelegateToAccount (Get-ADUser <service-account>). "
+                                     "This allows WinRM operations to perform double-hop authentication.",
+                            )
+                        )
+
+                    logger.warning(
+                        "Kerberos validation found %d issue(s) (%d SPN, %d delegation); application will start in degraded mode",
+                        len(validation_result["errors"]),
+                        len(validation_result.get("spn_errors", [])),
+                        len(validation_result.get("delegation_errors", []))
+                    )
+                else:
+                    logger.info("Kerberos host validation completed successfully")
+    else:
+        logger.warning("Kerberos credentials not configured; WinRM operations will fail")
+
     remote_started = False
     notifications_started = False
     job_started = False
     inventory_started = False
 
-    await remote_task_service.start()
-    remote_started = True
+    if not kerberos_failed:
+        await remote_task_service.start()
+        remote_started = True
+    else:
+        logger.error("Skipping remote task service startup because Kerberos authentication is unavailable")
 
     await notification_service.start()
     notifications_started = True
@@ -103,24 +197,27 @@ async def lifespan(app: FastAPI):
 
     notification_service.publish_startup_configuration_result(config_result)
 
-    await host_deployment_service.start_startup_deployment(
-        settings.get_hyperv_hosts_list()
-    )
+    if not kerberos_failed:
+        await host_deployment_service.start_startup_deployment(
+            settings.get_hyperv_hosts_list()
+        )
 
-    async def _log_startup_deployment_summary() -> None:
-        try:
-            await host_deployment_service.wait_for_startup()
-            deployment_summary = host_deployment_service.get_startup_summary()
-            logger.info(
-                "Startup agent deployment finished with status=%s (success=%d failed=%d)",
-                deployment_summary.get("status"),
-                deployment_summary.get("successful_hosts", 0),
-                deployment_summary.get("failed_hosts", 0),
-            )
-        except Exception:  # pragma: no cover - defensive logging
-            logger.exception("Failed to record startup deployment summary")
+        async def _log_startup_deployment_summary() -> None:
+            try:
+                await host_deployment_service.wait_for_startup()
+                deployment_summary = host_deployment_service.get_startup_summary()
+                logger.info(
+                    "Startup agent deployment finished with status=%s (success=%d failed=%d)",
+                    deployment_summary.get("status"),
+                    deployment_summary.get("successful_hosts", 0),
+                    deployment_summary.get("failed_hosts", 0),
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to record startup deployment summary")
 
-    asyncio.create_task(_log_startup_deployment_summary())
+        asyncio.create_task(_log_startup_deployment_summary())
+    else:
+        logger.error("Skipping host deployment startup because Kerberos authentication is unavailable")
 
     if not config_result.has_errors:
         await inventory_service.start()
@@ -130,6 +227,89 @@ async def lifespan(app: FastAPI):
         logger.info(
             "Application services initialised; inventory refresh will continue in the background"
         )
+        
+        # Schedule delegation validation after initial inventory refresh
+        # This allows us to check RBCD on discovered cluster objects
+        kerberos_realm_for_delegation = kerberos_realm
+        async def _validate_delegation_after_inventory() -> None:
+            try:
+                # Wait for initial inventory refresh to complete
+                await inventory_service.wait_for_initial_refresh()
+
+                # Get cluster information from inventory
+                clusters_dict = {}
+                for cluster in inventory_service.clusters.values():
+                    if cluster.name != "Default":  # Skip non-clustered hosts
+                        clusters_dict[cluster.name] = cluster.hosts
+
+                if clusters_dict and settings.has_kerberos_config():
+                    cluster_host_set = {
+                        host
+                        for hosts in clusters_dict.values()
+                        for host in (hosts or [])
+                    }
+                    logger.info(
+                        "Running delegation validation for %d discovered host(s)",
+                        len(cluster_host_set),
+                    )
+                    delegation_validation = validate_host_kerberos_setup(
+                        hosts=[],  # Already validated SPNs at startup
+                        realm=kerberos_realm_for_delegation,
+                        clusters=clusters_dict,
+                        service_principal=settings.winrm_kerberos_principal,
+                    )
+
+                    # Log any delegation issues found
+                    for error in delegation_validation.get("delegation_errors", []):
+                        logger.warning("Kerberos delegation validation: %s", error)
+
+                    for warning in delegation_validation.get("warnings", []):
+                        logger.warning("Kerberos delegation validation: %s", warning)
+
+                    if delegation_validation.get("delegation_errors") or delegation_validation.get("warnings"):
+                        issues = []
+                        for error in delegation_validation.get("delegation_errors", []):
+                            issues.append(f"Error: {error}")
+                        for warning in delegation_validation.get("warnings", []):
+                            issues.append(f"Warning: {warning}")
+
+                        level = (
+                            NotificationLevel.ERROR
+                            if delegation_validation.get("delegation_errors")
+                            else NotificationLevel.WARNING
+                        )
+                        title = (
+                            "Kerberos delegation errors detected"
+                            if level is NotificationLevel.ERROR
+                            else "Kerberos delegation warnings"
+                        )
+
+                        notification_service.upsert_system_notification(
+                            "kerberos-delegation-validation",
+                            title=title,
+                            message="\n".join(issues),
+                            level=level,
+                            metadata={
+                                "clusters_checked": len(clusters_dict),
+                                "hosts_checked": len(cluster_host_set),
+                                "errors": len(delegation_validation.get("delegation_errors", [])),
+                                "warnings": len(delegation_validation.get("warnings", [])),
+                            },
+                        )
+                    else:
+                        logger.info("Kerberos delegation validation completed successfully")
+                        notification_service.clear_system_notification(
+                            "kerberos-delegation-validation"
+                        )
+                else:
+                    notification_service.clear_system_notification(
+                        "kerberos-delegation-validation"
+                    )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to validate cluster delegation")
+
+        asyncio.create_task(_validate_delegation_after_inventory())
+        
     else:
         logger.error(
             "Skipping job and inventory service startup because configuration errors were detected."
@@ -148,6 +328,12 @@ async def lifespan(app: FastAPI):
             await notification_service.stop()
         if remote_started:
             await remote_task_service.stop()
+        
+        # Clean up Kerberos resources
+        if kerberos_initialized:
+            logger.info("Cleaning up Kerberos resources")
+            cleanup_kerberos()
+        
         logger.info("Application stopped")
 
 

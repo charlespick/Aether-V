@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException, Request, status
 
+# Kerberos is disabled via environment variables in conftest.py
+
 from app.api import routes
 from app.core.models import BuildInfo, VMState
 

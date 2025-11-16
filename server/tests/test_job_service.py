@@ -5,12 +5,14 @@ import uuid
 from datetime import datetime
 from typing import List, Tuple
 from unittest import IsolatedAsyncioTestCase, skipIf
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 yaml_stub = types.ModuleType("yaml")
 yaml_stub.safe_dump = lambda data, sort_keys=False: ""
 sys.modules.setdefault("yaml", yaml_stub)
+
+# Kerberos is disabled via environment variables in conftest.py
 
 try:
     import server.app.services.job_service as job_service_module
