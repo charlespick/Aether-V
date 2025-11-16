@@ -55,10 +55,39 @@ function Invoke-ProvisioningCopyImage {
     $vmConfigPath = Join-Path -Path $VMBasePath -ChildPath $VMName
     Write-Host "[VERBOSE] CopyImage: VM config path will be: $vmConfigPath"
     
-    if (-not (Test-Path -LiteralPath $vmConfigPath)) {
-        Write-Host "[VERBOSE] CopyImage: Creating VM config directory..."
-        New-Item -ItemType Directory -Path $vmConfigPath -Force | Out-Null
-        Write-Host "[VERBOSE] CopyImage: VM config directory created"
+    # Check if the parent directory (VM Base Path) exists
+    Write-Host "[VERBOSE] CopyImage: Checking if VM base path exists: $VMBasePath"
+    if (-not (Test-Path -LiteralPath $VMBasePath -PathType Container)) {
+        Write-Host "[VERBOSE] CopyImage: VM base path does not exist, creating it..."
+        try {
+            New-Item -ItemType Directory -Path $VMBasePath -Force -ErrorAction Stop | Out-Null
+            Write-Host "[VERBOSE] CopyImage: VM base path created successfully"
+        }
+        catch {
+            Write-Host "[ERROR] CopyImage: Failed to create VM base path: $VMBasePath"
+            Write-Host "[ERROR] CopyImage: Error: $_"
+            throw "Failed to create VM base path '$VMBasePath': $_"
+        }
+    }
+    else {
+        Write-Host "[VERBOSE] CopyImage: VM base path exists"
+    }
+    
+    if (-not (Test-Path -LiteralPath $vmConfigPath -PathType Container)) {
+        Write-Host "[VERBOSE] CopyImage: Creating VM config directory: $vmConfigPath"
+        try {
+            New-Item -ItemType Directory -Path $vmConfigPath -Force -ErrorAction Stop | Out-Null
+            Write-Host "[VERBOSE] CopyImage: VM config directory created successfully"
+        }
+        catch {
+            Write-Host "[ERROR] CopyImage: Failed to create VM config directory: $vmConfigPath"
+            Write-Host "[ERROR] CopyImage: Error: $_"
+            Write-Host "[ERROR] CopyImage: Exception type: $($_.Exception.GetType().FullName)"
+            if ($_.Exception.InnerException) {
+                Write-Host "[ERROR] CopyImage: Inner exception: $($_.Exception.InnerException.Message)"
+            }
+            throw "Failed to create VM config directory '$vmConfigPath': $_"
+        }
     }
     else {
         Write-Host "[VERBOSE] CopyImage: VM config directory already exists"
