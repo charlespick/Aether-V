@@ -251,9 +251,8 @@ class JobService:
         if not self._started or self._queue is None:
             raise RuntimeError("Job service is not running")
 
-        # Validate against host resources configuration if target host is specified
-        if target_host:
-            await self._validate_job_against_host_config(payload, target_host)
+        # Don't validate at submission time - validation happens during execution
+        # This allows jobs to be created even if host config is temporarily unavailable
 
         job_id = str(uuid.uuid4())
         job = Job(
@@ -469,6 +468,10 @@ class JobService:
         target_host = (job.target_host or "").strip()
         if not target_host:
             raise RuntimeError("Provisioning job is missing a target host")
+
+        # Validate host resources configuration before executing
+        # This happens during job execution, not submission, so failures appear in the job output
+        await self._validate_job_against_host_config(definition, target_host)
 
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:

@@ -61,9 +61,11 @@ class HostResourcesService:
             PureWindowsPath("C:/ProgramData/Aether-V/hostresources.yaml"),
         ]
 
+        last_error = None
         for config_path in config_paths:
             try:
-                command = f"Get-Content -LiteralPath '{config_path}' -Raw -ErrorAction Stop"
+                # Use [System.IO.File]::ReadAllText to avoid PowerShell object serialization issues
+                command = f"[System.IO.File]::ReadAllText('{config_path}')"
                 stdout, stderr, exit_code = await asyncio.to_thread(
                     winrm_service.execute_ps_command,
                     host,
@@ -71,10 +73,22 @@ class HostResourcesService:
                 )
                 
                 if exit_code != 0:
+                    last_error = f"File not found: {config_path}"
+                    logger.debug(
+                        "Configuration file %s not found on host %s (exit code %d)",
+                        config_path,
+                        host,
+                        exit_code,
+                    )
                     continue
 
                 content = stdout.strip()
                 if not content:
+                    logger.debug(
+                        "Configuration file %s on host %s is empty",
+                        config_path,
+                        host,
+                    )
                     continue
 
                 # Parse based on file extension
@@ -92,12 +106,23 @@ class HostResourcesService:
                     )
                     return config
                 else:
+                    last_error = f"Invalid configuration at {config_path}"
                     logger.warning(
                         "Invalid host resources configuration at %s on host %s",
                         config_path,
                         host,
                     )
+            except json.JSONDecodeError as exc:
+                last_error = f"JSON parsing error in {config_path}: {exc}"
+                logger.warning(
+                    "Failed to parse JSON configuration from %s on host %s: %s",
+                    config_path,
+                    host,
+                    exc,
+                )
+                continue
             except Exception as exc:
+                last_error = f"Error loading {config_path}: {exc}"
                 logger.debug(
                     "Could not load configuration from %s on host %s: %s",
                     config_path,
@@ -106,7 +131,11 @@ class HostResourcesService:
                 )
                 continue
 
-        logger.warning("No valid host resources configuration found on host %s", host)
+        logger.warning(
+            "No valid host resources configuration found on host %s. Last error: %s",
+            host,
+            last_error or "unknown",
+        )
         return None
 
     def _validate_configuration(self, config: Any) -> bool:
