@@ -65,6 +65,24 @@ class StubWebSocketManager:
         self.broadcasts.append((message, topic))
 
 
+class StubHostResourcesService:
+    """Stub for host resources service that returns valid configuration."""
+    
+    async def get_host_configuration(self, host: str):
+        """Return a mock host configuration."""
+        return {
+            'version': '1.0',
+            'schema_name': 'hostresources',
+            'virtual_machines_path': 'C:\\VMs',
+            'storage_classes': [
+                {'name': 'default', 'path': 'C:\\ClusterStorage\\Volume1'}
+            ],
+            'networks': [
+                {'name': 'default', 'configuration': {'virtual_switch': 'vSwitch1'}}
+            ]
+        }
+
+
 @skipIf(job_service_module is None, "Server dependencies not installed")
 class JobServiceTests(IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -72,20 +90,24 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         self.notification_stub = StubNotificationService()
         self.websocket_stub = StubWebSocketManager()
         self.inventory_stub = self._build_inventory_stub()
+        self.host_resources_stub = StubHostResourcesService()
 
         self.original_notification_service = job_service_module.notification_service
         self.original_websocket_manager = job_service_module.websocket_manager
         self.original_inventory_service = job_service_module.inventory_service
+        self.original_host_resources_service = job_service_module.host_resources_service
 
         job_service_module.notification_service = self.notification_stub
         job_service_module.websocket_manager = self.websocket_stub
         job_service_module.inventory_service = self.inventory_stub
+        job_service_module.host_resources_service = self.host_resources_stub
 
     async def asyncTearDown(self):
         await self.job_service.stop()
         job_service_module.notification_service = self.original_notification_service
         job_service_module.websocket_manager = self.original_websocket_manager
         job_service_module.inventory_service = self.original_inventory_service
+        job_service_module.host_resources_service = self.original_host_resources_service
 
     @staticmethod
     def _build_inventory_stub():

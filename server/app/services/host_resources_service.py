@@ -55,7 +55,7 @@ class HostResourcesService:
         Returns:
             Parsed configuration dictionary or None
         """
-        # Try JSON first, then YAML
+        # Try both JSON and YAML formats
         config_paths = [
             PureWindowsPath("C:/ProgramData/Aether-V/hostresources.json"),
             PureWindowsPath("C:/ProgramData/Aether-V/hostresources.yaml"),

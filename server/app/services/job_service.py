@@ -913,13 +913,11 @@ class JobService:
         # Load host configuration
         host_config = await host_resources_service.get_host_configuration(target_host)
         if not host_config:
-            # If we can't load config, log warning but don't fail
-            # This allows systems to work during migration or if config is optional
-            logger.warning(
-                "Could not load host resources configuration for %s; skipping validation",
-                target_host,
+            # Host resources configuration is mandatory for provisioning
+            raise ValueError(
+                f"Host resources configuration not found on {target_host}. "
+                f"Ensure C:\\ProgramData\\Aether-V\\hostresources.json or hostresources.yaml exists and is valid."
             )
-            return
 
         fields = payload.get("fields", {})
         if not isinstance(fields, dict):
