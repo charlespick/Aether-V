@@ -469,15 +469,48 @@ function escapeJsString(value) {
         .replace(/\r/g, '\\r');
 }
 
-function formatVmMemory(memory) {
+function formatMemoryAmount(memory) {
     if (memory === null || typeof memory === 'undefined') {
-        return '—';
+        return null;
     }
     const parsed = Number(memory);
     if (!Number.isFinite(parsed)) {
-        return '—';
+        return null;
     }
     return `${parsed.toFixed(2)} GB`;
+}
+
+function resolveVmMemoryValue(vm) {
+    const assigned = Number(vm?.memory_gb);
+    const startup = Number(vm?.memory_startup_gb);
+
+    if (Number.isFinite(assigned) && assigned > 0) {
+        return assigned;
+    }
+
+    if (Number.isFinite(startup) && startup > 0) {
+        return startup;
+    }
+
+    if (Number.isFinite(assigned)) {
+        return assigned;
+    }
+
+    return null;
+}
+
+function formatVmMemoryDisplay(vm) {
+    const memoryValue = resolveVmMemoryValue(vm);
+    if (memoryValue === null) {
+        return '—';
+    }
+
+    let display = formatMemoryAmount(memoryValue) || '—';
+    if (vm?.dynamic_memory_enabled) {
+        display += ' (dynamic)';
+    }
+
+    return display;
 }
 
 function formatCpuCount(cpu) {
@@ -657,8 +690,8 @@ class ClusterView extends BaseView {
                     <h2>Cluster Resources</h2>
                 </div>
                 <div class="resource-summary">
-                    <p>Total CPU Cores: ${this.calculateTotalCPU(clusterVMs)}</p>
-                    <p>Total Memory: ${this.calculateTotalMemory(clusterVMs)} GB</p>
+                    <p>Total CPU Cores: ${this.calculateTotalCPU(clusterHosts)}</p>
+                    <p>Total Memory: ${this.calculateTotalMemory(clusterHosts)} GB</p>
                 </div>
             </div>
         `;
@@ -714,7 +747,7 @@ class ClusterView extends BaseView {
                     </td>
                     <td><span class="status ${meta.badgeClass}">${sanitizeHtml(meta.label)}</span></td>
                     <td>${sanitizeHtml(formatCpuCount(vm.cpu_cores))}</td>
-                    <td>${sanitizeHtml(formatVmMemory(vm.memory_gb))}</td>
+                    <td>${sanitizeHtml(formatVmMemoryDisplay(vm))}</td>
                     <td>${hostDisplay ? `<span class="vm-table-host" title="${safeHostTitle}">${safeHostDisplay}</span>` : '<span class="vm-table-host">—</span>'}</td>
                 </tr>
             `;
@@ -740,12 +773,13 @@ class ClusterView extends BaseView {
         `;
     }
 
-    calculateTotalCPU(vms) {
-        return vms.reduce((sum, vm) => sum + (vm.cpu_cores || 0), 0);
+    calculateTotalCPU(hosts) {
+        return hosts.reduce((sum, host) => sum + (host.total_cpu_cores || 0), 0);
     }
 
-    calculateTotalMemory(vms) {
-        return vms.reduce((sum, vm) => sum + (vm.memory_gb || 0), 0).toFixed(2);
+    calculateTotalMemory(hosts) {
+        const total = hosts.reduce((sum, host) => sum + (host.total_memory_gb || 0), 0);
+        return total.toFixed(2);
     }
 
     async fetchInventory() {
@@ -851,7 +885,7 @@ class HostView extends BaseView {
                     </td>
                     <td><span class="status ${meta.badgeClass}">${sanitizeHtml(meta.label)}</span></td>
                     <td>${sanitizeHtml(formatCpuCount(vm.cpu_cores))}</td>
-                    <td>${sanitizeHtml(formatVmMemory(vm.memory_gb))}</td>
+                    <td>${sanitizeHtml(formatVmMemoryDisplay(vm))}</td>
                 </tr>
             `;
         }).join('');
@@ -910,6 +944,7 @@ class VMView extends BaseView {
         const hostInfo = this.findHost(inventory, vm.host);
         const hostOverview = this.buildHostOverviewValue(vm.host);
         const clusterOverview = this.buildClusterOverviewValue(vm, hostInfo);
+        const memoryItems = this.buildMemoryHardwareItems(vm);
         const overviewItems = [
             { label: 'Hyper-V Host', value: hostOverview.value, isHtml: hostOverview.isHtml },
             { label: 'IP Address(es)', value: this.extractIpAddresses(vm) },
@@ -920,7 +955,7 @@ class VMView extends BaseView {
 
         const hardwareItems = [
             { label: 'CPU Cores', value: this.formatValue(vm.cpu_cores, '—') },
-            { label: 'Memory', value: this.formatMemory(vm.memory_gb) },
+            ...memoryItems,
             { label: 'Generation', value: this.formatValue(vm.generation, '—') },
             { label: 'Configuration Version', value: this.formatValue(vm.version, '—') }
         ];
@@ -1843,15 +1878,51 @@ class VMView extends BaseView {
         return this.formatValue(vm.os_family, 'Unknown');
     }
 
-    formatMemory(memoryGb) {
-        const value = Number(memoryGb);
-        if (Number.isFinite(value) && value > 0) {
-            return `${value.toFixed(2)} GB`;
+    buildMemoryHardwareItems(vm) {
+        const items = [];
+        const resolvedMemory = resolveVmMemoryValue(vm);
+        const isDynamic = vm.dynamic_memory_enabled === true;
+
+        items.push({
+            label: 'Memory',
+            value: this.formatMemory(resolvedMemory, isDynamic)
+        });
+
+        if (isDynamic) {
+            if (typeof vm.memory_startup_gb !== 'undefined') {
+                items.push({
+                    label: 'Startup Memory',
+                    value: this.formatMemory(vm.memory_startup_gb)
+                });
+            }
+            if (typeof vm.memory_min_gb !== 'undefined') {
+                items.push({
+                    label: 'Minimum Memory',
+                    value: this.formatMemory(vm.memory_min_gb)
+                });
+            }
+            if (typeof vm.memory_max_gb !== 'undefined') {
+                items.push({
+                    label: 'Maximum Memory',
+                    value: this.formatMemory(vm.memory_max_gb)
+                });
+            }
         }
-        if (Number.isFinite(value) && value === 0) {
-            return '0 GB';
+
+        return items;
+    }
+
+    formatMemory(memoryGb, isDynamic = false) {
+        const formatted = formatMemoryAmount(memoryGb);
+        if (!formatted) {
+            return '—';
         }
-        return '—';
+
+        if (isDynamic) {
+            return `${formatted} (dynamic)`;
+        }
+
+        return formatted;
     }
 
     formatDiskCapacity(disk) {
