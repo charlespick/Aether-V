@@ -11,18 +11,48 @@ function Get-VMOperatingSystem {
         [string]$ComputerName,
 
         [Parameter(Mandatory = $true)]
-        [string]$VMName
+        [string]$VMName,
+
+        [Parameter(Mandatory = $false)]
+        [Microsoft.Management.Infrastructure.CimSession]$CimSession
     )
 
+    $session = $CimSession
+    $sessionCreatedLocally = $false
+
+    if (-not $session) {
+        try {
+            $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
+            $session = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
+            $sessionCreatedLocally = $true
+        } catch {
+            Write-Warning "Failed to establish delegated CIM session to $ComputerName: $($_.Exception.Message)"
+        }
+    }
+
     try {
-        $vm = Get-CimInstance -ComputerName $ComputerName -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+        $vm = if ($session) {
+            Get-CimInstance -CimSession $session -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
+        } else {
+            Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
+        }
+
         $info = Get-CimAssociatedInstance -InputObject $vm
-        $osName = $info | Where-Object GuestOperatingSystem | Select-Object -ExpandProperty GuestOperatingSystem
+        $osName = $info | Where-Object GuestOperatingSystem | Select-Object -First 1 -ExpandProperty GuestOperatingSystem
         return $osName
     }
     catch {
         Write-Warning "Could not retrieve OS information for $VMName on $ComputerName. Error: $_"
         return $null
+    }
+    finally {
+        if ($sessionCreatedLocally -and $session) {
+            try {
+                Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue
+            } catch {
+                # Ignore cleanup failures
+            }
+        }
     }
 }
 
@@ -67,6 +97,14 @@ try {
 
     $vmDetails = @()
     $vmList = Get-VM
+
+    $delegatedCimSession = $null
+    try {
+        $delegatedSessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
+        $delegatedCimSession = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $delegatedSessionOptions -ErrorAction Stop
+    } catch {
+        Write-Warning "Delegated CIM session could not be created for $ComputerName: $($_.Exception.Message)"
+    }
 
     foreach ($vm in $vmList) {
         $creationTime = $null
@@ -115,7 +153,7 @@ try {
         }
 
         $osName = $null
-        $osName = Get-VMOperatingSystem -ComputerName $ComputerName -VMName $vm.Name
+        $osName = Get-VMOperatingSystem -ComputerName $ComputerName -VMName $vm.Name -CimSession $delegatedCimSession
 
         if (-not $osName) {
             try {
@@ -205,6 +243,14 @@ try {
         }
 
         $vmDetails += $vmInfo
+    }
+
+    if ($delegatedCimSession) {
+        try {
+            Remove-CimSession -CimSession $delegatedCimSession -ErrorAction SilentlyContinue
+        } catch {
+            # Ignore cleanup failures
+        }
     }
 
     $result.VirtualMachines = $vmDetails
