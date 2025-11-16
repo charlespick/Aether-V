@@ -64,16 +64,16 @@ class HostResourcesService:
         for config_path in config_paths:
             try:
                 command = f"Get-Content -LiteralPath '{config_path}' -Raw -ErrorAction Stop"
-                result = await asyncio.to_thread(
-                    winrm_service.run_ps_command,
+                stdout, stderr, exit_code = await asyncio.to_thread(
+                    winrm_service.execute_ps_command,
                     host,
                     command,
                 )
                 
-                if result.status_code != 0:
+                if exit_code != 0:
                     continue
 
-                content = result.std_out.strip()
+                content = stdout.strip()
                 if not content:
                     continue
 
