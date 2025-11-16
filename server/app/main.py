@@ -160,10 +160,12 @@ async def lifespan(app: FastAPI):
                         config_result.warnings.append(
                             ConfigIssue(
                                 message=error,
-                                hint="Add the WinRM service account to each Hyper-V host's \"Principals allowed to delegate\" "
-                                     "list (PrincipalsAllowedToDelegateToAccount). For example: "
-                                     "Set-ADComputer <host> -PrincipalsAllowedToDelegateToAccount (Get-ADUser <service-account>). "
-                                     "This allows WinRM operations to perform double-hop authentication.",
+                                hint=(
+                                    "Ensure the cluster CNO grants RBCD to the Hyper-V host computer accounts and that hosts "
+                                    "are not configured for legacy/unconstrained delegation. "
+                                    "Example: Set-ADComputer <ClusterName> -PrincipalsAllowedToDelegateToAccount @((Get-ADComputer "
+                                    "<hyperv01>),(Get-ADComputer <hyperv02>))."
+                                ),
                             )
                         )
 

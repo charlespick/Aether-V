@@ -125,9 +125,12 @@ Remove-Item C:\temp\aetherv.keytab -Force
 
 RBCD allows the Aether-V service account to delegate credentials to Hyper-V hosts and cluster objects for double-hop operations.
 
-### Step 1: Configure Delegation for Hyper-V Hosts
+### Step 1: Verify Hyper-V Hosts (no delegation required on the host objects)
 
-For each Hyper-V host, configure RBCD to allow the service account to delegate:
+RBCD is configured on the resource, not on the source hosts. Hyper-V computer
+objects should normally have **no** delegation entries. Verify each host is set
+to "Do not trust this computer for delegation" and that legacy delegation lists
+are empty:
 
 ```powershell
 # Run on a domain controller or machine with AD PowerShell tools
@@ -141,18 +144,17 @@ $HyperVHost = "hyperv01"
 $ServicePrincipal = Get-ADUser -Identity $ServiceAccount
 $HostComputer = Get-ADComputer $HyperVHost
 
-# Configure RBCD - allow service account to delegate to the host
-Set-ADComputer $HostComputer -PrincipalsAllowedToDelegateToAccount $ServicePrincipal
-
-# Verify configuration
-Get-ADComputer $HostComputer -Properties PrincipalsAllowedToDelegateToAccount |
-    Select-Object Name, PrincipalsAllowedToDelegateToAccount
+# Verify configuration (hosts should normally have no delegation entries when using RBCD)
+Get-ADComputer $HostComputer -Properties msDS-AllowedToDelegateTo,TrustedForDelegation,TrustedToAuthForDelegation |
+    Select-Object Name, msDS-AllowedToDelegateTo, TrustedForDelegation, TrustedToAuthForDelegation
 ```
 
-### Step 2: Configure Delegation for Cluster Objects
+### Step 2: Configure Resource-Based Constrained Delegation (RBCD) on the Cluster Name Object (CNO)
 
-If using Hyper-V failover clusters, also configure RBCD for the cluster name object. Reuse the
-`$ServicePrincipal` value resolved with `Get-ADUser` above:
+When Hyper-V failover clusters are present, configure RBCD on the cluster computer
+object so the Hyper-V host *computer accounts* are allowed to act on behalf of
+the service account. Delegation is granted on the resource (the cluster), not on
+the hosts or the Linux service account:
 
 ```powershell
 $ClusterName = "HV-CLUSTER01"
@@ -160,21 +162,32 @@ $ClusterName = "HV-CLUSTER01"
 # Get cluster computer object
 $ClusterComputer = Get-ADComputer $ClusterName
 
-# Configure RBCD for cluster
-Set-ADComputer $ClusterComputer -PrincipalsAllowedToDelegateToAccount $ServicePrincipal
+# Grant Hyper-V hosts permission to delegate to the cluster
+$Hosts = @(
+  Get-ADComputer -Identity "hyperv01",
+  Get-ADComputer -Identity "hyperv02"
+)
+Set-ADComputer $ClusterComputer -PrincipalsAllowedToDelegateToAccount $Hosts
 
-# Verify
+# Verify only the expected hosts are allowed
 Get-ADComputer $ClusterComputer -Properties PrincipalsAllowedToDelegateToAccount |
     Select-Object Name, PrincipalsAllowedToDelegateToAccount
 ```
 
+Keep the host accounts set to **“Do not trust this computer for delegation”** and
+avoid legacy constrained/unconstrained delegation on hosts (`msDS-AllowedToDelegateTo`,
+`TrustedForDelegation`, `TrustedToAuthForDelegation`) unless another service
+explicitly requires it. RBCD on the CNO is sufficient for double-hop cluster
+operations.
+
 ### Automatic cluster delegation verification
 
-Once the initial inventory synchronisation completes, Aether-V inspects the
-discovered cluster computer objects and verifies that `msDS-AllowedToDelegateTo`
-contains delegation targets. Missing delegation is surfaced through the system
-notification panel so administrators can remediate Active Directory configuration
-issues before running double-hop operations.
+After the initial inventory synchronisation, Aether-V inspects cluster computer
+objects and verifies that `msDS-AllowedToActOnBehalfOfOtherIdentity` (RBCD)
+includes the discovered Hyper-V hosts and no unexpected principals. Missing or
+excessive delegation is surfaced through the system notification panel so
+administrators can remediate Active Directory configuration issues before running
+double-hop operations.
 
 ### Step 3: Configure Service Principal Names (SPNs)
 
