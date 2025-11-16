@@ -717,7 +717,9 @@ end {
         Write-Host "VM config directory: $vmDataFolder" -ForegroundColor Green
 
         Write-Host "[VERBOSE] ====== Copying Provisioning ISO ======"
-        Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -VMDataFolder $vmDataFolder
+        Write-Host "[VERBOSE] Copying ISO to storage path: $storagePath"
+        $isoPath = Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -StoragePath $storagePath -VMName $vmName
+        Write-Host "[VERBOSE] ISO copied to: $isoPath"
 
         Write-Host "[VERBOSE] ====== Preparing VM Registration Parameters ======"
         $registerParams = @{
@@ -727,6 +729,7 @@ end {
             CPUcores     = $cpuCores
             VMDataFolder = $vmDataFolder
             VhdxPath     = $vhdxPath
+            IsoPath      = $isoPath
         }
 
         Write-Host "[VERBOSE] Base registration parameters:"
@@ -736,6 +739,7 @@ end {
         Write-Host "[VERBOSE]   - CPU Cores: $cpuCores"
         Write-Host "[VERBOSE]   - VM Data Folder: $vmDataFolder"
         Write-Host "[VERBOSE]   - VHDX Path: $vhdxPath"
+        Write-Host "[VERBOSE]   - ISO Path: $isoPath"
 
         if ($null -ne $networkConfig) {
             Write-Host "[VERBOSE] Adding network configuration to registration..."
@@ -769,6 +773,10 @@ end {
         Invoke-ProvisioningPublishProvisioningData @publishParams
 
         Invoke-ProvisioningWaitForProvisioningCompletion -VMName $vmName | Out-Null
+
+        # Clean up the provisioning ISO now that provisioning is complete
+        Write-Host "[VERBOSE] ====== Cleaning Up Provisioning ISO ======"
+        Invoke-ProvisioningCleanupIso -VMName $vmName -IsoPath $isoPath
 
         if ($vmClustered) {
             Invoke-ProvisioningClusterEnrollment -VmName $vmName

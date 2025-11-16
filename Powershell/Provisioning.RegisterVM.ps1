@@ -19,6 +19,9 @@ function Invoke-ProvisioningRegisterVm {
         [Parameter(Mandatory = $true)]
         [string]$VhdxPath,
 
+        [Parameter(Mandatory = $true)]
+        [string]$IsoPath,
+
         [Parameter()]
         [string]$VirtualSwitch,
 
@@ -103,14 +106,17 @@ function Invoke-ProvisioningRegisterVm {
         }
     }
 
-    $isoFile = Get-ChildItem -LiteralPath $VMDataFolder -Filter *.iso -File | Select-Object -First 1
-    if ($isoFile) {
-        try {
-            Add-VMDvdDrive -VM $vm -Path $isoFile.FullName
-        }
-        catch {
-            throw "Failed to mount provisioning ISO '$($isoFile.FullName)' to VM '$vmName': $_"
-        }
+    # Mount the provisioning ISO from the storage path
+    if (-not (Test-Path -LiteralPath $IsoPath -PathType Leaf)) {
+        throw "Provisioning ISO not found at '$IsoPath'."
+    }
+
+    try {
+        Add-VMDvdDrive -VM $vm -Path $IsoPath
+        Write-Host "Mounted provisioning ISO: $IsoPath" -ForegroundColor Green
+    }
+    catch {
+        throw "Failed to mount provisioning ISO '$IsoPath' to VM '$vmName': $_"
     }
 
     try {
