@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
 
     try:
-        load_job_schema()
+        load_schema_by_id("managed-deployment")
     except SchemaValidationError as exc:
         logger.error("Failed to load job schema: %s", "; ".join(exc.errors))
         raise
