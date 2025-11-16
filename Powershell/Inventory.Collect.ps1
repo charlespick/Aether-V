@@ -70,6 +70,15 @@ $result = @{
 }
 
 try {
+    $delegatedCimSessions = @{}
+    try {
+        $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
+        $delegatedSession = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
+        $delegatedCimSessions[$ComputerName] = $delegatedSession
+    } catch {
+        $result.Host.Warnings += "Delegated CIM session could not be created for ${ComputerName}: $($_.Exception.Message)"
+    }
+
     try {
         $clusterNode = Get-ClusterNode -Name $ComputerName -ErrorAction Stop
         if ($clusterNode -and $clusterNode.Cluster) {
@@ -101,7 +110,11 @@ try {
     $vmList = Get-VM
 
     $maxThreads = [math]::Min([math]::Max([Environment]::ProcessorCount, 2), 16)
-    $pool = [RunspaceFactory]::CreateRunspacePool(1, $maxThreads)
+    $initial = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+    $sessionEntry = New-Object System.Management.Automation.Runspaces.SessionStateVariableEntry "CimSessionMap", $delegatedCimSessions, "Delegated CIM session map"
+    $initial.Variables.Add($sessionEntry)
+
+    $pool = [RunspaceFactory]::CreateRunspacePool(1, $maxThreads, $initial, $Host)
     $pool.ApartmentState = [System.Threading.ApartmentState]::MTA
     $pool.ThreadOptions = 'ReuseThread'
     $pool.Open()
@@ -176,13 +189,7 @@ try {
                 Notes                = $vm.Notes
             }
 
-            $delegatedCimSession = $null
-            try {
-                $delegatedSessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
-                $delegatedCimSession = New-CimSession -ComputerName $Computer -Authentication Kerberos -SessionOption $delegatedSessionOptions -ErrorAction Stop
-            } catch {
-                $vmWarnings += "Delegated CIM session could not be created for ${Computer}: $($_.Exception.Message)"
-            }
+            $delegatedCimSession = if ($CimSessionMap.ContainsKey($Computer)) { $CimSessionMap[$Computer] } else { $null }
 
             $osName = $null
             if ($delegatedCimSession) {
@@ -193,6 +200,8 @@ try {
                 } catch {
                     $vmWarnings += "Delegated OS lookup failed for VM $($vm.Name): $($_.Exception.Message)"
                 }
+            } else {
+                $vmWarnings += "Delegated CIM session unavailable for ${Computer}; OS lookup skipped."
             }
 
             if (-not $osName) {
@@ -212,14 +221,6 @@ try {
 
             if ($osName) {
                 $vmInfo.OperatingSystem = $osName
-            }
-
-            if ($delegatedCimSession) {
-                try {
-                    Remove-CimSession -CimSession $delegatedCimSession -ErrorAction SilentlyContinue
-                } catch {
-                    # Ignore cleanup failures
-                }
             }
 
             $networks = @()
@@ -330,6 +331,12 @@ try {
         if ($pool) {
             try { $pool.Close() } catch { }
             try { $pool.Dispose() } catch { }
+        }
+    }
+
+    if ($delegatedCimSessions.Values) {
+        foreach ($session in $delegatedCimSessions.Values) {
+            try { Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue } catch { }
         }
     }
 } catch {
