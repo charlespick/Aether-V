@@ -83,6 +83,7 @@ class Notification(BaseModel):
 
 class VM(BaseModel):
     """Virtual machine information."""
+    id: Optional[str] = None
     name: str
     host: str
     state: VMState
@@ -123,6 +124,7 @@ class VMNetworkAdapter(BaseModel):
     network: Optional[str] = None
     virtual_switch: Optional[str] = None
     vlan: Optional[str] = None
+    network_name: Optional[str] = None
     ip_addresses: List[str] = Field(default_factory=list)
     mac_address: Optional[str] = None
 

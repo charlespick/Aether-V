@@ -34,18 +34,70 @@ end {
             [object]$InputObject
         )
 
+        if ($null -eq $InputObject) {
+            return $null
+        }
+
         if ($InputObject -is [System.Collections.IDictionary]) {
             $result = @{}
             foreach ($key in $InputObject.Keys) {
-                $result[$key] = $InputObject[$key]
+                $value = $InputObject[$key]
+                # Recursively convert nested objects
+                if ($value -is [System.Management.Automation.PSObject] -or $value -is [System.Collections.IDictionary]) {
+                    $result[$key] = ConvertTo-Hashtable -InputObject $value
+                }
+                elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    # Handle arrays - convert each element
+                    $result[$key] = @($value | ForEach-Object { 
+                        if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                            ConvertTo-Hashtable -InputObject $_
+                        }
+                        else {
+                            $_
+                        }
+                    })
+                }
+                else {
+                    $result[$key] = $value
+                }
             }
             return $result
+        }
+
+        if ($InputObject -is [System.Collections.IEnumerable] -and -not ($InputObject -is [string])) {
+            # Handle arrays at the top level
+            return @($InputObject | ForEach-Object { 
+                if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                    ConvertTo-Hashtable -InputObject $_
+                }
+                else {
+                    $_
+                }
+            })
         }
 
         if ($InputObject -is [System.Management.Automation.PSObject]) {
             $result = @{}
             foreach ($property in $InputObject.PSObject.Properties) {
-                $result[$property.Name] = $property.Value
+                $value = $property.Value
+                # Recursively convert nested objects
+                if ($value -is [System.Management.Automation.PSObject] -or $value -is [System.Collections.IDictionary]) {
+                    $result[$property.Name] = ConvertTo-Hashtable -InputObject $value
+                }
+                elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    # Handle arrays - convert each element
+                    $result[$property.Name] = @($value | ForEach-Object { 
+                        if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                            ConvertTo-Hashtable -InputObject $_
+                        }
+                        else {
+                            $_
+                        }
+                    })
+                }
+                else {
+                    $result[$property.Name] = $value
+                }
             }
             return $result
         }
@@ -395,6 +447,110 @@ end {
         }
     }
 
+    function Get-HostResourcesConfiguration {
+        [CmdletBinding()]
+        param()
+
+        $configPath = "C:\ProgramData\Aether-V\hostresources.json"
+        if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+            # Try YAML as fallback
+            $configPath = "C:\ProgramData\Aether-V\hostresources.yaml"
+            if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+                throw "Host resources configuration file not found at C:\ProgramData\Aether-V\hostresources.json or .yaml"
+            }
+        }
+
+        $rawContent = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
+        
+        if ($configPath.EndsWith('.json')) {
+            $config = $rawContent | ConvertFrom-Json -ErrorAction Stop
+        }
+        elseif ($configPath.EndsWith('.yaml') -or $configPath.EndsWith('.yml')) {
+            if (-not (Get-Command -Name ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
+                Import-Module -Name powershell-yaml -ErrorAction Stop | Out-Null
+            }
+            $config = ConvertFrom-Yaml -Yaml $rawContent -ErrorAction Stop
+        }
+        else {
+            throw "Unsupported configuration file format: $configPath"
+        }
+
+        return ConvertTo-Hashtable -InputObject $config
+    }
+
+    function Resolve-NetworkConfiguration {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)]
+            [hashtable]$HostConfig,
+
+            [Parameter()]
+            [AllowNull()]
+            [string]$NetworkName
+        )
+
+        if ([string]::IsNullOrWhiteSpace($NetworkName)) {
+            return $null
+        }
+
+        $networks = $HostConfig['networks']
+        if (-not $networks -or $networks.Count -eq 0) {
+            throw "No networks defined in host configuration"
+        }
+
+        foreach ($network in $networks) {
+            # Network objects are already converted to hashtables by Get-HostResourcesConfiguration
+            if ($network['name'] -eq $NetworkName) {
+                return $network
+            }
+        }
+
+        $availableNetworks = ($networks | ForEach-Object { 
+            $_['name']
+        }) -join ', '
+        throw "Network '$NetworkName' not found in host configuration. Available networks: $availableNetworks"
+    }
+
+    function Resolve-StorageClassPath {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)]
+            [hashtable]$HostConfig,
+
+            [Parameter()]
+            [AllowNull()]
+            [string]$StorageClassName
+        )
+
+        if ([string]::IsNullOrWhiteSpace($StorageClassName)) {
+            # Return first storage class if no specific one requested
+            $storageClasses = $HostConfig['storage_classes']
+            if ($storageClasses -and $storageClasses.Count -gt 0) {
+                # Storage classes are already converted to hashtables
+                $firstClass = $storageClasses[0]
+                return $firstClass['path']
+            }
+            throw "No storage classes defined in host configuration"
+        }
+
+        $storageClasses = $HostConfig['storage_classes']
+        if (-not $storageClasses -or $storageClasses.Count -eq 0) {
+            throw "No storage classes defined in host configuration"
+        }
+
+        foreach ($storageClass in $storageClasses) {
+            # Storage class objects are already converted to hashtables
+            if ($storageClass['name'] -eq $StorageClassName) {
+                return $storageClass['path']
+            }
+        }
+
+        $availableClasses = ($storageClasses | ForEach-Object { 
+            $_['name']
+        }) -join ', '
+        throw "Storage class '$StorageClassName' not found in host configuration. Available classes: $availableClasses"
+    }
+
     function Invoke-ProvisioningClusterEnrollment {
         [CmdletBinding()]
         param(
@@ -478,7 +634,8 @@ end {
             'guest_domain_joinpw',
             'cnf_ansible_ssh_user',
             'cnf_ansible_ssh_key',
-            'vlan_id',
+            'network',
+            'storage_class',
             'vm_clustered'
         )
 
@@ -498,13 +655,33 @@ end {
         $values['gb_ram'] = [int]$values['gb_ram']
         $values['cpu_cores'] = [int]$values['cpu_cores']
 
-        if ($values.ContainsKey('vlan_id') -and (Test-ProvisioningValuePresent -Value $values['vlan_id'])) {
-            $values['vlan_id'] = [int]$values['vlan_id']
-        }
-
         $vmClustered = $false
         if ($values.ContainsKey('vm_clustered')) {
             $vmClustered = [bool]$values['vm_clustered']
+        }
+
+        # Load host resources configuration
+        $hostConfig = Get-HostResourcesConfiguration
+
+        # Resolve network configuration if network name provided
+        $networkConfig = $null
+        if ($values.ContainsKey('network') -and (Test-ProvisioningValuePresent -Value $values['network'])) {
+            $networkConfig = Resolve-NetworkConfiguration -HostConfig $hostConfig -NetworkName ([string]$values['network'])
+        }
+
+        # Resolve storage path
+        $storagePath = $null
+        if ($values.ContainsKey('storage_class') -and (Test-ProvisioningValuePresent -Value $values['storage_class'])) {
+            $storagePath = Resolve-StorageClassPath -HostConfig $hostConfig -StorageClassName ([string]$values['storage_class'])
+        }
+        else {
+            $storagePath = Resolve-StorageClassPath -HostConfig $hostConfig -StorageClassName $null
+        }
+
+        # Resolve VM path
+        $vmBasePath = $hostConfig['virtual_machines_path']
+        if ([string]::IsNullOrWhiteSpace($vmBasePath)) {
+            throw "No virtual_machines_path defined in host configuration"
         }
 
         $fieldReport = Get-ProvisioningFieldReport -KnownFields $knownFields -Values $values
@@ -519,28 +696,35 @@ end {
         $imageName = [string]$values['image_name']
         $gbRam = [int]$values['gb_ram']
         $cpuCores = [int]$values['cpu_cores']
-        $vlanId = $null
-        if ($values.ContainsKey('vlan_id') -and (Test-ProvisioningValuePresent -Value $values['vlan_id'])) {
-            $vlanId = [int]$values['vlan_id']
-        }
 
         $currentHost = $env:COMPUTERNAME
         Write-Host "Starting provisioning workflow for VM '$vmName' on host '$currentHost' (OS: $osFamily)."
 
-        $vmDataFolder = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName
-        Write-Host "Image copied to $vmDataFolder" -ForegroundColor Green
+        $copyResult = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName -StoragePath $storagePath -VMBasePath $vmBasePath
+        $vmDataFolder = $copyResult.VMConfigPath
+        $vhdxPath = $copyResult.VhdxPath
+        
+        Write-Host "Image copied to $vhdxPath" -ForegroundColor Green
+        Write-Host "VM config directory: $vmDataFolder" -ForegroundColor Green
 
-        Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -VMDataFolder $vmDataFolder
+        $isoPath = Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -StoragePath $storagePath -VMName $vmName
 
         $registerParams = @{
+            VMName       = $vmName
             OSFamily     = $osFamily
             GBRam        = $gbRam
             CPUcores     = $cpuCores
             VMDataFolder = $vmDataFolder
+            VhdxPath     = $vhdxPath
+            IsoPath      = $isoPath
         }
 
-        if ($null -ne $vlanId) {
-            $registerParams.VLANId = $vlanId
+        if ($null -ne $networkConfig) {
+            # $networkConfig is already a fully converted hashtable from Resolve-NetworkConfiguration
+            $registerParams.VirtualSwitch = $networkConfig['configuration']['virtual_switch']
+            if ($networkConfig['configuration'].ContainsKey('vlan_id') -and $null -ne $networkConfig['configuration']['vlan_id']) {
+                $registerParams.VLANId = [int]$networkConfig['configuration']['vlan_id']
+            }
         }
 
         Invoke-ProvisioningRegisterVm @registerParams | Out-Null
@@ -558,6 +742,8 @@ end {
         Invoke-ProvisioningPublishProvisioningData @publishParams
 
         Invoke-ProvisioningWaitForProvisioningCompletion -VMName $vmName | Out-Null
+
+        Invoke-ProvisioningCleanupIso -VMName $vmName -IsoPath $isoPath
 
         if ($vmClustered) {
             Invoke-ProvisioningClusterEnrollment -VmName $vmName

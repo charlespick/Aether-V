@@ -1402,8 +1402,9 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
                         <ul class="sub-sub-list">
                             ${hostVMs.map(vm => {
                                 const meta = getVmStateMeta(vm.state);
+                                const vmId = vm.id || '';
                                 return `
-                                    <li class="vm-item" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
+                                    <li class="vm-item" data-nav-type="vm" data-vm-id="${vmId}" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
                                         <span class="vm-status">${meta.icon}</span>
                                         <span class="vm-name">${vm.name}</span>
                                     </li>
@@ -1425,8 +1426,9 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
         return allVMs.map(vm => {
             const meta = getVmStateMeta(vm.state);
             const hostShort = vm.host.split('.')[0];
+            const vmId = vm.id || '';
             return `
-                <li class="vm-item direct" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
+                <li class="vm-item direct" data-nav-type="vm" data-vm-id="${vmId}" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
                     <span class="vm-status">${meta.icon}</span>
                     <span class="vm-name">${vm.name}</span>
                     <span class="vm-host">(${hostShort})</span>
@@ -1487,6 +1489,7 @@ function attachNavigationEventListeners() {
                     }
                     viewManager.switchView('host', { hostname: hostname });
                 } else if (navType === 'vm') {
+                    const vmId = navItem.dataset.vmId;
                     const vmName = navItem.dataset.vmName;
                     const vmHost = navItem.dataset.vmHost;
                     const hostGroup = navItem.closest('.nav-group[data-host]');
@@ -1497,7 +1500,7 @@ function attachNavigationEventListeners() {
                     if (parentClusterGroup && !parentClusterGroup.classList.contains('expanded')) {
                         parentClusterGroup.classList.add('expanded');
                     }
-                    viewManager.switchView('vm', { name: vmName, host: vmHost });
+                    viewManager.switchView('vm', { id: vmId, name: vmName, host: vmHost });
                 }
             }
         };

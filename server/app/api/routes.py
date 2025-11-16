@@ -398,24 +398,24 @@ async def list_host_vms(hostname: str, user: dict = Depends(require_permission(P
     return inventory_service.get_host_vms(hostname)
 
 
-@router.get("/api/v1/vms", response_model=List[VM], tags=["VMs"])
-async def list_vms(user: dict = Depends(require_permission(Permission.READER))):
-    """List all VMs across all hosts."""
-    return inventory_service.get_all_vms()
-
-
-@router.get("/api/v1/vms/{hostname}/{vm_name}", response_model=VM, tags=["VMs"])
-async def get_vm(hostname: str, vm_name: str, user: dict = Depends(require_permission(Permission.READER))):
-    """Get details of a specific VM."""
-    vm = inventory_service.get_vm(hostname, vm_name)
+@router.get("/api/v1/vms/by-id/{vm_id}", response_model=VM, tags=["VMs"])
+async def get_vm_by_id(vm_id: str, user: dict = Depends(require_permission(Permission.READER))):
+    """Get details of a specific VM by its ID."""
+    vm = inventory_service.get_vm_by_id(vm_id)
 
     if not vm:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"VM {vm_name} not found on host {hostname}"
+            detail=f"VM with ID {vm_id} not found"
         )
 
     return vm
+
+
+@router.get("/api/v1/vms", response_model=List[VM], tags=["VMs"])
+async def list_vms(user: dict = Depends(require_permission(Permission.READER))):
+    """List all VMs across all hosts."""
+    return inventory_service.get_all_vms()
 
 
 @router.post(

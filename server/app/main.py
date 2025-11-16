@@ -630,10 +630,10 @@ async def host_page(hostname: str, request: Request):
     return await root(request)
 
 
-@app.get("/virtual-machine/{vm_name}", response_class=HTMLResponse, tags=["UI"])
-async def vm_page(vm_name: str, request: Request):
+@app.get("/virtual-machine/{vm_id}", response_class=HTMLResponse, tags=["UI"])
+async def vm_page(vm_id: str, request: Request):
     """Serve the main UI for VM-specific routes."""
-    del vm_name  # Path parameter is used for routing only
+    del vm_id  # Path parameter is used for routing only
     return await root(request)
 
 

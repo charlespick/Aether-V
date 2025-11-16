@@ -3,7 +3,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.testclient import TestClient
 
 # Kerberos is disabled via environment variables in conftest.py
 
@@ -112,6 +113,40 @@ async def test_readiness_check_without_errors_reports_ready(monkeypatch):
 
     response = await routes.readiness_check()
     assert response.status == "ready"
+
+
+def test_vm_lookup_by_id_route_uses_global_search(monkeypatch):
+    app = FastAPI()
+    app.include_router(routes.router)
+
+    dummy_vm = routes.VM(
+        id="abc",
+        name="vm-one",
+        host="host01",
+        state=routes.VMState.RUNNING,
+    )
+
+    by_id_calls: list[str] = []
+
+    def fake_get_vm_by_id(vm_id: str):
+        by_id_calls.append(vm_id)
+        return dummy_vm
+
+    def fail_get_vm(hostname: str, vm_name: str):  # pragma: no cover - regression guard
+        raise AssertionError("Host-scoped VM lookup should not be used for by-id route")
+
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", fake_get_vm_by_id)
+    monkeypatch.setattr(routes.inventory_service, "get_vm", fail_get_vm)
+    monkeypatch.setattr(routes.settings, "auth_enabled", False, raising=False)
+    monkeypatch.setattr(routes.settings, "allow_dev_auth", True, raising=False)
+
+    client = TestClient(app)
+    response = client.get("/api/v1/vms/by-id/abc")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["id"] == "abc"
+    assert by_id_calls == ["abc"]
 
 
 @pytest.mark.anyio("asyncio")

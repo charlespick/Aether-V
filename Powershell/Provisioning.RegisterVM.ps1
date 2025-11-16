@@ -2,6 +2,9 @@ function Invoke-ProvisioningRegisterVm {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
+        [string]$VMName,
+
+        [Parameter(Mandatory = $true)]
         [string]$OSFamily,
 
         [Parameter(Mandatory = $true)]
@@ -13,19 +16,30 @@ function Invoke-ProvisioningRegisterVm {
         [Parameter(Mandatory = $true)]
         [string]$VMDataFolder,
 
+        [Parameter(Mandatory = $true)]
+        [string]$VhdxPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$IsoPath,
+
+        [Parameter()]
+        [string]$VirtualSwitch,
+
         [Nullable[int]]$VLANId
     )
 
-    $vmName = Split-Path -Path $VMDataFolder -Leaf
-    if (-not $vmName) {
-        throw "Unable to derive VM name from data folder '$VMDataFolder'."
+    # VMDataFolder is now the base path where all VMs are created
+    # Hyper-V will automatically create VM-specific subdirectories
+    
+    if (-not (Test-Path -LiteralPath $VMDataFolder -PathType Container)) {
+        throw "VM base path '$VMDataFolder' does not exist. Cannot create VM."
     }
 
     try {
-        $vm = New-VM -Name $vmName -MemoryStartupBytes ($GBRam * 1GB) -Generation 2 -BootDevice VHD -Path (Split-Path -Path $VMDataFolder -Parent)
+        $vm = New-VM -Name $VMName -MemoryStartupBytes ($GBRam * 1GB) -Generation 2 -BootDevice VHD -Path $VMDataFolder
     }
     catch {
-        throw "Failed to create VM '$vmName': $_"
+        throw "Failed to create VM '$VMName': $_"
     }
 
     $normalizedFamily = $OSFamily.ToLowerInvariant()
@@ -45,21 +59,30 @@ function Invoke-ProvisioningRegisterVm {
         throw "Failed to configure CPU cores for VM '$vmName': $_"
     }
 
-    $vhdxPath = Get-ChildItem -LiteralPath $VMDataFolder -Filter *.vhdx -File | Select-Object -First 1
-    if (-not $vhdxPath) {
-        throw "No VHDX found in $VMDataFolder for VM '$vmName'."
+    if (-not (Test-Path -LiteralPath $VhdxPath -PathType Leaf)) {
+        throw "VHDX not found at '$VhdxPath' for VM '$vmName'."
     }
 
     try {
-        Add-VMHardDiskDrive -VM $vm -Path $vhdxPath.FullName
+        Add-VMHardDiskDrive -VM $vm -Path $VhdxPath
     }
     catch {
-        throw "Failed to attach VHDX '$($vhdxPath.FullName)' to VM '$vmName': $_"
+        throw "Failed to attach VHDX '$VhdxPath' to VM '$vmName': $_"
     }
 
-    $networkSwitch = Get-VMSwitch | Select-Object -First 1
-    if (-not $networkSwitch) {
-        throw "No virtual switch is available to attach VM '$vmName'."
+    # Use specified virtual switch or fallback to first available
+    $networkSwitch = $null
+    if (-not [string]::IsNullOrWhiteSpace($VirtualSwitch)) {
+        $networkSwitch = Get-VMSwitch -Name $VirtualSwitch -ErrorAction SilentlyContinue
+        if (-not $networkSwitch) {
+            throw "Virtual switch '$VirtualSwitch' not found on this host."
+        }
+    }
+    else {
+        $networkSwitch = Get-VMSwitch | Select-Object -First 1
+        if (-not $networkSwitch) {
+            throw "No virtual switch is available to attach VM '$vmName'."
+        }
     }
 
     $adapter = Get-VMNetworkAdapter -VM $vm | Select-Object -First 1
@@ -83,14 +106,17 @@ function Invoke-ProvisioningRegisterVm {
         }
     }
 
-    $isoFile = Get-ChildItem -LiteralPath $VMDataFolder -Filter *.iso -File | Select-Object -First 1
-    if ($isoFile) {
-        try {
-            Add-VMDvdDrive -VM $vm -Path $isoFile.FullName
-        }
-        catch {
-            throw "Failed to mount provisioning ISO '$($isoFile.FullName)' to VM '$vmName': $_"
-        }
+    # Mount the provisioning ISO from the storage path
+    if (-not (Test-Path -LiteralPath $IsoPath -PathType Leaf)) {
+        throw "Provisioning ISO not found at '$IsoPath'."
+    }
+
+    try {
+        Add-VMDvdDrive -VM $vm -Path $IsoPath
+        Write-Host "Mounted provisioning ISO: $IsoPath" -ForegroundColor Green
+    }
+    catch {
+        throw "Failed to mount provisioning ISO '$IsoPath' to VM '$vmName': $_"
     }
 
     try {

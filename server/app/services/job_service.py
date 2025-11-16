@@ -24,6 +24,7 @@ from ..core.models import (
     NotificationLevel,
 )
 from .host_deployment_service import host_deployment_service
+from .host_resources_service import host_resources_service
 from .notification_service import notification_service
 from .remote_task_service import remote_task_service, RemoteTaskCategory
 from .websocket_service import websocket_manager
@@ -250,6 +251,9 @@ class JobService:
         if not self._started or self._queue is None:
             raise RuntimeError("Job service is not running")
 
+        # Don't validate at submission time - validation happens during execution
+        # This allows jobs to be created even if host config is temporarily unavailable
+
         job_id = str(uuid.uuid4())
         job = Job(
             job_id=job_id,
@@ -464,6 +468,10 @@ class JobService:
         target_host = (job.target_host or "").strip()
         if not target_host:
             raise RuntimeError("Provisioning job is missing a target host")
+
+        # Validate host resources configuration before executing
+        # This happens during job execution, not submission, so failures appear in the job output
+        await self._validate_job_against_host_config(definition, target_host)
 
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
@@ -890,6 +898,53 @@ class JobService:
             "failed_jobs": status_counts.get(JobStatus.FAILED, 0),
             "total_tracked_jobs": len(jobs_snapshot),
         }
+
+    async def _validate_job_against_host_config(
+        self,
+        payload: Dict[str, Any],
+        target_host: str,
+    ) -> None:
+        """Validate job payload against host resources configuration.
+        
+        Args:
+            payload: Job payload containing field definitions
+            target_host: Target host FQDN or hostname
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        # Load host configuration
+        host_config = await host_resources_service.get_host_configuration(target_host)
+        if not host_config:
+            # Host resources configuration is mandatory for provisioning
+            raise ValueError(
+                f"Host resources configuration not found on {target_host}. "
+                f"Ensure C:\\ProgramData\\Aether-V\\hostresources.json or hostresources.yaml exists and is valid."
+            )
+
+        fields = payload.get("fields", {})
+        if not isinstance(fields, dict):
+            return
+
+        # Validate network name if provided
+        network_name = fields.get("network")
+        if network_name:
+            if not host_resources_service.validate_network_name(network_name, host_config):
+                available = host_resources_service.get_available_networks(host_config)
+                raise ValueError(
+                    f"Network '{network_name}' not found on host {target_host}. "
+                    f"Available networks: {', '.join(available) if available else 'none'}"
+                )
+
+        # Validate storage class if provided
+        storage_class = fields.get("storage_class")
+        if storage_class:
+            if not host_resources_service.validate_storage_class(storage_class, host_config):
+                available = host_resources_service.get_available_storage_classes(host_config)
+                raise ValueError(
+                    f"Storage class '{storage_class}' not found on host {target_host}. "
+                    f"Available storage classes: {', '.join(available) if available else 'none'}"
+                )
 
 
 default_job_service = JobService()

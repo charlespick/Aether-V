@@ -116,6 +116,7 @@ try {
 
             $vmInfo = [ordered]@{
                 Name                 = $vm.Name
+                Id                   = $vm.Id
                 State                = $vm.State.ToString()
                 ProcessorCount       = $vm.ProcessorCount
                 MemoryGB             = $memoryGb
@@ -260,6 +261,86 @@ try {
             try { $pool.Close() } catch { }
             try { $pool.Dispose() } catch { }
         }
+    }
+
+    # Load host resources configuration and convert VLAN numbers to network names
+    try {
+        $configPath = "C:\ProgramData\Aether-V\hostresources.json"
+        if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+            $configPath = "C:\ProgramData\Aether-V\hostresources.yaml"
+        }
+
+        if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            $rawConfig = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
+            
+            $hostConfig = $null
+            if ($configPath.EndsWith('.json')) {
+                $hostConfig = $rawConfig | ConvertFrom-Json -ErrorAction Stop
+            }
+            elseif ($configPath.EndsWith('.yaml') -or $configPath.EndsWith('.yml')) {
+                if (-not (Get-Command -Name ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
+                    Import-Module -Name powershell-yaml -ErrorAction Stop | Out-Null
+                }
+                $hostConfig = ConvertFrom-Yaml -Yaml $rawConfig -ErrorAction Stop
+            }
+
+            if ($hostConfig -and $hostConfig.networks) {
+                # Build mapping for network name resolution
+                # Match by both switch + vlan and vlan-only for flexibility
+                $switchVlanToNetworkMap = @{}
+                $vlanToNetworkMap = @{}
+                
+                foreach ($network in $hostConfig.networks) {
+                    if ($network.model -eq 'vlan' -and $network.configuration) {
+                        $switchName = $network.configuration.virtual_switch
+                        $vlanId = $network.configuration.vlan_id
+                        
+                        if ($switchName -and $vlanId) {
+                            # Create compound key for switch + vlan
+                            $compoundKey = "${switchName}::${vlanId}"
+                            $switchVlanToNetworkMap[$compoundKey] = $network.name
+                        }
+                        
+                        if ($vlanId) {
+                            # Also track vlan-only mapping as fallback
+                            $vlanToNetworkMap[[int]$vlanId] = $network.name
+                        }
+                    }
+                }
+
+                # Update each VM's network adapters with network names
+                foreach ($vm in $result.VirtualMachines) {
+                    if ($vm.Networks) {
+                        foreach ($adapter in $vm.Networks) {
+                            $networkName = $null
+                            
+                            # Try to match by switch + vlan first (most specific)
+                            if ($adapter.VirtualSwitch -and $adapter.Vlan) {
+                                $compoundKey = "$($adapter.VirtualSwitch)::$($adapter.Vlan)"
+                                if ($switchVlanToNetworkMap.ContainsKey($compoundKey)) {
+                                    $networkName = $switchVlanToNetworkMap[$compoundKey]
+                                }
+                            }
+                            
+                            # Fall back to vlan-only match if no switch+vlan match
+                            if (-not $networkName -and $adapter.Vlan) {
+                                if ($vlanToNetworkMap.ContainsKey([int]$adapter.Vlan)) {
+                                    $networkName = $vlanToNetworkMap[[int]$adapter.Vlan]
+                                }
+                            }
+                            
+                            # Assign the resolved network name
+                            if ($networkName) {
+                                $adapter.NetworkName = $networkName
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        $result.Warnings += "Failed to load host resources configuration for network name resolution: $($_.Exception.Message)"
     }
 } catch {
     $result.Host.Error = $_.Exception.Message

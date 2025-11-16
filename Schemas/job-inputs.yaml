@@ -36,15 +36,18 @@ fields:
     validations:
       minimum: 1
       maximum: 64
-  - id: vlan_id
-    label: "VLAN ID"
-    description: "Optional VLAN identifier for the primary network adapter."
-    hint: "120"
-    type: integer
+  - id: network
+    label: "Network"
+    description: "Name of the network to connect the primary adapter to."
+    hint: "Production"
+    type: string
     required: false
-    validations:
-      minimum: 1
-      maximum: 4094
+  - id: storage_class
+    label: "Storage Class"
+    description: "Name of the storage class where VM disks will be stored."
+    hint: "fast-ssd"
+    type: string
+    required: false
   - id: guest_la_uid
     label: "Local administrator"
     description: "Username for the guest operating system's local administrator."

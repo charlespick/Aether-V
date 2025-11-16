@@ -82,6 +82,7 @@ class InventoryService:
         self.clusters: Dict[str, Cluster] = {}
         self.hosts: Dict[str, Host] = {}
         self.vms: Dict[str, VM] = {}  # Key is "hostname:vmname"
+        self.vms_by_id: Dict[str, VM] = {}  # Key is VM id (lowercase)
         self.last_refresh: Optional[datetime] = None
         self._refresh_task: Optional[asyncio.Task] = None
         self._initial_refresh_task: Optional[asyncio.Task] = None
@@ -436,7 +437,7 @@ class InventoryService:
         # Add VMs to inventory
         for vm in dummy_vms:
             key = f"{vm.host}:{vm.name}"
-            self.vms[key] = vm
+            self._set_vm(key, vm)
 
         self.last_refresh = now
         logger.info("Dummy data initialized successfully")
@@ -697,6 +698,7 @@ class InventoryService:
                 self.clusters.clear()
                 self.hosts.clear()
                 self.vms.clear()
+                self.vms_by_id.clear()
                 self._host_last_refresh.clear()
                 self._host_last_applied_sequence.clear()
                 self.last_refresh = datetime.utcnow()
@@ -815,7 +817,7 @@ class InventoryService:
         for vm in snapshot.vms:
             key = f"{snapshot.hostname}:{vm.name}"
             self._detach_placeholder_key(key)
-            self.vms[key] = vm
+            self._set_vm(key, vm)
 
         if snapshot.expected_vm_keys is not None:
             active_placeholder_keys = self._active_placeholder_keys()
@@ -827,7 +829,7 @@ class InventoryService:
                 and key not in active_placeholder_keys
             ]
             for key in keys_to_remove:
-                del self.vms[key]
+                self._remove_vm(key)
 
         if snapshot.host_last_refresh is not None:
             self._host_last_refresh[snapshot.hostname] = snapshot.host_last_refresh
@@ -994,7 +996,7 @@ class InventoryService:
                 ]
                 for key in host_vm_keys:
                     self._detach_placeholder_key(key)
-                    self.vms.pop(key, None)
+                    self._remove_vm(key)
 
                 for job_id, keys in list(self._job_vm_placeholders.items()):
                     filtered_keys = {key for key in keys if not key.startswith(prefix)}
@@ -1378,6 +1380,7 @@ class InventoryService:
                 memory_gb = memory_startup_gb
 
             cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
+            vm_id = self._coerce_str(vm_data.get("Id"))
             os_name = self._coerce_str(
                 vm_data.get("OperatingSystem") or vm_data.get("OsName")
             )
@@ -1395,6 +1398,7 @@ class InventoryService:
                 primary_ip = ip_addresses[0]
 
             vm = VM(
+                id=vm_id,
                 name=vm_data.get("Name", ""),
                 host=hostname,
                 state=state,
@@ -1469,6 +1473,21 @@ class InventoryService:
         for job_id in empty_jobs:
             self._job_vm_placeholders.pop(job_id, None)
 
+    def _set_vm(self, key: str, vm: VM) -> None:
+        existing = self.vms.get(key)
+        if existing and existing.id:
+            self.vms_by_id.pop(existing.id.lower(), None)
+
+        self.vms[key] = vm
+
+        if vm.id:
+            self.vms_by_id[vm.id.lower()] = vm
+
+    def _remove_vm(self, key: str) -> None:
+        vm = self.vms.pop(key, None)
+        if vm and vm.id:
+            self.vms_by_id.pop(vm.id.lower(), None)
+
     def _clear_host_vms(
         self, hostname: str, preserve_placeholders: bool = False
     ) -> None:
@@ -1481,7 +1500,7 @@ class InventoryService:
             if key.startswith(f"{hostname}:") and key not in active_placeholder_keys
         ]
         for key in keys_to_remove:
-            del self.vms[key]
+            self._remove_vm(key)
 
     def _coerce_float(self, value: Any, default: Optional[float] = 0.0) -> Optional[float]:
         try:
@@ -1613,6 +1632,7 @@ class InventoryService:
                     or adapter_data.get("virtual_switch")
                     or adapter_data.get("SwitchName"),
                     vlan=self._coerce_str(adapter_data.get("Vlan")),
+                    network_name=self._coerce_str(adapter_data.get("NetworkName")),
                     ip_addresses=ip_addresses,
                     mac_address=self._coerce_str(
                         adapter_data.get("MacAddress") or adapter_data.get("MACAddress")
@@ -1658,7 +1678,7 @@ class InventoryService:
         placeholder = VM(
             name=vm_name, host=host, state=VMState.CREATING, cpu_cores=0, memory_gb=0.0
         )
-        self.vms[key] = placeholder
+        self._set_vm(key, placeholder)
         self._job_vm_placeholders.setdefault(job_id, set()).add(key)
         self._job_vm_originals.pop(job_id, None)
         logger.info(
@@ -1671,7 +1691,7 @@ class InventoryService:
         for key in keys:
             vm = self.vms.get(key)
             if vm and vm.state in {VMState.CREATING, VMState.DELETING}:
-                del self.vms[key]
+                self._remove_vm(key)
         self._job_vm_originals.pop(job_id, None)
         logger.info("Cleared in-progress VM placeholders for job %s", job_id)
 
@@ -1688,7 +1708,16 @@ class InventoryService:
             existing.state = VMState.DELETING
         else:
             self._job_vm_originals.setdefault(job_id, {})[key] = None
-            self.vms[key] = VM(name=vm_name, host=host, state=VMState.DELETING, cpu_cores=0, memory_gb=0.0)
+            self._set_vm(
+                key,
+                VM(
+                    name=vm_name,
+                    host=host,
+                    state=VMState.DELETING,
+                    cpu_cores=0,
+                    memory_gb=0.0,
+                ),
+            )
 
         self._job_vm_placeholders.setdefault(job_id, set()).add(key)
         logger.info(
@@ -1710,7 +1739,7 @@ class InventoryService:
 
         if success:
             if key in self.vms:
-                self.vms.pop(key, None)
+                self._remove_vm(key)
             logger.info(
                 "Removed VM %s on host %s from inventory after successful deletion job %s",
                 vm_name,
@@ -1719,7 +1748,7 @@ class InventoryService:
             )
         else:
             if original_vm is not None:
-                self.vms[key] = original_vm
+                self._set_vm(key, original_vm)
                 logger.info(
                     "Restored VM %s on host %s to state %s after failed deletion job %s",
                     vm_name,
@@ -1728,7 +1757,7 @@ class InventoryService:
                     job_id,
                 )
             else:
-                self.vms.pop(key, None)
+                self._remove_vm(key)
                 logger.info(
                     "Removed transient delete placeholder for VM %s on host %s after failed job %s",
                     vm_name,
@@ -1741,7 +1770,7 @@ class InventoryService:
                 continue
             vm = self.vms.get(placeholder_key)
             if vm and vm.state in {VMState.CREATING, VMState.DELETING}:
-                del self.vms[placeholder_key]
+                self._remove_vm(placeholder_key)
 
     def get_all_clusters(self) -> List[Cluster]:
         """Get all clusters."""
@@ -1771,6 +1800,22 @@ class InventoryService:
         """Get a specific VM."""
         key = f"{hostname}:{vm_name}"
         return self.vms.get(key)
+
+    def get_vm_by_id(self, vm_id: str) -> Optional[VM]:
+        """Get a specific VM by its ID."""
+        if not vm_id:
+            return None
+
+        vm = self.vms_by_id.get(vm_id.lower())
+        if vm:
+            return vm
+
+        for candidate in self.vms.values():
+            if candidate.id and candidate.id.lower() == vm_id.lower():
+                self.vms_by_id[vm_id.lower()] = candidate
+                return candidate
+
+        return None
 
     def has_completed_initial_refresh(self) -> bool:
         return self._initial_refresh_event.is_set()
