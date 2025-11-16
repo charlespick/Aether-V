@@ -26,7 +26,7 @@ function Get-VMOperatingSystem {
             $session = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
             $sessionCreatedLocally = $true
         } catch {
-            Write-Warning "Failed to establish delegated CIM session to $ComputerName: $($_.Exception.Message)"
+            Write-Warning "Failed to establish delegated CIM session to ${ComputerName}: $($_.Exception.Message)"
         }
     }
 
@@ -103,7 +103,7 @@ try {
         $delegatedSessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
         $delegatedCimSession = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $delegatedSessionOptions -ErrorAction Stop
     } catch {
-        Write-Warning "Delegated CIM session could not be created for $ComputerName: $($_.Exception.Message)"
+        Write-Warning "Delegated CIM session could not be created for ${ComputerName}: $($_.Exception.Message)"
     }
 
     foreach ($vm in $vmList) {
