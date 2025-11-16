@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string]$ComputerName = $env:COMPUTERNAME
+    [string]$ComputerName = $env:COMPUTERNAME,
+
+    [Parameter(Mandatory = $false)]
+    [int]$MaxConcurrentJobs = [Math]::Max([Environment]::ProcessorCount, 4)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,23 +14,16 @@ function Get-VMOperatingSystem {
         [string]$ComputerName,
 
         [Parameter(Mandatory = $true)]
-        [string]$VMName,
-
-        [Parameter(Mandatory = $false)]
-        [Microsoft.Management.Infrastructure.CimSession]$CimSession
+        [string]$VMName
     )
 
-    $session = $CimSession
-    $sessionCreatedLocally = $false
+    $session = $null
 
-    if (-not $session) {
-        try {
-            $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
-            $session = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
-            $sessionCreatedLocally = $true
-        } catch {
-            Write-Warning "Failed to establish delegated CIM session to ${ComputerName}: $($_.Exception.Message)"
-        }
+    try {
+        $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
+        $session = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to establish delegated CIM session to ${ComputerName}: $($_.Exception.Message)"
     }
 
     try {
@@ -46,7 +42,7 @@ function Get-VMOperatingSystem {
         return $null
     }
     finally {
-        if ($sessionCreatedLocally -and $session) {
+        if ($session) {
             try {
                 Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue
             } catch {
@@ -98,15 +94,73 @@ try {
     $vmDetails = @()
     $vmList = Get-VM
 
-    $delegatedCimSession = $null
-    try {
-        $delegatedSessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
-        $delegatedCimSession = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $delegatedSessionOptions -ErrorAction Stop
-    } catch {
-        Write-Warning "Delegated CIM session could not be created for ${ComputerName}: $($_.Exception.Message)"
-    }
+    $MaxConcurrentJobs = [Math]::Max($MaxConcurrentJobs, 1)
+    $vmJobs = @()
 
-    foreach ($vm in $vmList) {
+    $jobScript = {
+        param(
+            [string]$VmName,
+            [string]$TargetComputer
+        )
+
+        $ErrorActionPreference = 'Stop'
+        $vmWarnings = @()
+
+        function Get-VMOperatingSystem {
+            param (
+                [Parameter(Mandatory = $true)]
+                [string]$ComputerName,
+
+                [Parameter(Mandatory = $true)]
+                [string]$VMName
+            )
+
+            $session = $null
+
+            try {
+                $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
+                $session = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
+            } catch {
+                Write-Warning "Failed to establish delegated CIM session to ${ComputerName}: $($_.Exception.Message)"
+            }
+
+            try {
+                $vm = if ($session) {
+                    Get-CimInstance -CimSession $session -Namespace root\\virtualization\\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
+                } else {
+                    Get-CimInstance -Namespace root\\virtualization\\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$VMName'" -ErrorAction Stop
+                }
+
+                $info = Get-CimAssociatedInstance -InputObject $vm
+                $osName = $info | Where-Object GuestOperatingSystem | Select-Object -First 1 -ExpandProperty GuestOperatingSystem
+                return $osName
+            }
+            catch {
+                Write-Warning "Could not retrieve OS information for $VMName on $ComputerName. Error: $_"
+                return $null
+            }
+            finally {
+                if ($session) {
+                    try {
+                        Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue
+                    } catch {
+                        # Ignore cleanup failures
+                    }
+                }
+            }
+        }
+
+        try {
+            $vm = Get-VM -Name $VmName -ErrorAction Stop
+        } catch {
+            return [PSCustomObject]@{
+                VmName   = $VmName
+                VmInfo   = $null
+                Warnings = $vmWarnings
+                Error    = "VM lookup failed: $($_.Exception.Message)"
+            }
+        }
+
         $creationTime = $null
         if ($vm.CreationTime) {
             $creationTime = $vm.CreationTime.ToUniversalTime().ToString('o')
@@ -127,7 +181,7 @@ try {
                 $dynamicMemoryEnabled = [bool]$memoryInfo.DynamicMemoryEnabled
             }
         } catch {
-            $result.Warnings += "Memory inventory failed for VM $($vm.Name): $($_.Exception.Message)"
+            $vmWarnings += "Memory inventory failed for VM $($vm.Name): $($_.Exception.Message)"
         }
 
         if ($vm.MemoryAssigned) {
@@ -138,22 +192,22 @@ try {
         }
 
         $vmInfo = [ordered]@{
-            Name            = $vm.Name
-            State           = $vm.State.ToString()
-            ProcessorCount  = $vm.ProcessorCount
-            MemoryGB        = $memoryGb
-            StartupMemoryGB = $memoryStartupGb
-            MinimumMemoryGB = $memoryMinimumGb
-            MaximumMemoryGB = $memoryMaximumGb
+            Name                 = $vm.Name
+            State                = $vm.State.ToString()
+            ProcessorCount       = $vm.ProcessorCount
+            MemoryGB             = $memoryGb
+            StartupMemoryGB      = $memoryStartupGb
+            MinimumMemoryGB      = $memoryMinimumGb
+            MaximumMemoryGB      = $memoryMaximumGb
             DynamicMemoryEnabled = $dynamicMemoryEnabled
-            CreationTime    = $creationTime
-            Generation      = $vm.Generation
-            Version         = $vm.Version
-            Notes           = $vm.Notes
+            CreationTime         = $creationTime
+            Generation           = $vm.Generation
+            Version              = $vm.Version
+            Notes                = $vm.Notes
         }
 
         $osName = $null
-        $osName = Get-VMOperatingSystem -ComputerName $ComputerName -VMName $vm.Name -CimSession $delegatedCimSession
+        $osName = Get-VMOperatingSystem -ComputerName $TargetComputer -VMName $vm.Name
 
         if (-not $osName) {
             try {
@@ -204,7 +258,7 @@ try {
                 }
             }
         } catch {
-            $result.Warnings += "Network adapter query failed for VM $($vm.Name): $($_.Exception.Message)"
+            $vmWarnings += "Network adapter query failed for VM $($vm.Name): $($_.Exception.Message)"
         }
 
         if ($networks.Count -gt 0) {
@@ -235,21 +289,60 @@ try {
                 $disks += $diskInfo
             }
         } catch {
-            $result.Warnings += "Disk query failed for VM $($vm.Name): $($_.Exception.Message)"
+            $vmWarnings += "Disk query failed for VM $($vm.Name): $($_.Exception.Message)"
         }
 
         if ($disks.Count -gt 0) {
             $vmInfo.Disks = $disks
         }
 
-        $vmDetails += $vmInfo
+        return [PSCustomObject]@{
+            VmName   = $vm.Name
+            VmInfo   = $vmInfo
+            Warnings = $vmWarnings
+            Error    = $null
+        }
     }
 
-    if ($delegatedCimSession) {
+    foreach ($vm in $vmList) {
+        $vmJobs += Start-Job -Name "Inventory_$($vm.Name)" -ScriptBlock $jobScript -ArgumentList $vm.Name, $ComputerName
+
+        while (($vmJobs | Where-Object { $_.State -eq 'Running' -or $_.State -eq 'NotStarted' }).Count -ge $MaxConcurrentJobs) {
+            Wait-Job -Job $vmJobs -Any -Timeout 5 | Out-Null
+        }
+    }
+
+    Wait-Job -Job $vmJobs | Out-Null
+
+    foreach ($job in $vmJobs) {
         try {
-            Remove-CimSession -CimSession $delegatedCimSession -ErrorAction SilentlyContinue
+            $jobResult = Receive-Job -Job $job -ErrorAction Stop
         } catch {
-            # Ignore cleanup failures
+            $result.Warnings += "VM inventory job $($job.Name) failed: $($_.Exception.Message)"
+            continue
+        } finally {
+            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not $jobResult) {
+            $result.Warnings += "VM inventory job $($job.Name) returned no data."
+            continue
+        }
+
+        if ($jobResult -is [System.Array]) {
+            $jobResult = $jobResult | Select-Object -Last 1
+        }
+
+        if ($jobResult.Error) {
+            $result.Warnings += $jobResult.Error
+        }
+
+        if ($jobResult.Warnings) {
+            $result.Warnings += $jobResult.Warnings
+        }
+
+        if ($jobResult.VmInfo) {
+            $vmDetails += $jobResult.VmInfo
         }
     }
 
