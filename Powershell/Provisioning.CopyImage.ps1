@@ -14,12 +14,6 @@ function Invoke-ProvisioningCopyImage {
         [string]$VMBasePath
     )
 
-    Write-Host "[VERBOSE] CopyImage: Starting image copy process"
-    Write-Host "[VERBOSE] CopyImage: VM Name: $VMName"
-    Write-Host "[VERBOSE] CopyImage: Image Name: $ImageName"
-    Write-Host "[VERBOSE] CopyImage: Storage Path: $StoragePath"
-    Write-Host "[VERBOSE] CopyImage: VM Base Path: $VMBasePath"
-
     $imageFilename = "$ImageName.vhdx"
 
     # Find the golden image in DiskImages directory
@@ -37,59 +31,33 @@ function Invoke-ProvisioningCopyImage {
     }
 
     $imagePath = Join-Path -Path $staticImagesPath -ChildPath $imageFilename
-    Write-Host "[VERBOSE] CopyImage: Looking for golden image at: $imagePath"
     
     if (-not (Test-Path -LiteralPath $imagePath -PathType Leaf)) {
-        Write-Host "[ERROR] CopyImage: Golden image not found at: $imagePath"
         throw "Golden image '$ImageName' was not found at $imagePath."
     }
-    
-    Write-Host "[VERBOSE] CopyImage: Golden image found"
 
     # Generate unique ID for the VHDX to avoid collisions
     $uniqueId = [System.Guid]::NewGuid().ToString("N").Substring(0, 8)
     $uniqueVhdxName = "${ImageName}-${uniqueId}.vhdx"
-    Write-Host "[VERBOSE] CopyImage: Generated unique VHDX name: $uniqueVhdxName"
 
     # VMs will be placed directly in the VM base path
     # Hyper-V will automatically create its own subdirectories when needed
-    Write-Host "[VERBOSE] CopyImage: VMs will be created directly in: $VMBasePath"
-    
-    # Check if the VM base path exists and create it if needed
-    Write-Host "[VERBOSE] CopyImage: Checking if VM base path exists: $VMBasePath"
-    Write-Host "[VERBOSE] CopyImage: VM base path type: $($VMBasePath.GetType().FullName)"
     
     # Use -LiteralPath to handle paths with spaces correctly
     $basePathExists = Test-Path -LiteralPath $VMBasePath -PathType Container
-    Write-Host "[VERBOSE] CopyImage: VM base path exists check result: $basePathExists"
     
     if (-not $basePathExists) {
-        Write-Host "[VERBOSE] CopyImage: VM base path does not exist, creating it..."
-        Write-Host "[VERBOSE] CopyImage: Using [System.IO.Directory]::CreateDirectory() to avoid path parsing issues"
         try {
             # Use .NET method instead of New-Item to avoid PowerShell path parsing issues with spaces
             $createdPath = [System.IO.Directory]::CreateDirectory($VMBasePath)
-            Write-Host "[VERBOSE] CopyImage: VM base path created successfully: $($createdPath.FullName)"
         }
         catch {
-            Write-Host "[ERROR] CopyImage: Failed to create VM base path: $VMBasePath"
-            Write-Host "[ERROR] CopyImage: Error: $_"
-            Write-Host "[ERROR] CopyImage: Exception: $($_.Exception.Message)"
-            Write-Host "[ERROR] CopyImage: Exception type: $($_.Exception.GetType().FullName)"
-            Write-Host "[ERROR] CopyImage: TargetObject: $($_.TargetObject)"
-            if ($_.Exception.InnerException) {
-                Write-Host "[ERROR] CopyImage: Inner exception: $($_.Exception.InnerException.Message)"
-            }
             throw "Failed to create VM base path '$VMBasePath': $_"
         }
-    }
-    else {
-        Write-Host "[VERBOSE] CopyImage: VM base path exists"
     }
 
     # Copy VHDX to storage path with unique name
     $destinationVhdxPath = Join-Path -Path $StoragePath -ChildPath $uniqueVhdxName
-    Write-Host "[VERBOSE] CopyImage: Destination VHDX path: $destinationVhdxPath"
 
     $imageSize = (Get-Item -LiteralPath $imagePath).Length
     
