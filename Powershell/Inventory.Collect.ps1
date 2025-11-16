@@ -70,14 +70,6 @@ $result = @{
 }
 
 try {
-    $delegatedCimSessions = @{}
-    try {
-        $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
-        $delegatedSession = New-CimSession -ComputerName $ComputerName -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
-        $delegatedCimSessions[$ComputerName] = $delegatedSession
-    } catch {
-        $result.Host.Warnings += "Delegated CIM session could not be created for ${ComputerName}: $($_.Exception.Message)"
-    }
 
     try {
         $clusterNode = Get-ClusterNode -Name $ComputerName -ErrorAction Stop
@@ -109,10 +101,9 @@ try {
     $vmDetails = @()
     $vmList = Get-VM
 
+    # Create a shared runspace pool (CIM sessions will be created inside each runspace)
     $maxThreads = [math]::Min([math]::Max([Environment]::ProcessorCount, 2), 16)
     $initial = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
-    $sessionEntry = New-Object System.Management.Automation.Runspaces.SessionStateVariableEntry "CimSessionMap", $delegatedCimSessions, "Delegated CIM session map"
-    $initial.Variables.Add($sessionEntry)
 
     $pool = [RunspaceFactory]::CreateRunspacePool(1, $maxThreads, $initial, $Host)
     $pool.ApartmentState = [System.Threading.ApartmentState]::MTA
@@ -189,39 +180,30 @@ try {
                 Notes                = $vm.Notes
             }
 
-            $delegatedCimSession = if ($CimSessionMap.ContainsKey($Computer)) { $CimSessionMap[$Computer] } else { $null }
-
+            # Operating system lookup – create the CIM session inside this runspace to preserve delegation
             $osName = $null
-            if ($delegatedCimSession) {
-                try {
-                    $vmCim = Get-CimInstance -CimSession $delegatedCimSession -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$($vm.Name)'" -ErrorAction Stop
-                    $info = Get-CimAssociatedInstance -InputObject $vmCim
-                    $osName = $info | Where-Object GuestOperatingSystem | Select-Object -First 1 -ExpandProperty GuestOperatingSystem
-                } catch {
-                    $vmWarnings += "Delegated OS lookup failed for VM $($vm.Name): $($_.Exception.Message)"
-                }
-            } else {
-                $vmWarnings += "Delegated CIM session unavailable for ${Computer}; OS lookup skipped."
-            }
+            $cim = $null
+            try {
+                $sessionOptions = New-CimSessionOption -Protocol WSMan -Culture 'en-US' -UICulture 'en-US'
+                $cim = New-CimSession -ComputerName $Computer -Authentication Kerberos -SessionOption $sessionOptions -ErrorAction Stop
 
-            if (-not $osName) {
-                try {
-                    $guestInfo = Get-VMGuest -VM $vm -ErrorAction Stop
-                    if ($guestInfo -and $guestInfo.OSName) {
-                        $osName = $guestInfo.OSName
-                    }
-                } catch {
-                    # Guest information may be unavailable; ignore errors
+                $vmCim = Get-CimInstance -CimSession $cim -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$($vm.Name)'" -ErrorAction Stop
+                $info = Get-CimAssociatedInstance -InputObject $vmCim
+                $osName = $info | Where-Object GuestOperatingSystem | Select-Object -First 1 -ExpandProperty GuestOperatingSystem
+                
+                if (-not $osName) {
+                    throw "OS lookup returned null/empty for VM $($vm.Name). GuestOperatingSystem property not found via CIM."
+                }
+            } catch {
+                # Hard fail - do not fall back, do not omit, crash with clear error
+                throw "CRITICAL: Failed to retrieve operating system for VM $($vm.Name) on host ${Computer}. Error: $($_.Exception.Message)"
+            } finally {
+                if ($cim) {
+                    try { Remove-CimSession -CimSession $cim -ErrorAction SilentlyContinue } catch {}
                 }
             }
 
-            if (-not $osName -and $vm.OperatingSystem) {
-                $osName = $vm.OperatingSystem.ToString()
-            }
-
-            if ($osName) {
-                $vmInfo.OperatingSystem = $osName
-            }
+            $vmInfo.OperatingSystem = $osName
 
             $networks = @()
             try {
@@ -328,15 +310,10 @@ try {
         $result.Warnings += $vmWarnings
     }
     finally {
+        # Clean up the shared runspace pool
         if ($pool) {
             try { $pool.Close() } catch { }
             try { $pool.Dispose() } catch { }
-        }
-    }
-
-    if ($delegatedCimSessions.Values) {
-        foreach ($session in $delegatedCimSessions.Values) {
-            try { Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue } catch { }
         }
     }
 } catch {
