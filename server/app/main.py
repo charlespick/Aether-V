@@ -31,7 +31,7 @@ from .services.job_service import job_service
 from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
 from .services.websocket_service import websocket_manager
-from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
+from .core.job_schema import load_job_schema, load_schema_by_id, SchemaValidationError
 from .services.kerberos_manager import (
     initialize_kerberos,
     cleanup_kerberos,
@@ -592,7 +592,7 @@ async def root(request: Request):
                         "websocket_refresh_time": settings.websocket_refresh_time * 1000,
                         # Convert to milliseconds
                         "websocket_ping_interval": settings.websocket_ping_interval * 1000,
-                        "job_schema": get_job_schema(),
+                        "job_schema": load_schema_by_id("managed-deployment"),
                         "agent_deployment": host_deployment_service.get_startup_summary(),
                         "build_metadata": build_metadata,
                         "build_metadata_payload": _build_metadata_payload(),

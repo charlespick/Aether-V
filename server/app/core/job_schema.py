@@ -19,11 +19,6 @@ _SCHEMAS_DIR_CANDIDATES = [
     Path(__file__).resolve().parents[3] / "Schemas",
 ]
 
-_DEFAULT_SCHEMA_PATH_CANDIDATES = [
-    Path(__file__).resolve().parents[2] / "Schemas" / "job-inputs.yaml",
-    Path(__file__).resolve().parents[3] / "Schemas" / "job-inputs.yaml",
-]
-
 _HOSTNAME_PATTERN = re.compile(
     r"^(?=.{1,255}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
 )
@@ -78,15 +73,10 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
     """Load and validate the job input schema from disk."""
 
     global _SCHEMA_CACHE
-    if path:
-        schema_path = Path(path)
-    else:
-        for candidate in _DEFAULT_SCHEMA_PATH_CANDIDATES:
-            if candidate.exists():
-                schema_path = candidate
-                break
-        else:
-            schema_path = _DEFAULT_SCHEMA_PATH_CANDIDATES[0]
+    if not path:
+        raise SchemaValidationError(["Schema path is required. Use load_schema_by_id() instead."])
+    
+    schema_path = Path(path)
 
     if not schema_path.exists():
         raise SchemaValidationError([f"Schema file not found: {schema_path}"])

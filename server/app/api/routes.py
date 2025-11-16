@@ -50,7 +50,6 @@ from ..core.config import settings, get_config_validation_result
 from ..core.build_info import build_metadata
 from ..core.job_schema import (
     SchemaValidationError,
-    get_job_schema,
     load_schema_by_id,
     validate_job_submission,
 )
@@ -482,12 +481,6 @@ async def reset_vm_action(
     """Reset (power cycle) a running virtual machine."""
 
     return await _handle_vm_action("reset", hostname, vm_name)
-
-
-@router.get("/api/v1/schema/job-inputs", tags=["Schema"])
-async def get_job_input_schema(user: dict = Depends(require_permission(Permission.READER))):
-    """Return the active job input schema."""
-    return get_job_schema()
 
 
 @router.post("/api/v1/vms/delete", response_model=Job, tags=["VMs"])
