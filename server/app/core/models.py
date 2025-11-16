@@ -88,6 +88,10 @@ class VM(BaseModel):
     state: VMState
     cpu_cores: int = 0
     memory_gb: float = 0.0
+    memory_startup_gb: Optional[float] = None
+    memory_min_gb: Optional[float] = None
+    memory_max_gb: Optional[float] = None
+    dynamic_memory_enabled: Optional[bool] = None
     ip_address: Optional[str] = None
     ip_addresses: List[str] = Field(default_factory=list)
     notes: Optional[str] = None

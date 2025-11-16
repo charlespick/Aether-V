@@ -1361,6 +1361,22 @@ class InventoryService:
                 state = VMState.UNKNOWN
 
             memory_gb = self._coerce_float(vm_data.get("MemoryGB", 0.0), default=0.0)
+            memory_startup_gb = self._coerce_float(
+                vm_data.get("StartupMemoryGB"), default=None
+            )
+            memory_min_gb = self._coerce_float(
+                vm_data.get("MinimumMemoryGB"), default=None
+            )
+            memory_max_gb = self._coerce_float(
+                vm_data.get("MaximumMemoryGB"), default=None
+            )
+            dynamic_memory_enabled = self._coerce_bool(
+                vm_data.get("DynamicMemoryEnabled")
+            )
+
+            if (memory_gb is None or memory_gb == 0) and memory_startup_gb:
+                memory_gb = memory_startup_gb
+
             cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
             os_name = self._coerce_str(
                 vm_data.get("OperatingSystem") or vm_data.get("OsName")
@@ -1384,6 +1400,10 @@ class InventoryService:
                 state=state,
                 cpu_cores=cpu_cores,
                 memory_gb=memory_gb,
+                memory_startup_gb=memory_startup_gb,
+                memory_min_gb=memory_min_gb,
+                memory_max_gb=memory_max_gb,
+                dynamic_memory_enabled=dynamic_memory_enabled,
                 ip_address=primary_ip,
                 ip_addresses=ip_addresses,
                 notes=notes,
@@ -1493,6 +1513,26 @@ class InventoryService:
             return None
 
         return text or None
+
+    def _coerce_bool(self, value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+
+        if value is None:
+            return None
+
+        try:
+            text = str(value).strip().lower()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Unable to coerce %r to bool", value)
+            return None
+
+        if text in {"true", "1", "yes", "y"}:
+            return True
+        if text in {"false", "0", "no", "n"}:
+            return False
+
+        return None
 
     def _infer_os_family(self, os_name: Any) -> Optional[OSFamily]:
         if not os_name or not isinstance(os_name, str):

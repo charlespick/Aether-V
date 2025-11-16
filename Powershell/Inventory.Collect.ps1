@@ -5,6 +5,27 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Get-VMOperatingSystem {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$ComputerName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$VMName
+    )
+
+    try {
+        $vm = Get-CimInstance -ComputerName $ComputerName -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='$VMName'"
+        $info = Get-CimAssociatedInstance -InputObject $vm
+        $osName = $info | Where-Object GuestOperatingSystem | Select-Object -ExpandProperty GuestOperatingSystem
+        return $osName
+    }
+    catch {
+        Write-Warning "Could not retrieve OS information for $VMName on $ComputerName. Error: $_"
+        return $null
+    }
+}
+
 $result = @{
     Host = @{
         ComputerName = $ComputerName
@@ -54,8 +75,28 @@ try {
         }
 
         $memoryGb = 0
+        $memoryStartupGb = $null
+        $memoryMinimumGb = $null
+        $memoryMaximumGb = $null
+        $dynamicMemoryEnabled = $null
+
+        try {
+            $memoryInfo = Get-VMMemory -VM $vm -ErrorAction Stop
+            if ($memoryInfo) {
+                if ($memoryInfo.Startup) { $memoryStartupGb = [math]::Round(($memoryInfo.Startup / 1GB), 2) }
+                if ($memoryInfo.Minimum) { $memoryMinimumGb = [math]::Round(($memoryInfo.Minimum / 1GB), 2) }
+                if ($memoryInfo.Maximum) { $memoryMaximumGb = [math]::Round(($memoryInfo.Maximum / 1GB), 2) }
+                $dynamicMemoryEnabled = [bool]$memoryInfo.DynamicMemoryEnabled
+            }
+        } catch {
+            $result.Warnings += "Memory inventory failed for VM $($vm.Name): $($_.Exception.Message)"
+        }
+
         if ($vm.MemoryAssigned) {
             $memoryGb = [math]::Round(($vm.MemoryAssigned / 1GB), 2)
+        }
+        elseif ($memoryStartupGb -ne $null) {
+            $memoryGb = $memoryStartupGb
         }
 
         $vmInfo = [ordered]@{
@@ -63,6 +104,10 @@ try {
             State           = $vm.State.ToString()
             ProcessorCount  = $vm.ProcessorCount
             MemoryGB        = $memoryGb
+            StartupMemoryGB = $memoryStartupGb
+            MinimumMemoryGB = $memoryMinimumGb
+            MaximumMemoryGB = $memoryMaximumGb
+            DynamicMemoryEnabled = $dynamicMemoryEnabled
             CreationTime    = $creationTime
             Generation      = $vm.Generation
             Version         = $vm.Version
@@ -70,13 +115,17 @@ try {
         }
 
         $osName = $null
-        try {
-            $guestInfo = Get-VMGuest -VM $vm -ErrorAction Stop
-            if ($guestInfo -and $guestInfo.OSName) {
-                $osName = $guestInfo.OSName
+        $osName = Get-VMOperatingSystem -ComputerName $ComputerName -VMName $vm.Name
+
+        if (-not $osName) {
+            try {
+                $guestInfo = Get-VMGuest -VM $vm -ErrorAction Stop
+                if ($guestInfo -and $guestInfo.OSName) {
+                    $osName = $guestInfo.OSName
+                }
+            } catch {
+                # Guest information may be unavailable; ignore errors
             }
-        } catch {
-            # Guest information may be unavailable; ignore errors
         }
 
         if (-not $osName -and $vm.OperatingSystem) {
