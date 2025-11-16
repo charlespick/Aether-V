@@ -657,8 +657,8 @@ class ClusterView extends BaseView {
                     <h2>Cluster Resources</h2>
                 </div>
                 <div class="resource-summary">
-                    <p>Total CPU Cores: ${this.calculateTotalCPU(clusterVMs)}</p>
-                    <p>Total Memory: ${this.calculateTotalMemory(clusterVMs)} GB</p>
+                    <p>Total CPU Cores: ${this.calculateTotalCPU(clusterHosts)}</p>
+                    <p>Total Memory: ${this.calculateTotalMemory(clusterHosts)} GB</p>
                 </div>
             </div>
         `;
@@ -740,12 +740,13 @@ class ClusterView extends BaseView {
         `;
     }
 
-    calculateTotalCPU(vms) {
-        return vms.reduce((sum, vm) => sum + (vm.cpu_cores || 0), 0);
+    calculateTotalCPU(hosts) {
+        return hosts.reduce((sum, host) => sum + (host.total_cpu_cores || 0), 0);
     }
 
-    calculateTotalMemory(vms) {
-        return vms.reduce((sum, vm) => sum + (vm.memory_gb || 0), 0).toFixed(2);
+    calculateTotalMemory(hosts) {
+        const total = hosts.reduce((sum, host) => sum + (host.total_memory_gb || 0), 0);
+        return total.toFixed(2);
     }
 
     async fetchInventory() {

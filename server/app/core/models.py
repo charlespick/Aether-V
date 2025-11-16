@@ -64,6 +64,8 @@ class Host(BaseModel):
     connected: bool = False
     last_seen: Optional[datetime] = None
     error: Optional[str] = None
+    total_cpu_cores: int = 0
+    total_memory_gb: float = 0.0
 
 
 class Notification(BaseModel):
@@ -86,8 +88,39 @@ class VM(BaseModel):
     state: VMState
     cpu_cores: int = 0
     memory_gb: float = 0.0
+    ip_address: Optional[str] = None
+    ip_addresses: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
     os_family: Optional[OSFamily] = None
+    os_name: Optional[str] = None
+    generation: Optional[int] = None
+    version: Optional[str] = None
     created_at: Optional[datetime] = None
+    disks: List["VMDisk"] = Field(default_factory=list)
+    networks: List["VMNetworkAdapter"] = Field(default_factory=list)
+
+
+class VMDisk(BaseModel):
+    """Virtual disk attached to a VM."""
+
+    name: Optional[str] = None
+    path: Optional[str] = None
+    location: Optional[str] = None
+    type: Optional[str] = None
+    size_gb: Optional[float] = None
+    file_size_gb: Optional[float] = None
+
+
+class VMNetworkAdapter(BaseModel):
+    """Network adapter attached to a VM."""
+
+    name: Optional[str] = None
+    adapter_name: Optional[str] = None
+    network: Optional[str] = None
+    virtual_switch: Optional[str] = None
+    vlan: Optional[str] = None
+    ip_addresses: List[str] = Field(default_factory=list)
+    mac_address: Optional[str] = None
 
 
 class VMDeleteRequest(BaseModel):

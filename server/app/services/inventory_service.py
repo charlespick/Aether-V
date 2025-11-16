@@ -19,7 +19,9 @@ from ..core.models import (
     NotificationLevel,
     OSFamily,
     VM,
+    VMNetworkAdapter,
     VMState,
+    VMDisk,
 )
 from .host_deployment_service import host_deployment_service, InventoryReadiness
 from .notification_service import notification_service
@@ -287,6 +289,8 @@ class InventoryService:
             connected=True,
             last_seen=now,
             error=None,
+            total_cpu_cores=32,
+            total_memory_gb=256.0,
         )
 
         self.hosts["hyperv02.lab.local"] = Host(
@@ -295,6 +299,8 @@ class InventoryService:
             connected=True,
             last_seen=now,
             error=None,
+            total_cpu_cores=24,
+            total_memory_gb=192.0,
         )
 
         # Development cluster host
@@ -304,6 +310,8 @@ class InventoryService:
             connected=True,
             last_seen=now,
             error=None,
+            total_cpu_cores=16,
+            total_memory_gb=128.0,
         )
 
         # Add a few disconnected hosts
@@ -313,6 +321,8 @@ class InventoryService:
             connected=False,
             last_seen=now - timedelta(hours=2),
             error="Connection timeout",
+            total_cpu_cores=16,
+            total_memory_gb=64.0,
         )
 
         self.hosts["hyperv-backup01.lab.local"] = Host(
@@ -321,6 +331,8 @@ class InventoryService:
             connected=False,
             last_seen=now - timedelta(minutes=30),
             error="WinRM authentication failed",
+            total_cpu_cores=12,
+            total_memory_gb=96.0,
         )
 
         # Create dummy VMs
@@ -333,6 +345,9 @@ class InventoryService:
                 cpu_cores=4,
                 memory_gb=8.0,
                 os_family=OSFamily.LINUX,
+                os_name="Ubuntu Server 22.04",
+                ip_addresses=["10.0.0.21"],
+                notes="Primary web node",
                 created_at=now - timedelta(days=5),
             ),
             VM(
@@ -342,6 +357,9 @@ class InventoryService:
                 cpu_cores=8,
                 memory_gb=16.0,
                 os_family=OSFamily.LINUX,
+                os_name="Ubuntu Server 22.04",
+                ip_addresses=["10.0.0.22"],
+                notes="Database cluster member",
                 created_at=now - timedelta(days=10),
             ),
             VM(
@@ -351,6 +369,9 @@ class InventoryService:
                 cpu_cores=2,
                 memory_gb=4.0,
                 os_family=OSFamily.WINDOWS,
+                os_name="Windows Server 2022",
+                ip_addresses=["10.0.0.23"],
+                notes="Legacy application host",
                 created_at=now - timedelta(days=2),
             ),
             # VMs on hyperv02
@@ -361,6 +382,8 @@ class InventoryService:
                 cpu_cores=2,
                 memory_gb=4.0,
                 os_family=OSFamily.LINUX,
+                os_name="Alpine Linux",
+                ip_addresses=["10.0.1.10"],
                 created_at=now - timedelta(days=7),
             ),
             VM(
@@ -370,6 +393,8 @@ class InventoryService:
                 cpu_cores=4,
                 memory_gb=8.0,
                 os_family=OSFamily.LINUX,
+                os_name="Debian 12",
+                ip_addresses=["10.0.1.11"],
                 created_at=now - timedelta(days=3),
             ),
             VM(
@@ -379,6 +404,8 @@ class InventoryService:
                 cpu_cores=1,
                 memory_gb=2.0,
                 os_family=OSFamily.WINDOWS,
+                os_name="Windows Server 2019",
+                ip_addresses=["10.0.1.12"],
                 created_at=now - timedelta(days=15),
             ),
             # VMs on dev host
@@ -389,6 +416,8 @@ class InventoryService:
                 cpu_cores=2,
                 memory_gb=4.0,
                 os_family=OSFamily.LINUX,
+                os_name="Ubuntu Desktop 22.04",
+                ip_addresses=["10.0.2.50"],
                 created_at=now - timedelta(days=1),
             ),
             VM(
@@ -398,6 +427,8 @@ class InventoryService:
                 cpu_cores=4,
                 memory_gb=8.0,
                 os_family=OSFamily.WINDOWS,
+                os_name="Windows 11",
+                notes="Suspended while not in use",
                 created_at=now - timedelta(hours=8),
             ),
         ]
@@ -868,7 +899,7 @@ class InventoryService:
             attempt_started = True
             start_time = time.perf_counter()
             payload = await self._collect_with_recovery(hostname)
-            cluster_name, vms = self._parse_inventory_snapshot(hostname, payload)
+            host_data, vms = self._parse_inventory_snapshot(hostname, payload)
 
             now = datetime.utcnow()
             expected_keys = {f"{hostname}:{vm.name}" for vm in vms}
@@ -879,10 +910,12 @@ class InventoryService:
                 sequence=sequence,
                 host=Host(
                     hostname=hostname,
-                    cluster=cluster_name,
+                    cluster=host_data.get("cluster"),
                     connected=True,
                     last_seen=now,
                     error=None,
+                    total_cpu_cores=host_data.get("total_cpu_cores", 0),
+                    total_memory_gb=host_data.get("total_memory_gb", 0.0),
                 ),
                 vms=vms,
                 expected_vm_keys=expected_keys,
@@ -908,6 +941,8 @@ class InventoryService:
                     connected=False,
                     last_seen=last_seen,
                     error=str(exc),
+                    total_cpu_cores=previous_host.total_cpu_cores if previous_host else 0,
+                    total_memory_gb=previous_host.total_memory_gb if previous_host else 0.0,
                 ),
                 error=str(exc),
                 clear_preparing=True,
@@ -1258,7 +1293,7 @@ class InventoryService:
 
     def _parse_inventory_snapshot(
         self, hostname: str, payload: Dict[str, Any]
-    ) -> tuple[str, List[VM]]:
+    ) -> tuple[Dict[str, Any], List[VM]]:
         """Normalise the inventory payload from the host script."""
 
         host_section = payload.get("Host")
@@ -1278,10 +1313,20 @@ class InventoryService:
             raise RuntimeError(f"Inventory script reported an error: {error_message}")
 
         cluster_name = host_section.get("ClusterName") or "Default"
+        total_cpu_cores = self._coerce_int(host_section.get("TotalCpuCores"), default=0)
+        total_memory_gb = self._coerce_float(
+            host_section.get("TotalMemoryGB"), default=0.0
+        )
+
         vm_payload = payload.get("VirtualMachines")
 
         vms = self._deserialize_vms(hostname, vm_payload)
-        return cluster_name, vms
+        host_data = {
+            "cluster": cluster_name,
+            "total_cpu_cores": total_cpu_cores or 0,
+            "total_memory_gb": total_memory_gb or 0.0,
+        }
+        return host_data, vms
 
     def _deserialize_vms(self, hostname: str, data: Any) -> List[VM]:
         """Convert raw VM payloads into VM models."""
@@ -1317,7 +1362,21 @@ class InventoryService:
 
             memory_gb = self._coerce_float(vm_data.get("MemoryGB", 0.0), default=0.0)
             cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
-            os_family = self._infer_os_family(vm_data.get("OperatingSystem"))
+            os_name = self._coerce_str(
+                vm_data.get("OperatingSystem") or vm_data.get("OsName")
+            )
+            os_family = self._infer_os_family(os_name)
+            generation = self._coerce_int(vm_data.get("Generation"), default=None)
+            version = self._coerce_str(vm_data.get("Version"))
+            notes = self._coerce_str(vm_data.get("Notes"))
+            networks = self._deserialize_networks(vm_data.get("Networks"))
+            disks = self._deserialize_disks(vm_data.get("Disks"))
+            ip_addresses = self._normalise_ip_list(vm_data.get("IPAddresses"))
+            if not ip_addresses:
+                ip_addresses = self._collect_ips_from_networks(networks)
+            primary_ip = self._coerce_str(vm_data.get("IPAddress"))
+            if not primary_ip and ip_addresses:
+                primary_ip = ip_addresses[0]
 
             vm = VM(
                 name=vm_data.get("Name", ""),
@@ -1325,8 +1384,16 @@ class InventoryService:
                 state=state,
                 cpu_cores=cpu_cores,
                 memory_gb=memory_gb,
+                ip_address=primary_ip,
+                ip_addresses=ip_addresses,
+                notes=notes,
                 os_family=os_family,
+                os_name=os_name,
+                generation=generation,
+                version=version,
                 created_at=vm_data.get("CreationTime"),
+                disks=disks,
+                networks=networks,
             )
             vms.append(vm)
 
@@ -1396,7 +1463,7 @@ class InventoryService:
         for key in keys_to_remove:
             del self.vms[key]
 
-    def _coerce_float(self, value: Any, default: float = 0.0) -> float:
+    def _coerce_float(self, value: Any, default: Optional[float] = 0.0) -> Optional[float]:
         try:
             if value is None or value == "":
                 return default
@@ -1407,7 +1474,7 @@ class InventoryService:
             )
             return default
 
-    def _coerce_int(self, value: Any, default: int = 0) -> int:
+    def _coerce_int(self, value: Any, default: Optional[int] = 0) -> Optional[int]:
         try:
             if value is None or value == "":
                 return default
@@ -1415,6 +1482,17 @@ class InventoryService:
         except (TypeError, ValueError):
             logger.debug("Unable to coerce %r to int; using default %s", value, default)
             return default
+
+    def _coerce_str(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        try:
+            text = str(value).strip()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Unable to coerce %r to str", value)
+            return None
+
+        return text or None
 
     def _infer_os_family(self, os_name: Any) -> Optional[OSFamily]:
         if not os_name or not isinstance(os_name, str):
@@ -1429,6 +1507,107 @@ class InventoryService:
         ):
             return OSFamily.LINUX
         return None
+
+    def _normalise_ip_list(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+
+        if isinstance(value, str):
+            candidates = [part.strip() for part in value.split(",")]
+        elif isinstance(value, list):
+            candidates = value
+        else:
+            logger.debug("Unexpected IP collection type: %s", type(value))
+            return []
+
+        ips = []
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                text = str(candidate).strip()
+            except Exception:  # pragma: no cover - defensive
+                continue
+            if not text:
+                continue
+            if text.lower().startswith("fe80:"):
+                continue
+            ips.append(text)
+
+        # Preserve order but remove duplicates
+        seen = set()
+        unique_ips = []
+        for ip in ips:
+            if ip not in seen:
+                seen.add(ip)
+                unique_ips.append(ip)
+        return unique_ips
+
+    def _collect_ips_from_networks(self, adapters: List[VMNetworkAdapter]) -> List[str]:
+        ips: List[str] = []
+        for adapter in adapters:
+            for ip in adapter.ip_addresses:
+                if ip not in ips:
+                    ips.append(ip)
+        return ips
+
+    def _deserialize_networks(self, data: Any) -> List[VMNetworkAdapter]:
+        if not isinstance(data, list):
+            return []
+
+        adapters: List[VMNetworkAdapter] = []
+        for adapter_data in data:
+            if not isinstance(adapter_data, dict):
+                continue
+
+            ip_addresses = self._normalise_ip_list(
+                adapter_data.get("IPAddresses") or adapter_data.get("ip_addresses")
+            )
+
+            adapters.append(
+                VMNetworkAdapter(
+                    name=adapter_data.get("Name"),
+                    adapter_name=adapter_data.get("AdapterName") or adapter_data.get("Name"),
+                    network=adapter_data.get("Network"),
+                    virtual_switch=adapter_data.get("VirtualSwitch")
+                    or adapter_data.get("virtual_switch")
+                    or adapter_data.get("SwitchName"),
+                    vlan=self._coerce_str(adapter_data.get("Vlan")),
+                    ip_addresses=ip_addresses,
+                    mac_address=self._coerce_str(
+                        adapter_data.get("MacAddress") or adapter_data.get("MACAddress")
+                    ),
+                )
+            )
+
+        return adapters
+
+    def _deserialize_disks(self, data: Any) -> List[VMDisk]:
+        if not isinstance(data, list):
+            return []
+
+        disks: List[VMDisk] = []
+        for disk_data in data:
+            if not isinstance(disk_data, dict):
+                continue
+
+            disks.append(
+                VMDisk(
+                    name=disk_data.get("Name"),
+                    path=disk_data.get("Path"),
+                    location=disk_data.get("Location") or disk_data.get("Path"),
+                    type=disk_data.get("DiskType") or disk_data.get("Type"),
+                    size_gb=self._coerce_float(
+                        disk_data.get("CapacityGB") or disk_data.get("SizeGB"),
+                        default=None,
+                    ),
+                    file_size_gb=self._coerce_float(
+                        disk_data.get("FileSizeGB"), default=None
+                    ),
+                )
+            )
+
+        return disks
 
     def track_job_vm(self, job_id: str, vm_name: str, host: str) -> None:
         """Track a VM being created by an in-progress job."""
