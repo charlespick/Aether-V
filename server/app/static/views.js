@@ -982,7 +982,7 @@ class VMView extends BaseView {
                 <tr>
                     <td>${this.escapeHtml(adapter.adapter_name || adapter.name || 'Adapter')}</td>
                     <td>${this.escapeHtml(this.extractAdapterAddresses(adapter))}</td>
-                    <td>${this.escapeHtml(adapter.vlan || '—')}</td>
+                    <td>${this.escapeHtml(adapter.network_name || adapter.vlan || '—')}</td>
                     <td>${this.escapeHtml(adapter.network || adapter.virtual_switch || '—')}</td>
                 </tr>
             `).join('')
@@ -1076,8 +1076,8 @@ class VMView extends BaseView {
                                     <tr>
                                         <th scope="col">Adapter</th>
                                         <th scope="col">IP Address</th>
-                                        <th scope="col">VLAN</th>
-                                        <th scope="col">Connected Network</th>
+                                        <th scope="col">Network</th>
+                                        <th scope="col">Connected Switch</th>
                                     </tr>
                                 </thead>
                                 <tbody>

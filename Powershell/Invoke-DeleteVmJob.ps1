@@ -678,14 +678,9 @@ end {
 
         Start-Sleep -Seconds 3
 
-        if ($cleanupPlan) {
-            try {
-                Invoke-DirectoryCleanupPlan -CleanupPlan $cleanupPlan -MaxAttempts 5 -DelaySeconds 5
-            }
-            catch {
-                Write-Host "Folder cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
-            }
-        }
+        # Note: With stateless host configuration, VMs and disks are stored in separate
+        # configured paths, so we no longer clean up empty folders that were used
+        # to organize VM files alongside disks.
 
         Write-Host "Deletion workflow completed for VM '$VMName'." -ForegroundColor Green
     }

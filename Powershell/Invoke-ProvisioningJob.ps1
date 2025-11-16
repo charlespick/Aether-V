@@ -395,6 +395,111 @@ end {
         }
     }
 
+    function Get-HostResourcesConfiguration {
+        [CmdletBinding()]
+        param()
+
+        $configPath = "C:\ProgramData\Aether-V\hostresources.json"
+        if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+            # Try YAML as fallback
+            $configPath = "C:\ProgramData\Aether-V\hostresources.yaml"
+            if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+                throw "Host resources configuration file not found at C:\ProgramData\Aether-V\hostresources.json or .yaml"
+            }
+        }
+
+        $rawContent = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
+        
+        if ($configPath.EndsWith('.json')) {
+            $config = $rawContent | ConvertFrom-Json -ErrorAction Stop
+        }
+        elseif ($configPath.EndsWith('.yaml') -or $configPath.EndsWith('.yml')) {
+            if (-not (Get-Command -Name ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
+                Import-Module -Name powershell-yaml -ErrorAction Stop | Out-Null
+            }
+            $config = ConvertFrom-Yaml -Yaml $rawContent -ErrorAction Stop
+        }
+        else {
+            throw "Unsupported configuration file format: $configPath"
+        }
+
+        return ConvertTo-Hashtable -InputObject $config
+    }
+
+    function Resolve-NetworkConfiguration {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)]
+            [hashtable]$HostConfig,
+
+            [Parameter()]
+            [AllowNull()]
+            [string]$NetworkName
+        )
+
+        if ([string]::IsNullOrWhiteSpace($NetworkName)) {
+            return $null
+        }
+
+        $networks = $HostConfig['networks']
+        if (-not $networks -or $networks.Count -eq 0) {
+            throw "No networks defined in host configuration"
+        }
+
+        foreach ($network in $networks) {
+            $netHashtable = ConvertTo-Hashtable -InputObject $network
+            if ($netHashtable['name'] -eq $NetworkName) {
+                return $netHashtable
+            }
+        }
+
+        $availableNetworks = ($networks | ForEach-Object { 
+            $n = ConvertTo-Hashtable -InputObject $_
+            $n['name']
+        }) -join ', '
+        throw "Network '$NetworkName' not found in host configuration. Available networks: $availableNetworks"
+    }
+
+    function Resolve-StorageClassPath {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)]
+            [hashtable]$HostConfig,
+
+            [Parameter()]
+            [AllowNull()]
+            [string]$StorageClassName
+        )
+
+        if ([string]::IsNullOrWhiteSpace($StorageClassName)) {
+            # Return first storage class if no specific one requested
+            $storageClasses = $HostConfig['storage_classes']
+            if ($storageClasses -and $storageClasses.Count -gt 0) {
+                $firstClass = ConvertTo-Hashtable -InputObject $storageClasses[0]
+                return $firstClass['path']
+            }
+            throw "No storage classes defined in host configuration"
+        }
+
+        $storageClasses = $HostConfig['storage_classes']
+        if (-not $storageClasses -or $storageClasses.Count -eq 0) {
+            throw "No storage classes defined in host configuration"
+        }
+
+        foreach ($storageClass in $storageClasses) {
+            $scHashtable = ConvertTo-Hashtable -InputObject $storageClass
+            if ($scHashtable['name'] -eq $StorageClassName) {
+                return $scHashtable['path']
+            }
+        }
+
+        $availableClasses = ($storageClasses | ForEach-Object { 
+            $sc = ConvertTo-Hashtable -InputObject $_
+            $sc['name']
+        }) -join ', '
+        throw "Storage class '$StorageClassName' not found in host configuration. Available classes: $availableClasses"
+    }
+
     function Invoke-ProvisioningClusterEnrollment {
         [CmdletBinding()]
         param(
@@ -478,7 +583,10 @@ end {
             'guest_domain_joinpw',
             'cnf_ansible_ssh_user',
             'cnf_ansible_ssh_key',
-            'vlan_id',
+            'network',
+            'storage_class',
+            'vm_path',
+            'storage_path',
             'vm_clustered'
         )
 
@@ -498,13 +606,42 @@ end {
         $values['gb_ram'] = [int]$values['gb_ram']
         $values['cpu_cores'] = [int]$values['cpu_cores']
 
-        if ($values.ContainsKey('vlan_id') -and (Test-ProvisioningValuePresent -Value $values['vlan_id'])) {
-            $values['vlan_id'] = [int]$values['vlan_id']
-        }
-
         $vmClustered = $false
         if ($values.ContainsKey('vm_clustered')) {
             $vmClustered = [bool]$values['vm_clustered']
+        }
+
+        # Load host resources configuration
+        $hostConfig = Get-HostResourcesConfiguration
+
+        # Resolve network configuration if network name provided
+        $networkConfig = $null
+        if ($values.ContainsKey('network') -and (Test-ProvisioningValuePresent -Value $values['network'])) {
+            $networkConfig = Resolve-NetworkConfiguration -HostConfig $hostConfig -NetworkName ([string]$values['network'])
+        }
+
+        # Resolve storage path
+        $storagePath = $null
+        if ($values.ContainsKey('storage_path') -and (Test-ProvisioningValuePresent -Value $values['storage_path'])) {
+            $storagePath = [string]$values['storage_path']
+        }
+        elseif ($values.ContainsKey('storage_class') -and (Test-ProvisioningValuePresent -Value $values['storage_class'])) {
+            $storagePath = Resolve-StorageClassPath -HostConfig $hostConfig -StorageClassName ([string]$values['storage_class'])
+        }
+        else {
+            $storagePath = Resolve-StorageClassPath -HostConfig $hostConfig -StorageClassName $null
+        }
+
+        # Resolve VM path
+        $vmBasePath = $null
+        if ($values.ContainsKey('vm_path') -and (Test-ProvisioningValuePresent -Value $values['vm_path'])) {
+            $vmBasePath = [string]$values['vm_path']
+        }
+        else {
+            $vmBasePath = $hostConfig['virtual_machines_path']
+            if ([string]::IsNullOrWhiteSpace($vmBasePath)) {
+                throw "No virtual_machines_path defined in host configuration and no vm_path provided"
+            }
         }
 
         $fieldReport = Get-ProvisioningFieldReport -KnownFields $knownFields -Values $values
@@ -519,16 +656,15 @@ end {
         $imageName = [string]$values['image_name']
         $gbRam = [int]$values['gb_ram']
         $cpuCores = [int]$values['cpu_cores']
-        $vlanId = $null
-        if ($values.ContainsKey('vlan_id') -and (Test-ProvisioningValuePresent -Value $values['vlan_id'])) {
-            $vlanId = [int]$values['vlan_id']
-        }
 
         $currentHost = $env:COMPUTERNAME
         Write-Host "Starting provisioning workflow for VM '$vmName' on host '$currentHost' (OS: $osFamily)."
 
-        $vmDataFolder = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName
-        Write-Host "Image copied to $vmDataFolder" -ForegroundColor Green
+        $copyResult = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName -StoragePath $storagePath -VMBasePath $vmBasePath
+        $vmDataFolder = $copyResult.VMConfigPath
+        $vhdxPath = $copyResult.VhdxPath
+        Write-Host "Image copied to $vhdxPath" -ForegroundColor Green
+        Write-Host "VM config directory: $vmDataFolder" -ForegroundColor Green
 
         Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -VMDataFolder $vmDataFolder
 
@@ -537,10 +673,15 @@ end {
             GBRam        = $gbRam
             CPUcores     = $cpuCores
             VMDataFolder = $vmDataFolder
+            VhdxPath     = $vhdxPath
         }
 
-        if ($null -ne $vlanId) {
-            $registerParams.VLANId = $vlanId
+        if ($null -ne $networkConfig) {
+            $config = ConvertTo-Hashtable -InputObject $networkConfig['configuration']
+            $registerParams.VirtualSwitch = $config['virtual_switch']
+            if ($config.ContainsKey('vlan_id') -and $null -ne $config['vlan_id']) {
+                $registerParams.VLANId = [int]$config['vlan_id']
+            }
         }
 
         Invoke-ProvisioningRegisterVm @registerParams | Out-Null

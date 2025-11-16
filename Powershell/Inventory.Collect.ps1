@@ -261,6 +261,53 @@ try {
             try { $pool.Dispose() } catch { }
         }
     }
+
+    # Load host resources configuration and convert VLAN numbers to network names
+    try {
+        $configPath = "C:\ProgramData\Aether-V\hostresources.json"
+        if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+            $configPath = "C:\ProgramData\Aether-V\hostresources.yaml"
+        }
+
+        if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            $rawConfig = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
+            
+            $hostConfig = $null
+            if ($configPath.EndsWith('.json')) {
+                $hostConfig = $rawConfig | ConvertFrom-Json -ErrorAction Stop
+            }
+            elseif ($configPath.EndsWith('.yaml') -or $configPath.EndsWith('.yml')) {
+                if (-not (Get-Command -Name ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
+                    Import-Module -Name powershell-yaml -ErrorAction Stop | Out-Null
+                }
+                $hostConfig = ConvertFrom-Yaml -Yaml $rawConfig -ErrorAction Stop
+            }
+
+            if ($hostConfig -and $hostConfig.networks) {
+                # Build VLAN ID to network name mapping
+                $vlanToNetworkMap = @{}
+                foreach ($network in $hostConfig.networks) {
+                    if ($network.model -eq 'vlan' -and $network.configuration -and $network.configuration.vlan_id) {
+                        $vlanToNetworkMap[[int]$network.configuration.vlan_id] = $network.name
+                    }
+                }
+
+                # Update each VM's network adapters with network names
+                foreach ($vm in $result.VirtualMachines) {
+                    if ($vm.Networks) {
+                        foreach ($adapter in $vm.Networks) {
+                            if ($adapter.Vlan -and $vlanToNetworkMap.ContainsKey([int]$adapter.Vlan)) {
+                                $adapter.NetworkName = $vlanToNetworkMap[[int]$adapter.Vlan]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        $result.Warnings += "Failed to load host resources configuration for network name resolution: $($_.Exception.Message)"
+    }
 } catch {
     $result.Host.Error = $_.Exception.Message
     $result.Host.ExceptionType = $_.Exception.GetType().FullName

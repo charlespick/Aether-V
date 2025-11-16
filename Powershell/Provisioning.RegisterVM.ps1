@@ -13,6 +13,12 @@ function Invoke-ProvisioningRegisterVm {
         [Parameter(Mandatory = $true)]
         [string]$VMDataFolder,
 
+        [Parameter(Mandatory = $true)]
+        [string]$VhdxPath,
+
+        [Parameter()]
+        [string]$VirtualSwitch,
+
         [Nullable[int]]$VLANId
     )
 
@@ -45,21 +51,30 @@ function Invoke-ProvisioningRegisterVm {
         throw "Failed to configure CPU cores for VM '$vmName': $_"
     }
 
-    $vhdxPath = Get-ChildItem -LiteralPath $VMDataFolder -Filter *.vhdx -File | Select-Object -First 1
-    if (-not $vhdxPath) {
-        throw "No VHDX found in $VMDataFolder for VM '$vmName'."
+    if (-not (Test-Path -LiteralPath $VhdxPath -PathType Leaf)) {
+        throw "VHDX not found at '$VhdxPath' for VM '$vmName'."
     }
 
     try {
-        Add-VMHardDiskDrive -VM $vm -Path $vhdxPath.FullName
+        Add-VMHardDiskDrive -VM $vm -Path $VhdxPath
     }
     catch {
-        throw "Failed to attach VHDX '$($vhdxPath.FullName)' to VM '$vmName': $_"
+        throw "Failed to attach VHDX '$VhdxPath' to VM '$vmName': $_"
     }
 
-    $networkSwitch = Get-VMSwitch | Select-Object -First 1
-    if (-not $networkSwitch) {
-        throw "No virtual switch is available to attach VM '$vmName'."
+    # Use specified virtual switch or fallback to first available
+    $networkSwitch = $null
+    if (-not [string]::IsNullOrWhiteSpace($VirtualSwitch)) {
+        $networkSwitch = Get-VMSwitch -Name $VirtualSwitch -ErrorAction SilentlyContinue
+        if (-not $networkSwitch) {
+            throw "Virtual switch '$VirtualSwitch' not found on this host."
+        }
+    }
+    else {
+        $networkSwitch = Get-VMSwitch | Select-Object -First 1
+        if (-not $networkSwitch) {
+            throw "No virtual switch is available to attach VM '$vmName'."
+        }
     }
 
     $adapter = Get-VMNetworkAdapter -VM $vm | Select-Object -First 1
