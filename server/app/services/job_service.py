@@ -248,46 +248,6 @@ class JobService:
         self._started = False
         logger.info("Job service stopped")
 
-    async def submit_provisioning_job(
-        self,
-        _submission: JobSubmission,
-        payload: Dict[str, Any],
-        target_host: Optional[str],
-    ) -> Job:
-        """Persist and enqueue a provisioning job."""
-
-        if not self._started or self._queue is None:
-            raise RuntimeError("Job service is not running")
-
-        # Don't validate at submission time - validation happens during execution
-        # This allows jobs to be created even if host config is temporarily unavailable
-
-        job_id = str(uuid.uuid4())
-        job = Job(
-            job_id=job_id,
-            job_type="provision_vm",
-            status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
-            target_host=target_host,
-            parameters={
-                "definition": payload,
-            },
-        )
-
-        async with self._lock:
-            self.jobs[job_id] = job
-
-        await self._sync_job_notification(job)
-        await self._broadcast_job_status(job)
-
-        await self._queue.put(job_id)
-        logger.info(
-            "Queued provisioning job %s for host %s",
-            job_id,
-            target_host or "<unspecified>",
-        )
-        return self._prepare_job_response(job)
-
     async def submit_delete_job(self, request: VMDeleteRequest) -> Job:
         """Persist a VM deletion job request for future orchestration."""
 
