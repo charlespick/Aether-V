@@ -1075,6 +1075,15 @@ def _ldap_get_computer_delegation_info(
 
         delegate_targets = [str(value) for value in delegate_targets if value]
 
+        object_sid_raw = raw_attrs.get("objectSid") or attr_dict.get("objectSid") or None
+        object_sid: Optional[str] = None
+        if isinstance(object_sid_raw, (list, tuple)) and object_sid_raw:
+            object_sid_raw = object_sid_raw[0]
+        if isinstance(object_sid_raw, bytes):
+            object_sid = _sid_bytes_to_str(object_sid_raw)
+        elif object_sid_raw:
+            object_sid = str(object_sid_raw)
+
         trusted_to_auth = _normalize_ldap_boolean(
             attr_dict.get("TrustedToAuthForDelegation")
         )
@@ -1093,6 +1102,7 @@ def _ldap_get_computer_delegation_info(
             "delegate_present": bool(delegate_targets),
             "trusted_to_auth": bool(trusted_to_auth),
             "trusted_for_delegation": bool(trusted_for_delegation),
+            "object_sid": object_sid,
         }
     finally:
         if connection is not None:
@@ -1278,6 +1288,11 @@ def validate_host_kerberos_setup(
                 logger.warning(warning_msg)
                 result["warnings"].append(warning_msg)
                 continue
+
+            host_sid = (directory_info.get("object_sid") or "").strip()
+            if host_sid:
+                host_tokens.setdefault(host, set()).add(host_sid.lower())
+                expected_host_tokens.add(host_sid.lower())
 
             if not directory_info.get("exists", True):
                 error_msg = (

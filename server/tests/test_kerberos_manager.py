@@ -460,6 +460,7 @@ def test_validate_host_kerberos_setup_detects_missing_rbcd_entries(monkeypatch):
                 "delegate_present": False,
                 "trusted_to_auth": False,
                 "trusted_for_delegation": False,
+                "object_sid": None,
             }
         return {
             "exists": True,
@@ -470,6 +471,7 @@ def test_validate_host_kerberos_setup_detects_missing_rbcd_entries(monkeypatch):
             "delegate_present": False,
             "trusted_to_auth": False,
             "trusted_for_delegation": False,
+            "object_sid": f"S-1-5-21-100-{lower}",
         }
 
     monkeypatch.setattr(
@@ -511,6 +513,7 @@ def test_validate_host_kerberos_setup_validates_cluster_members(monkeypatch):
                 "delegate_present": False,
                 "trusted_to_auth": False,
                 "trusted_for_delegation": False,
+                "object_sid": None,
             }
         return {
             "exists": True,
@@ -521,6 +524,7 @@ def test_validate_host_kerberos_setup_validates_cluster_members(monkeypatch):
             "delegate_present": False,
             "trusted_to_auth": False,
             "trusted_for_delegation": False,
+            "object_sid": f"S-1-5-21-100-{lower_name}",
         }
 
     monkeypatch.setattr(
@@ -566,6 +570,7 @@ def test_validate_host_kerberos_setup_success_when_cluster_allows_hosts(monkeypa
                 "delegate_present": False,
                 "trusted_to_auth": False,
                 "trusted_for_delegation": False,
+                "object_sid": None,
             }
         return {
             "exists": True,
@@ -576,6 +581,7 @@ def test_validate_host_kerberos_setup_success_when_cluster_allows_hosts(monkeypa
             "delegate_present": False,
             "trusted_to_auth": False,
             "trusted_for_delegation": False,
+            "object_sid": f"S-1-5-21-100-{lower}",
         }
 
     monkeypatch.setattr(
@@ -614,6 +620,7 @@ def test_validate_host_kerberos_setup_warns_on_unexpected_principals(monkeypatch
                 "delegate_present": False,
                 "trusted_to_auth": False,
                 "trusted_for_delegation": False,
+                "object_sid": None,
             }
         return {
             "exists": True,
@@ -624,6 +631,7 @@ def test_validate_host_kerberos_setup_warns_on_unexpected_principals(monkeypatch
             "delegate_present": False,
             "trusted_to_auth": False,
             "trusted_for_delegation": False,
+            "object_sid": f"S-1-5-21-100-{name.lower()}",
         }
 
     monkeypatch.setattr(
@@ -646,6 +654,56 @@ def test_validate_host_kerberos_setup_warns_on_unexpected_principals(monkeypatch
     assert "unexpected principals" in result["warnings"][0]
 
 
+def test_validate_host_kerberos_setup_accepts_host_sid_entries(monkeypatch):
+    """Host SIDs present in the CNO RBCD ACL should not be flagged as unexpected."""
+
+    host_sid = "S-1-5-21-200-hyperv10"
+
+    def fake_ldap(name, realm=None):
+        lower = name.lower()
+        if lower == "clustersid":
+            return {
+                "exists": True,
+                "rbcd_present": True,
+                "rbcd_principals": [],
+                "rbcd_sid_strings": [host_sid],
+                "delegate_targets": [],
+                "delegate_present": False,
+                "trusted_to_auth": False,
+                "trusted_for_delegation": False,
+                "object_sid": None,
+            }
+        return {
+            "exists": True,
+            "rbcd_present": False,
+            "rbcd_principals": [],
+            "rbcd_sid_strings": [],
+            "delegate_targets": [],
+            "delegate_present": False,
+            "trusted_to_auth": False,
+            "trusted_for_delegation": False,
+            "object_sid": host_sid,
+        }
+
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
+        fake_ldap,
+    )
+    monkeypatch.setattr(
+        "app.services.kerberos_manager._check_wsman_spn",
+        lambda host, realm=None: (True, "WSMAN SPN validated"),
+    )
+
+    result = validate_host_kerberos_setup(
+        hosts=["hyperv10"],
+        realm="EXAMPLE.COM",
+        clusters={"ClusterSID": ["hyperv10"]},
+    )
+
+    assert not result["delegation_errors"]
+    assert not any("unexpected principals" in warning for warning in result["warnings"])
+
+
 def test_validate_host_kerberos_setup_reports_host_legacy_delegation(monkeypatch):
     """Legacy/unconstrained delegation on hosts should raise warnings/errors."""
 
@@ -660,6 +718,7 @@ def test_validate_host_kerberos_setup_reports_host_legacy_delegation(monkeypatch
                 "delegate_present": True,
                 "trusted_to_auth": True,
                 "trusted_for_delegation": True,
+                "object_sid": "S-1-5-21-100-hyperv09",
             }
         return {
             "exists": True,
@@ -670,6 +729,7 @@ def test_validate_host_kerberos_setup_reports_host_legacy_delegation(monkeypatch
             "delegate_present": False,
             "trusted_to_auth": False,
             "trusted_for_delegation": False,
+            "object_sid": "S-1-5-21-100-clusterok",
         }
 
     monkeypatch.setattr(
