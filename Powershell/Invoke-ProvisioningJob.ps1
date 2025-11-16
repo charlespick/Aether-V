@@ -700,28 +700,15 @@ end {
         $currentHost = $env:COMPUTERNAME
         Write-Host "Starting provisioning workflow for VM '$vmName' on host '$currentHost' (OS: $osFamily)."
 
-        Write-Host "[VERBOSE] ====== Copying Image ======"
-        Write-Host "[VERBOSE] VM Name: $vmName"
-        Write-Host "[VERBOSE] Image Name: $imageName"
-        Write-Host "[VERBOSE] Storage Path: $storagePath"
-        Write-Host "[VERBOSE] VM Base Path: $vmBasePath"
-        
         $copyResult = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName -StoragePath $storagePath -VMBasePath $vmBasePath
         $vmDataFolder = $copyResult.VMConfigPath
         $vhdxPath = $copyResult.VhdxPath
         
-        Write-Host "[VERBOSE] Image copy completed:"
-        Write-Host "[VERBOSE]   - VM Config Path: $vmDataFolder"
-        Write-Host "[VERBOSE]   - VHDX Path: $vhdxPath"
         Write-Host "Image copied to $vhdxPath" -ForegroundColor Green
         Write-Host "VM config directory: $vmDataFolder" -ForegroundColor Green
 
-        Write-Host "[VERBOSE] ====== Copying Provisioning ISO ======"
-        Write-Host "[VERBOSE] Copying ISO to storage path: $storagePath"
         $isoPath = Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -StoragePath $storagePath -VMName $vmName
-        Write-Host "[VERBOSE] ISO copied to: $isoPath"
 
-        Write-Host "[VERBOSE] ====== Preparing VM Registration Parameters ======"
         $registerParams = @{
             VMName       = $vmName
             OSFamily     = $osFamily
@@ -732,31 +719,13 @@ end {
             IsoPath      = $isoPath
         }
 
-        Write-Host "[VERBOSE] Base registration parameters:"
-        Write-Host "[VERBOSE]   - VM Name: $vmName"
-        Write-Host "[VERBOSE]   - OS Family: $osFamily"
-        Write-Host "[VERBOSE]   - RAM (GB): $gbRam"
-        Write-Host "[VERBOSE]   - CPU Cores: $cpuCores"
-        Write-Host "[VERBOSE]   - VM Data Folder: $vmDataFolder"
-        Write-Host "[VERBOSE]   - VHDX Path: $vhdxPath"
-        Write-Host "[VERBOSE]   - ISO Path: $isoPath"
-
         if ($null -ne $networkConfig) {
-            Write-Host "[VERBOSE] Adding network configuration to registration..."
             # $networkConfig is already a fully converted hashtable from Resolve-NetworkConfiguration
             $registerParams.VirtualSwitch = $networkConfig['configuration']['virtual_switch']
-            Write-Host "[VERBOSE]   - Virtual Switch: $($networkConfig['configuration']['virtual_switch'])"
             if ($networkConfig['configuration'].ContainsKey('vlan_id') -and $null -ne $networkConfig['configuration']['vlan_id']) {
                 $registerParams.VLANId = [int]$networkConfig['configuration']['vlan_id']
-                Write-Host "[VERBOSE]   - VLAN ID: $($networkConfig['configuration']['vlan_id'])"
             }
         }
-        else {
-            Write-Host "[VERBOSE] No network configuration to add (will use default switch)"
-        }
-
-        Write-Host "[VERBOSE] ====== Registering VM with Hyper-V ======"
-        Write-Host "[VERBOSE] About to call New-VM with path: $vmDataFolder"
 
         Invoke-ProvisioningRegisterVm @registerParams | Out-Null
         Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName | Out-Null
@@ -774,8 +743,6 @@ end {
 
         Invoke-ProvisioningWaitForProvisioningCompletion -VMName $vmName | Out-Null
 
-        # Clean up the provisioning ISO now that provisioning is complete
-        Write-Host "[VERBOSE] ====== Cleaning Up Provisioning ISO ======"
         Invoke-ProvisioningCleanupIso -VMName $vmName -IsoPath $isoPath
 
         if ($vmClustered) {
