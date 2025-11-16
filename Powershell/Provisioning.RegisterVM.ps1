@@ -27,10 +27,38 @@ function Invoke-ProvisioningRegisterVm {
         throw "Unable to derive VM name from data folder '$VMDataFolder'."
     }
 
+    Write-Host "[VERBOSE] RegisterVM: VM Name derived from path: $vmName"
+    Write-Host "[VERBOSE] RegisterVM: VM Data Folder: $VMDataFolder"
+    
+    $vmPath = Split-Path -Path $VMDataFolder -Parent
+    Write-Host "[VERBOSE] RegisterVM: VM Path (parent of data folder): $vmPath"
+    Write-Host "[VERBOSE] RegisterVM: Checking if VM path exists..."
+    
+    if (-not (Test-Path -LiteralPath $vmPath -PathType Container)) {
+        Write-Host "[ERROR] RegisterVM: VM path does not exist: $vmPath"
+        throw "VM path '$vmPath' does not exist. Cannot create VM."
+    }
+    
+    Write-Host "[VERBOSE] RegisterVM: VM path exists and is accessible"
+    Write-Host "[VERBOSE] RegisterVM: Attempting to create VM with New-VM cmdlet..."
+    Write-Host "[VERBOSE] RegisterVM: Parameters:"
+    Write-Host "[VERBOSE]   - Name: $vmName"
+    Write-Host "[VERBOSE]   - MemoryStartupBytes: $($GBRam * 1GB)"
+    Write-Host "[VERBOSE]   - Generation: 2"
+    Write-Host "[VERBOSE]   - BootDevice: VHD"
+    Write-Host "[VERBOSE]   - Path: $vmPath"
+
     try {
-        $vm = New-VM -Name $vmName -MemoryStartupBytes ($GBRam * 1GB) -Generation 2 -BootDevice VHD -Path (Split-Path -Path $VMDataFolder -Parent)
+        $vm = New-VM -Name $vmName -MemoryStartupBytes ($GBRam * 1GB) -Generation 2 -BootDevice VHD -Path $vmPath
+        Write-Host "[VERBOSE] RegisterVM: VM created successfully"
     }
     catch {
+        Write-Host "[ERROR] RegisterVM: Failed to create VM '$vmName'"
+        Write-Host "[ERROR] RegisterVM: Error message: $_"
+        Write-Host "[ERROR] RegisterVM: Exception type: $($_.Exception.GetType().FullName)"
+        if ($_.Exception.InnerException) {
+            Write-Host "[ERROR] RegisterVM: Inner exception: $($_.Exception.InnerException.Message)"
+        }
         throw "Failed to create VM '$vmName': $_"
     }
 

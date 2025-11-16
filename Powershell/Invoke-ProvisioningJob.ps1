@@ -399,22 +399,35 @@ end {
         [CmdletBinding()]
         param()
 
+        Write-Host "[VERBOSE] Attempting to load host resources configuration..."
+        
         $configPath = "C:\ProgramData\Aether-V\hostresources.json"
         if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+            Write-Host "[VERBOSE] JSON configuration not found at: $configPath"
             # Try YAML as fallback
             $configPath = "C:\ProgramData\Aether-V\hostresources.yaml"
             if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+                Write-Host "[ERROR] YAML configuration not found at: $configPath"
                 throw "Host resources configuration file not found at C:\ProgramData\Aether-V\hostresources.json or .yaml"
             }
+            Write-Host "[VERBOSE] Found YAML configuration at: $configPath"
+        }
+        else {
+            Write-Host "[VERBOSE] Found JSON configuration at: $configPath"
         }
 
+        Write-Host "[VERBOSE] Reading configuration file content..."
         $rawContent = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
+        Write-Host "[VERBOSE] Configuration file size: $($rawContent.Length) bytes"
         
         if ($configPath.EndsWith('.json')) {
+            Write-Host "[VERBOSE] Parsing JSON configuration..."
             $config = $rawContent | ConvertFrom-Json -ErrorAction Stop
         }
         elseif ($configPath.EndsWith('.yaml') -or $configPath.EndsWith('.yml')) {
+            Write-Host "[VERBOSE] Parsing YAML configuration..."
             if (-not (Get-Command -Name ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
+                Write-Host "[VERBOSE] Loading powershell-yaml module..."
                 Import-Module -Name powershell-yaml -ErrorAction Stop | Out-Null
             }
             $config = ConvertFrom-Yaml -Yaml $rawContent -ErrorAction Stop
@@ -423,7 +436,17 @@ end {
             throw "Unsupported configuration file format: $configPath"
         }
 
-        return ConvertTo-Hashtable -InputObject $config
+        Write-Host "[VERBOSE] Converting configuration to hashtable..."
+        $hashtable = ConvertTo-Hashtable -InputObject $config
+        
+        Write-Host "[VERBOSE] Configuration loaded successfully:"
+        Write-Host "[VERBOSE]   - Version: $($hashtable['version'])"
+        Write-Host "[VERBOSE]   - Schema: $($hashtable['schema_name'])"
+        Write-Host "[VERBOSE]   - VM Base Path: $($hashtable['virtual_machines_path'])"
+        Write-Host "[VERBOSE]   - Storage Classes: $($hashtable['storage_classes'].Count)"
+        Write-Host "[VERBOSE]   - Networks: $($hashtable['networks'].Count)"
+        
+        return $hashtable
     }
 
     function Resolve-NetworkConfiguration {
@@ -438,17 +461,26 @@ end {
         )
 
         if ([string]::IsNullOrWhiteSpace($NetworkName)) {
+            Write-Host "[VERBOSE] No network name provided, skipping network configuration"
             return $null
         }
 
+        Write-Host "[VERBOSE] Resolving network configuration for: $NetworkName"
+        
         $networks = $HostConfig['networks']
         if (-not $networks -or $networks.Count -eq 0) {
             throw "No networks defined in host configuration"
         }
 
+        Write-Host "[VERBOSE] Searching through $($networks.Count) available network(s)..."
         foreach ($network in $networks) {
             $netHashtable = ConvertTo-Hashtable -InputObject $network
             if ($netHashtable['name'] -eq $NetworkName) {
+                Write-Host "[VERBOSE] Found matching network: $NetworkName"
+                Write-Host "[VERBOSE]   - Virtual Switch: $($netHashtable['configuration']['virtual_switch'])"
+                if ($netHashtable['configuration'].ContainsKey('vlan_id')) {
+                    Write-Host "[VERBOSE]   - VLAN ID: $($netHashtable['configuration']['vlan_id'])"
+                }
                 return $netHashtable
             }
         }
@@ -457,6 +489,7 @@ end {
             $n = ConvertTo-Hashtable -InputObject $_
             $n['name']
         }) -join ', '
+        Write-Host "[ERROR] Network '$NetworkName' not found in configuration"
         throw "Network '$NetworkName' not found in host configuration. Available networks: $availableNetworks"
     }
 
@@ -472,23 +505,31 @@ end {
         )
 
         if ([string]::IsNullOrWhiteSpace($StorageClassName)) {
+            Write-Host "[VERBOSE] No storage class specified, using default (first available)"
             # Return first storage class if no specific one requested
             $storageClasses = $HostConfig['storage_classes']
             if ($storageClasses -and $storageClasses.Count -gt 0) {
-                $firstClass = ConvertTo-Hashtable -InputObject $storageClasses[0]
+                $firstClass = ConvertTo-Hashtable -InputObject $storageClass[0]
+                Write-Host "[VERBOSE] Selected default storage class: $($firstClass['name'])"
+                Write-Host "[VERBOSE] Storage path: $($firstClass['path'])"
                 return $firstClass['path']
             }
             throw "No storage classes defined in host configuration"
         }
 
+        Write-Host "[VERBOSE] Resolving storage class: $StorageClassName"
+        
         $storageClasses = $HostConfig['storage_classes']
         if (-not $storageClasses -or $storageClasses.Count -eq 0) {
             throw "No storage classes defined in host configuration"
         }
 
+        Write-Host "[VERBOSE] Searching through $($storageClasses.Count) available storage class(es)..."
         foreach ($storageClass in $storageClasses) {
             $scHashtable = ConvertTo-Hashtable -InputObject $storageClass
             if ($scHashtable['name'] -eq $StorageClassName) {
+                Write-Host "[VERBOSE] Found matching storage class: $StorageClassName"
+                Write-Host "[VERBOSE] Storage path: $($scHashtable['path'])"
                 return $scHashtable['path']
             }
         }
@@ -497,6 +538,7 @@ end {
             $sc = ConvertTo-Hashtable -InputObject $_
             $sc['name']
         }) -join ', '
+        Write-Host "[ERROR] Storage class '$StorageClassName' not found in configuration"
         throw "Storage class '$StorageClassName' not found in host configuration. Available classes: $availableClasses"
     }
 
@@ -609,29 +651,43 @@ end {
             $vmClustered = [bool]$values['vm_clustered']
         }
 
+        Write-Host "[VERBOSE] ====== Loading Host Configuration ======"
         # Load host resources configuration
         $hostConfig = Get-HostResourcesConfiguration
+        Write-Host "[VERBOSE] ====== Host Configuration Loaded Successfully ======"
 
+        Write-Host "[VERBOSE] ====== Resolving Network Configuration ======"
         # Resolve network configuration if network name provided
         $networkConfig = $null
         if ($values.ContainsKey('network') -and (Test-ProvisioningValuePresent -Value $values['network'])) {
+            Write-Host "[VERBOSE] Network requested: $($values['network'])"
             $networkConfig = Resolve-NetworkConfiguration -HostConfig $hostConfig -NetworkName ([string]$values['network'])
         }
+        else {
+            Write-Host "[VERBOSE] No network specified in job payload"
+        }
 
+        Write-Host "[VERBOSE] ====== Resolving Storage Configuration ======"
         # Resolve storage path
         $storagePath = $null
         if ($values.ContainsKey('storage_class') -and (Test-ProvisioningValuePresent -Value $values['storage_class'])) {
+            Write-Host "[VERBOSE] Storage class requested: $($values['storage_class'])"
             $storagePath = Resolve-StorageClassPath -HostConfig $hostConfig -StorageClassName ([string]$values['storage_class'])
         }
         else {
+            Write-Host "[VERBOSE] No storage class specified, using default"
             $storagePath = Resolve-StorageClassPath -HostConfig $hostConfig -StorageClassName $null
         }
+        Write-Host "[VERBOSE] Resolved storage path: $storagePath"
 
+        Write-Host "[VERBOSE] ====== Resolving VM Base Path ======"
         # Resolve VM path
         $vmBasePath = $hostConfig['virtual_machines_path']
         if ([string]::IsNullOrWhiteSpace($vmBasePath)) {
+            Write-Host "[ERROR] No virtual_machines_path defined in host configuration"
             throw "No virtual_machines_path defined in host configuration"
         }
+        Write-Host "[VERBOSE] VM base path: $vmBasePath"
 
         $fieldReport = Get-ProvisioningFieldReport -KnownFields $knownFields -Values $values
         if ($fieldReport.Present.Count -gt 0) {
@@ -649,14 +705,26 @@ end {
         $currentHost = $env:COMPUTERNAME
         Write-Host "Starting provisioning workflow for VM '$vmName' on host '$currentHost' (OS: $osFamily)."
 
+        Write-Host "[VERBOSE] ====== Copying Image ======"
+        Write-Host "[VERBOSE] VM Name: $vmName"
+        Write-Host "[VERBOSE] Image Name: $imageName"
+        Write-Host "[VERBOSE] Storage Path: $storagePath"
+        Write-Host "[VERBOSE] VM Base Path: $vmBasePath"
+        
         $copyResult = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName -StoragePath $storagePath -VMBasePath $vmBasePath
         $vmDataFolder = $copyResult.VMConfigPath
         $vhdxPath = $copyResult.VhdxPath
+        
+        Write-Host "[VERBOSE] Image copy completed:"
+        Write-Host "[VERBOSE]   - VM Config Path: $vmDataFolder"
+        Write-Host "[VERBOSE]   - VHDX Path: $vhdxPath"
         Write-Host "Image copied to $vhdxPath" -ForegroundColor Green
         Write-Host "VM config directory: $vmDataFolder" -ForegroundColor Green
 
+        Write-Host "[VERBOSE] ====== Copying Provisioning ISO ======"
         Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -VMDataFolder $vmDataFolder
 
+        Write-Host "[VERBOSE] ====== Preparing VM Registration Parameters ======"
         $registerParams = @{
             OSFamily     = $osFamily
             GBRam        = $gbRam
@@ -665,13 +733,29 @@ end {
             VhdxPath     = $vhdxPath
         }
 
+        Write-Host "[VERBOSE] Base registration parameters:"
+        Write-Host "[VERBOSE]   - OS Family: $osFamily"
+        Write-Host "[VERBOSE]   - RAM (GB): $gbRam"
+        Write-Host "[VERBOSE]   - CPU Cores: $cpuCores"
+        Write-Host "[VERBOSE]   - VM Data Folder: $vmDataFolder"
+        Write-Host "[VERBOSE]   - VHDX Path: $vhdxPath"
+
         if ($null -ne $networkConfig) {
+            Write-Host "[VERBOSE] Adding network configuration to registration..."
             $config = ConvertTo-Hashtable -InputObject $networkConfig['configuration']
             $registerParams.VirtualSwitch = $config['virtual_switch']
+            Write-Host "[VERBOSE]   - Virtual Switch: $($config['virtual_switch'])"
             if ($config.ContainsKey('vlan_id') -and $null -ne $config['vlan_id']) {
                 $registerParams.VLANId = [int]$config['vlan_id']
+                Write-Host "[VERBOSE]   - VLAN ID: $($config['vlan_id'])"
             }
         }
+        else {
+            Write-Host "[VERBOSE] No network configuration to add (will use default switch)"
+        }
+
+        Write-Host "[VERBOSE] ====== Registering VM with Hyper-V ======"
+        Write-Host "[VERBOSE] About to call New-VM with path: $(Split-Path -Path $vmDataFolder -Parent)"
 
         Invoke-ProvisioningRegisterVm @registerParams | Out-Null
         Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName | Out-Null

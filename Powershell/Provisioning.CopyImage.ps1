@@ -14,6 +14,12 @@ function Invoke-ProvisioningCopyImage {
         [string]$VMBasePath
     )
 
+    Write-Host "[VERBOSE] CopyImage: Starting image copy process"
+    Write-Host "[VERBOSE] CopyImage: VM Name: $VMName"
+    Write-Host "[VERBOSE] CopyImage: Image Name: $ImageName"
+    Write-Host "[VERBOSE] CopyImage: Storage Path: $StoragePath"
+    Write-Host "[VERBOSE] CopyImage: VM Base Path: $VMBasePath"
+
     $imageFilename = "$ImageName.vhdx"
 
     # Find the golden image in DiskImages directory
@@ -31,22 +37,36 @@ function Invoke-ProvisioningCopyImage {
     }
 
     $imagePath = Join-Path -Path $staticImagesPath -ChildPath $imageFilename
+    Write-Host "[VERBOSE] CopyImage: Looking for golden image at: $imagePath"
+    
     if (-not (Test-Path -LiteralPath $imagePath -PathType Leaf)) {
+        Write-Host "[ERROR] CopyImage: Golden image not found at: $imagePath"
         throw "Golden image '$ImageName' was not found at $imagePath."
     }
+    
+    Write-Host "[VERBOSE] CopyImage: Golden image found"
 
     # Generate unique ID for the VHDX to avoid collisions
     $uniqueId = [System.Guid]::NewGuid().ToString("N").Substring(0, 8)
     $uniqueVhdxName = "${ImageName}-${uniqueId}.vhdx"
+    Write-Host "[VERBOSE] CopyImage: Generated unique VHDX name: $uniqueVhdxName"
 
     # Create VM configuration directory in the VMs path
     $vmConfigPath = Join-Path -Path $VMBasePath -ChildPath $VMName
+    Write-Host "[VERBOSE] CopyImage: VM config path will be: $vmConfigPath"
+    
     if (-not (Test-Path -LiteralPath $vmConfigPath)) {
+        Write-Host "[VERBOSE] CopyImage: Creating VM config directory..."
         New-Item -ItemType Directory -Path $vmConfigPath -Force | Out-Null
+        Write-Host "[VERBOSE] CopyImage: VM config directory created"
+    }
+    else {
+        Write-Host "[VERBOSE] CopyImage: VM config directory already exists"
     }
 
     # Copy VHDX to storage path with unique name
     $destinationVhdxPath = Join-Path -Path $StoragePath -ChildPath $uniqueVhdxName
+    Write-Host "[VERBOSE] CopyImage: Destination VHDX path: $destinationVhdxPath"
 
     $imageSize = (Get-Item -LiteralPath $imagePath).Length
     
