@@ -75,9 +75,12 @@ async def lifespan(app: FastAPI):
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
 
     try:
-        load_schema_by_id("managed-deployment")
+        # Load component schemas to validate they exist
+        load_schema_by_id("vm-create")
+        load_schema_by_id("disk-create")
+        load_schema_by_id("nic-create")
     except SchemaValidationError as exc:
-        logger.error("Failed to load job schema: %s", "; ".join(exc.errors))
+        logger.error("Failed to load component schemas: %s", "; ".join(exc.errors))
         raise
 
     config_result = run_config_checks()
@@ -592,7 +595,7 @@ async def root(request: Request):
                         "websocket_refresh_time": settings.websocket_refresh_time * 1000,
                         # Convert to milliseconds
                         "websocket_ping_interval": settings.websocket_ping_interval * 1000,
-                        "job_schema": load_schema_by_id("managed-deployment"),
+                        "job_schema": None,  # Frontend composes schema from component schemas
                         "agent_deployment": host_deployment_service.get_startup_summary(),
                         "build_metadata": build_metadata,
                         "build_metadata_payload": _build_metadata_payload(),

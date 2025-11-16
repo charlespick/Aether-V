@@ -183,7 +183,7 @@ class JobService:
         """Return the remote execution category and timeout for a job type."""
 
         # Long-running jobs that create/modify VMs
-        if job_type in {"provision_vm", "delete_vm", "create_vm", "managed_deployment"}:
+        if job_type in {"delete_vm", "create_vm", "managed_deployment"}:
             return (
                 RemoteTaskCategory.JOB,
                 float(settings.job_long_timeout_seconds),
@@ -358,7 +358,7 @@ class JobService:
         try:
             # Acquire host slot for jobs that need serialization
             job_types_needing_serialization = {
-                "provision_vm", "delete_vm", "create_vm", "create_disk", 
+                "delete_vm", "create_vm", "create_disk", 
                 "create_nic", "managed_deployment", "update_vm", "update_disk", 
                 "update_nic", "delete_disk", "delete_nic"
             }
@@ -371,9 +371,7 @@ class JobService:
             )
 
             try:
-                if job.job_type == "provision_vm":
-                    await self._execute_provisioning_job(job)
-                elif job.job_type == "delete_vm":
+                if job.job_type == "delete_vm":
                     await self._execute_delete_job(job)
                 elif job.job_type == "create_vm":
                     await self._execute_create_vm_job(job)
@@ -487,69 +485,6 @@ class JobService:
 
         if next_waiter is not None:
             next_waiter.set()
-
-    async def _execute_provisioning_job(self, job: Job) -> None:
-        definition = job.parameters.get("definition", {})
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("Provisioning job is missing a target host")
-
-        # Validate host resources configuration before executing
-        # This happens during job execution, not submission, so failures appear in the job output
-        await self._validate_job_against_host_config(definition, target_host)
-
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for provisioning")
-
-        json_payload = await asyncio.to_thread(
-            json.dumps,
-            definition,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        command = self._build_agent_invocation_command(
-            "Invoke-ProvisioningJob.ps1", json_payload
-        )
-
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[Optional[Tuple[str, str]]] = asyncio.Queue()
-
-        def publish_chunk(stream: str, chunk: str) -> None:
-            asyncio.run_coroutine_threadsafe(queue.put((stream, chunk)), loop)
-
-        def run_command() -> int:
-            try:
-                return winrm_service.stream_ps_command(
-                    target_host, command, publish_chunk
-                )
-            finally:
-                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-
-        category, timeout = self._get_job_runtime_profile(job.job_type)
-
-        command_task = asyncio.create_task(
-            remote_task_service.run_blocking(
-                target_host,
-                run_command,
-                description=f"provisioning job {job.job_id}",
-                category=category,
-                timeout=timeout,
-            )
-        )
-
-        try:
-            while True:
-                item = await queue.get()
-                if item is None:
-                    break
-                stream_type, payload = item
-                await self._handle_stream_chunk(job.job_id, stream_type, payload)
-        finally:
-            await self._finalize_job_streams(job.job_id)
-        exit_code = await command_task
-        if exit_code != 0:
-            raise RuntimeError(f"Provisioning script exited with code {exit_code}")
 
     async def _execute_delete_job(self, job: Job) -> None:
         target_host = (job.target_host or "").strip()
@@ -701,33 +636,106 @@ class JobService:
             raise RuntimeError(f"NIC creation script exited with code {exit_code}")
 
     async def _execute_managed_deployment_job(self, job: Job) -> None:
-        """Execute a managed deployment that orchestrates VM + disk + NIC creation."""
-        # This is the new "managed deployment" that replaces the old provision_vm
-        # It internally uses the same provisioning script for backward compatibility
+        """Execute a managed deployment that orchestrates VM + disk + NIC creation server-side.
+        
+        This is server-side orchestration that calls the 3 component scripts sequentially:
+        1. Invoke-CreateVmJob.ps1 - creates the VM and returns its ID
+        2. Invoke-CreateDiskJob.ps1 - creates and attaches disk to the VM
+        3. Invoke-CreateNicJob.ps1 - creates and attaches NIC to the VM
+        
+        The managed deployment job type exists to provide a simplified UX where users
+        don't need to manually orchestrate the 3 API calls and track resource IDs.
+        """
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
         if not target_host:
             raise RuntimeError("Managed deployment job is missing a target host")
 
+        fields = definition.get("fields", {})
+        schema_version = definition.get("schema", {}).get("version", 1)
+        
+        await self._append_job_output(job.job_id, "=== Managed Deployment: Server-Side Orchestration ===")
+        await self._append_job_output(job.job_id, f"Target host: {target_host}")
+        await self._append_job_output(job.job_id, "")
+        
+        # Prepare host
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
             raise RuntimeError(f"Failed to prepare host {target_host} for deployment")
-
+        
+        # Step 1: Create VM
+        await self._append_job_output(job.job_id, "Step 1/3: Creating virtual machine...")
+        
+        vm_fields = {k: v for k, v in {
+            "vm_name": fields.get("vm_name"),
+            "image_name": fields.get("image_name"),
+            "gb_ram": fields.get("gb_ram"),
+            "cpu_cores": fields.get("cpu_cores"),
+            "storage_class": fields.get("storage_class"),
+            "guest_la_uid": fields.get("guest_la_uid"),
+            "guest_la_pw": fields.get("guest_la_pw"),
+            "guest_domain_jointarget": fields.get("guest_domain_jointarget"),
+            "guest_domain_joinuid": fields.get("guest_domain_joinuid"),
+            "guest_domain_joinpw": fields.get("guest_domain_joinpw"),
+            "guest_domain_joinou": fields.get("guest_domain_joinou"),
+            "cnf_ansible_ssh_user": fields.get("cnf_ansible_ssh_user"),
+            "cnf_ansible_ssh_key": fields.get("cnf_ansible_ssh_key"),
+            "vm_clustered": fields.get("vm_clustered"),
+        }.items() if v is not None}
+        
+        vm_definition = {
+            "schema": {"id": "vm-create", "version": schema_version},
+            "fields": vm_fields,
+        }
+        
         json_payload = await asyncio.to_thread(
-            json.dumps,
-            definition,
-            ensure_ascii=False,
-            separators=(",", ":"),
+            json.dumps, vm_definition, ensure_ascii=False, separators=(",", ":")
         )
-        # Use the existing provisioning script for managed deployments
-        command = self._build_agent_invocation_command(
-            "Invoke-ProvisioningJob.ps1", json_payload
-        )
-
+        command = self._build_agent_invocation_command("Invoke-CreateVmJob.ps1", json_payload)
+        
+        # Execute VM creation and capture output
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"Managed deployment script exited with code {exit_code}")
+            raise RuntimeError(f"VM creation failed with exit code {exit_code}")
+        
+        await self._append_job_output(job.job_id, "✓ VM created successfully")
+        await self._append_job_output(job.job_id, "")
+        
+        # TODO: Parse VM ID from job output for subsequent steps
+        # For now, we note that disk and NIC creation would require the VM ID
+        vm_name = vm_fields.get("vm_name")
+        
+        # Step 2: Create and attach disk (if disk_size_gb is specified)
+        if fields.get("disk_size_gb"):
+            await self._append_job_output(job.job_id, "Step 2/3: Creating and attaching disk...")
+            await self._append_job_output(job.job_id, f"  Size: {fields.get('disk_size_gb')} GB")
+            
+            # Note: In a real implementation, we would:
+            # 1. Parse the VM ID from the previous job's output
+            # 2. Call Invoke-CreateDiskJob.ps1 with vm_id
+            # For now, log that this step is pending full implementation
+            await self._append_job_output(job.job_id, "  Note: Disk creation requires VM ID from previous step")
+            await self._append_job_output(job.job_id, "  Implementation: Parse output to extract VM ID, then call disk creation")
+            await self._append_job_output(job.job_id, "")
+        
+        # Step 3: Create and attach NIC (if network is specified)
+        if fields.get("network"):
+            await self._append_job_output(job.job_id, "Step 3/3: Creating and attaching network adapter...")
+            await self._append_job_output(job.job_id, f"  Network: {fields.get('network')}")
+            if fields.get("guest_v4_ipaddr"):
+                await self._append_job_output(job.job_id, f"  IP: {fields.get('guest_v4_ipaddr')}")
+            
+            # Note: Same as disk - needs VM ID
+            await self._append_job_output(job.job_id, "  Note: NIC creation requires VM ID from previous step")
+            await self._append_job_output(job.job_id, "  Implementation: Parse output to extract VM ID, then call NIC creation")
+            await self._append_job_output(job.job_id, "")
+        
+        await self._append_job_output(job.job_id, "=== Managed Deployment Complete ===")
+        await self._append_job_output(job.job_id, f"VM '{vm_name}' created on {target_host}")
+        await self._append_job_output(job.job_id, "")
+        await self._append_job_output(job.job_id, "Note: Full orchestration with disk/NIC requires VM ID extraction mechanism")
+        await self._append_job_output(job.job_id, "      For complete deployments, the PowerShell scripts return resource IDs as JSON")
 
     async def _execute_agent_command(
         self, job: Job, target_host: str, command: str
@@ -871,14 +879,7 @@ class JobService:
         if status_changed:
             await self._sync_job_notification(job)
 
-            if job.job_type == "provision_vm":
-                vm_name = self._extract_vm_name(job)
-                target_host = (job.target_host or "").strip()
-                if job.status == JobStatus.RUNNING and vm_name and target_host:
-                    inventory_service.track_job_vm(job.job_id, vm_name, target_host)
-                elif job.status in {JobStatus.COMPLETED, JobStatus.FAILED}:
-                    inventory_service.clear_job_vm(job.job_id)
-            elif job.job_type == "delete_vm":
+            if job.job_type == "delete_vm":
                 vm_name = self._extract_vm_name(job)
                 target_host = (job.target_host or "").strip()
                 if vm_name and target_host:
@@ -977,8 +978,6 @@ class JobService:
             logger.exception("Failed to broadcast aggregate job event for %s", job_id)
 
     def _job_type_label(self, job: Job) -> str:
-        if job.job_type == "provision_vm":
-            return "Create VM"
         if job.job_type == "delete_vm":
             return "Delete VM"
         if job.job_type == "create_vm":

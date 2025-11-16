@@ -782,21 +782,46 @@ async def create_managed_deployment(
     submission: JobSubmission,
     user: dict = Depends(require_permission(Permission.WRITER))
 ):
-    """Create a complete VM deployment with disk and network adapter (backward compatible)."""
+    """Create a complete VM deployment with disk and network adapter.
+    
+    The schema for this endpoint is composed client-side from vm-create, disk-create, 
+    and nic-create schemas. The server validates against each component schema.
+    """
 
-    schema = load_schema_by_id("managed-deployment")
-    if submission.schema_version != schema.get("version"):
+    # Load the three component schemas for validation
+    vm_schema = load_schema_by_id("vm-create")
+    disk_schema = load_schema_by_id("disk-create")
+    nic_schema = load_schema_by_id("nic-create")
+    
+    # For version checking, use the VM schema version as the canonical version
+    if submission.schema_version != vm_schema.get("version"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "message": "Schema version mismatch",
-                "expected": schema.get("version"),
+                "expected": vm_schema.get("version"),
                 "received": submission.schema_version,
             },
         )
 
+    # Validate fields against the appropriate schemas
+    # VM fields are required, disk and NIC fields are from their respective schemas
     try:
-        validated_values = validate_job_submission(submission.values, schema)
+        # Create a combined field map for validation
+        all_fields = {}
+        for schema in [vm_schema, disk_schema, nic_schema]:
+            for field in schema.get("fields", []):
+                # Skip vm_id fields as those are for component creation only
+                if field.get("id") != "vm_id":
+                    all_fields[field["id"]] = field
+        
+        # Build a temporary combined schema for validation
+        combined_schema = {
+            "version": vm_schema.get("version"),
+            "fields": list(all_fields.values()),
+        }
+        
+        validated_values = validate_job_submission(submission.values, combined_schema)
     except SchemaValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": exc.errors})
 
@@ -834,6 +859,8 @@ async def create_managed_deployment(
                 detail=f"VM {vm_name} already exists on host {target_host}",
             )
 
+    # Job definition uses a virtual "managed-deployment" schema ID for tracking
+    # but the actual validation happens against the 3 component schemas
     job_definition = {
         "schema": {
             "id": "managed-deployment",

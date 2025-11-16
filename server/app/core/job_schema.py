@@ -207,10 +207,28 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
 
 
 def get_job_schema() -> Dict[str, Any]:
-    """Return the cached job input schema, loading it if required."""
-
-    # For backward compatibility, return the legacy schema
-    return load_schema_by_id("managed-deployment")
+    """Return a composed schema from the three component schemas.
+    
+    This function is kept for backward compatibility but the frontend should
+    directly fetch and compose the three component schemas.
+    """
+    # Compose schema from the three component schemas
+    vm_schema = load_schema_by_id("vm-create")
+    disk_schema = load_schema_by_id("disk-create")
+    nic_schema = load_schema_by_id("nic-create")
+    
+    # Build a combined field map
+    all_fields = {}
+    for schema in [vm_schema, disk_schema, nic_schema]:
+        for field in schema.get("fields", []):
+            # Skip vm_id fields as those are for component creation only
+            if field.get("id") != "vm_id":
+                all_fields[field["id"]] = field
+    
+    return {
+        "version": vm_schema.get("version"),
+        "fields": list(all_fields.values()),
+    }
 
 
 def validate_job_submission(values: Dict[str, Any], schema: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

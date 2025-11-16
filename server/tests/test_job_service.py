@@ -460,21 +460,21 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         self.job_service._execute_managed_deployment_job = fake_execute  # type: ignore[assignment]
 
         payload = {
-            "schema": {"id": "managed-deployment", "version": 1},
+            "schema": {"id": "vm-create", "version": 1},
             "fields": {"vm_name": "vm-a"},
         }
 
         job1 = await self.job_service.submit_resource_job(
-            "managed_deployment", "managed-deployment", payload, "hyperv01"
+            "managed_deployment", "vm-create", payload, "hyperv01"
         )
 
         payload2 = {
-            "schema": {"id": "managed-deployment", "version": 1},
+            "schema": {"id": "vm-create", "version": 1},
             "fields": {"vm_name": "vm-b"},
         }
 
         job2 = await self.job_service.submit_resource_job(
-            "managed_deployment", "managed-deployment", payload2, "HYPERV01"
+            "managed_deployment", "vm-create", payload2, "HYPERV01"
         )
 
         try:
