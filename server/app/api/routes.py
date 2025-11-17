@@ -785,7 +785,10 @@ async def create_managed_deployment(
     """Create a complete VM deployment with disk, network adapter, and guest configuration.
     
     The schema for this endpoint is composed client-side from vm-create, disk-create,  
-    nic-create, and vm-initialize schemas. The server validates against each component schema.
+    and nic-create schemas. The server validates against these component schemas.
+    
+    Guest configuration fields (marked with guest_config: true in vm-create and nic-create)
+    are collected and used during initialization.
     
     The managed deployment orchestrates 4 steps:
     1. Create VM (hardware only)
@@ -794,11 +797,11 @@ async def create_managed_deployment(
     4. Initialize guest OS (hostname, IP, domain join, etc.)
     """
 
-    # Load the component schemas for validation (including vm-initialize for guest config)
+    # Load the component schemas for validation
+    # Guest config fields come from vm-create and nic-create (marked with guest_config: true)
     vm_schema = load_schema_by_id("vm-create")
     disk_schema = load_schema_by_id("disk-create")
     nic_schema = load_schema_by_id("nic-create")
-    init_schema = load_schema_by_id("vm-initialize")
     
     # For version checking, use the VM schema version as the canonical version
     if submission.schema_version != vm_schema.get("version"):
@@ -814,20 +817,27 @@ async def create_managed_deployment(
     # Validate fields against the appropriate schemas
     try:
         # Create a combined field map for validation
-        # Include all fields from vm, disk, nic, and init schemas
-        # Skip vm_id (used internally) and vm_name from init (comes from vm-create)
+        # Include all fields from vm, disk, and nic schemas
+        # Skip vm_id from disk and nic (used internally, added during orchestration)
         all_fields = {}
-        for schema in [vm_schema, disk_schema, nic_schema, init_schema]:
+        for schema in [vm_schema, disk_schema, nic_schema]:
             for field in schema.get("fields", []):
-                # Skip vm_id and vm_name from init schema (vm_name comes from vm-create)
-                if field.get("id") not in ["vm_id", "vm_name"] or schema.get("id") == "vm-create":
-                    if field.get("id") not in all_fields:  # Avoid duplicate vm_name
-                        all_fields[field["id"]] = field
+                # Skip vm_id from disk/nic schemas (added dynamically during orchestration)
+                if field.get("id") == "vm_id" and schema.get("id") in ["disk-create", "nic-create"]:
+                    continue
+                if field.get("id") not in all_fields:
+                    all_fields[field["id"]] = field
+        
+        # Collect parameter sets from all schemas for validation
+        all_parameter_sets = []
+        for schema in [vm_schema, disk_schema, nic_schema]:
+            all_parameter_sets.extend(schema.get("parameter_sets", []) or [])
         
         # Build a temporary combined schema for validation
         combined_schema = {
             "version": vm_schema.get("version"),
             "fields": list(all_fields.values()),
+            "parameter_sets": all_parameter_sets,
         }
         
         validated_values = validate_job_submission(submission.values, combined_schema)

@@ -650,7 +650,7 @@ class JobService:
         Guest configuration fields (marked with guest_config: true in schemas) are held
         during VM/disk/NIC creation and then passed to the initialization step.
         """
-        from .core.job_schema import load_schema_by_id
+        from ..core.job_schema import load_schema_by_id
         
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
