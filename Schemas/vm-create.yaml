@@ -1,0 +1,121 @@
+version: 1
+id: vm-create
+name: "Virtual machine creation"
+description: "Schema for creating a new virtual machine. Hardware properties are sent to the agent; guest configuration properties (marked with guest_config: true) are held for initialization step."
+fields:
+  - id: vm_name
+    label: "VM name"
+    description: "Unique name for the new virtual machine."
+    hint: "Example: web-01"
+    type: string
+    required: true
+    validations:
+      min_length: 1
+      max_length: 64
+  - id: image_name
+    label: "Image"
+    description: "Identifier of the golden image to clone."
+    hint: "Windows Server 2022"
+    type: string
+    required: true
+  - id: gb_ram
+    label: "Memory (GB)"
+    description: "Amount of memory to assign to the VM in gigabytes."
+    type: integer
+    required: true
+    default: 4
+    validations:
+      minimum: 1
+      maximum: 512
+  - id: cpu_cores
+    label: "vCPUs"
+    description: "Number of virtual CPU cores."
+    type: integer
+    required: true
+    default: 2
+    validations:
+      minimum: 1
+      maximum: 64
+  - id: storage_class
+    label: "Storage Class"
+    description: "Name of the storage class where VM configuration will be stored."
+    hint: "fast-ssd"
+    type: string
+    required: false
+  - id: vm_clustered
+    label: "Add VM to cluster"
+    description: "Request that the new VM be registered with the Failover Cluster."
+    type: boolean
+    required: false
+    default: false
+  - id: guest_la_uid
+    label: "Local administrator"
+    description: "Username for the guest operating system's local administrator."
+    hint: "Administrator"
+    type: string
+    required: true
+    guest_config: true
+  - id: guest_la_pw
+    label: "Local administrator password"
+    description: "Password for the guest operating system's local administrator."
+    type: secret
+    required: true
+    guest_config: true
+  - id: guest_domain_jointarget
+    label: "Domain FQDN"
+    description: "Fully qualified domain name to join."
+    hint: "corp.example.com"
+    type: string
+    required: false
+    guest_config: true
+  - id: guest_domain_joinuid
+    label: "Domain join account"
+    description: "User account used to join the domain."
+    hint: "EXAMPLE\\svc_join"
+    type: string
+    required: false
+    guest_config: true
+  - id: guest_domain_joinpw
+    label: "Domain join password"
+    description: "Password for the domain join account."
+    type: secret
+    required: false
+    guest_config: true
+  - id: guest_domain_joinou
+    label: "Domain join OU"
+    description: "Organizational unit path for the computer account."
+    hint: "OU=Servers,DC=corp,DC=example,DC=com"
+    type: string
+    required: false
+    guest_config: true
+  - id: cnf_ansible_ssh_user
+    label: "Ansible SSH user"
+    description: "Username used by Ansible for SSH automation."
+    hint: "ansible"
+    type: string
+    required: false
+    guest_config: true
+  - id: cnf_ansible_ssh_key
+    label: "Ansible SSH public key"
+    description: "Public key provided to the guest for Ansible SSH access."
+    hint: "ssh-ed25519 AAAA..."
+    type: multiline
+    required: false
+    guest_config: true
+parameter_sets:
+  - id: domain-join
+    name: "Domain join"
+    description: "Configuration required to join the guest to an Active Directory domain."
+    mode: all-or-none
+    members:
+      - guest_domain_jointarget
+      - guest_domain_joinuid
+      - guest_domain_joinpw
+      - guest_domain_joinou
+  - id: ansible-config
+    name: "Ansible configuration"
+    description: "Configuration for enabling Ansible SSH automation."
+    mode: all-or-none
+    members:
+      - cnf_ansible_ssh_user
+      - cnf_ansible_ssh_key

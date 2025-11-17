@@ -787,11 +787,64 @@ class ProvisionJobOverlay extends BaseOverlay {
     }
 
     async fetchSchema() {
-        const response = await fetch('/api/v1/schema/job-inputs', { credentials: 'same-origin' });
-        if (!response.ok) {
-            throw new Error(`Schema request failed: ${response.status}`);
+        // Fetch all three component schemas and compose them into a single form
+        // vm-create: VM hardware + guest configuration (local admin, domain join, ansible)
+        // disk-create: Disk configuration
+        // nic-create: Network adapter hardware + guest IP configuration
+        const [vmSchema, diskSchema, nicSchema] = await Promise.all([
+            fetch('/api/v1/schema/vm-create', { credentials: 'same-origin' }).then(r => r.json()),
+            fetch('/api/v1/schema/disk-create', { credentials: 'same-origin' }).then(r => r.json()),
+            fetch('/api/v1/schema/nic-create', { credentials: 'same-origin' }).then(r => r.json()),
+        ]);
+
+        // Compose a single schema from the three component schemas
+        const composedSchema = {
+            id: 'managed-deployment',
+            name: 'Virtual Machine Deployment',
+            description: 'Create a complete virtual machine with disk, network adapter, and guest configuration',
+            version: vmSchema.version || 1,
+            fields: [],
+            parameter_sets: []
+        };
+
+        // Add all VM fields (hardware + guest config)
+        vmSchema.fields.forEach(field => {
+            composedSchema.fields.push(field);
+        });
+
+        // Add disk fields (excluding vm_id)
+        diskSchema.fields.forEach(field => {
+            if (field.id !== 'vm_id') {
+                // Add disk fields, avoiding duplicates with VM schema
+                if (field.id === 'disk_size_gb') {
+                    composedSchema.fields.push(field);
+                } else if (field.id === 'storage_class' && !composedSchema.fields.find(f => f.id === 'storage_class')) {
+                    // Only add storage_class if not already present from VM schema
+                    composedSchema.fields.push(field);
+                } else if (!composedSchema.fields.find(f => f.id === field.id)) {
+                    composedSchema.fields.push(field);
+                }
+            }
+        });
+
+        // Add network fields including guest IP configuration (excluding vm_id)
+        nicSchema.fields.forEach(field => {
+            if (field.id !== 'vm_id' && field.id !== 'adapter_name') {
+                // Skip adapter_name as the primary adapter doesn't need naming
+                // Include both hardware (network) and guest config (IP settings) fields
+                composedSchema.fields.push(field);
+            }
+        });
+
+        // Combine parameter sets from all schemas
+        if (vmSchema.parameter_sets) {
+            composedSchema.parameter_sets.push(...vmSchema.parameter_sets);
         }
-        return response.json();
+        if (nicSchema.parameter_sets) {
+            composedSchema.parameter_sets.push(...nicSchema.parameter_sets);
+        }
+
+        return composedSchema;
     }
 
     async fetchHosts() {
@@ -1151,7 +1204,7 @@ class ProvisionJobOverlay extends BaseOverlay {
         const payload = this.collectValues();
 
         try {
-            const response = await fetch('/api/v1/jobs/provision', {
+            const response = await fetch('/api/v1/managed-deployments', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'

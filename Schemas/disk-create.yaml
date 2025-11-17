@@ -1,0 +1,43 @@
+version: 1
+id: disk-create
+name: "Virtual disk creation"
+description: "Schema for creating and attaching a new virtual disk to an existing VM."
+fields:
+  - id: vm_id
+    label: "VM ID"
+    description: "Hyper-V ID of the virtual machine to attach the disk to."
+    hint: "Example: 12345678-1234-1234-1234-123456789abc"
+    type: string
+    required: true
+    validations:
+      min_length: 36
+      max_length: 36
+  - id: disk_size_gb
+    label: "Disk size (GB)"
+    description: "Size of the virtual disk in gigabytes."
+    type: integer
+    required: true
+    default: 100
+    validations:
+      minimum: 1
+      maximum: 65536
+  - id: storage_class
+    label: "Storage Class"
+    description: "Name of the storage class where the disk will be stored."
+    hint: "fast-ssd"
+    type: string
+    required: false
+  - id: disk_type
+    label: "Disk type"
+    description: "Type of virtual hard disk."
+    hint: "Dynamic or Fixed"
+    type: string
+    required: false
+    default: "Dynamic"
+  - id: controller_type
+    label: "Controller type"
+    description: "Type of controller to attach the disk to (SCSI or IDE)."
+    hint: "SCSI"
+    type: string
+    required: false
+    default: "SCSI"

@@ -108,6 +108,7 @@ class VM(BaseModel):
 class VMDisk(BaseModel):
     """Virtual disk attached to a VM."""
 
+    id: Optional[str] = None
     name: Optional[str] = None
     path: Optional[str] = None
     location: Optional[str] = None
@@ -119,6 +120,7 @@ class VMDisk(BaseModel):
 class VMNetworkAdapter(BaseModel):
     """Network adapter attached to a VM."""
 
+    id: Optional[str] = None
     name: Optional[str] = None
     adapter_name: Optional[str] = None
     network: Optional[str] = None
@@ -138,6 +140,42 @@ class VMDeleteRequest(BaseModel):
     hyperv_host: str
     force: bool = Field(
         False, description="Force delete even if VM is running")
+
+
+class ResourceCreateRequest(BaseModel):
+    """Base class for resource creation requests."""
+    schema_version: int = Field(..., description="Version of the schema used")
+    values: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Field values keyed by schema field id",
+    )
+    target_host: str = Field(
+        ...,
+        description="Hostname of the connected Hyper-V host that will execute the job",
+    )
+
+
+class DiskCreateRequest(ResourceCreateRequest):
+    """Request to create a new disk."""
+    pass
+
+
+class NicCreateRequest(ResourceCreateRequest):
+    """Request to create a new network adapter."""
+    pass
+
+
+class ResourceDeleteRequest(BaseModel):
+    """Request to delete a resource by ID."""
+    resource_id: str = Field(..., description="Hyper-V ID of the resource to delete")
+    hyperv_host: str = Field(..., description="Host where the resource is located")
+
+
+class JobResult(BaseModel):
+    """Result of a job submission that returns immediately."""
+    job_id: str
+    status: str = "queued"
+    message: str
 
 
 class Job(BaseModel):

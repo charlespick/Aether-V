@@ -12,11 +12,11 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_CACHE: Optional[Dict[str, Any]] = None
+_SCHEMA_CACHE: Dict[str, Dict[str, Any]] = {}
 
-_DEFAULT_SCHEMA_PATH_CANDIDATES = [
-    Path(__file__).resolve().parents[2] / "Schemas" / "job-inputs.yaml",
-    Path(__file__).resolve().parents[3] / "Schemas" / "job-inputs.yaml",
+_SCHEMAS_DIR_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "Schemas",
+    Path(__file__).resolve().parents[3] / "Schemas",
 ]
 
 _HOSTNAME_PATTERN = re.compile(
@@ -36,19 +36,47 @@ class SchemaValidationError(Exception):
         super().__init__("; ".join(messages))
 
 
+def load_schema_by_id(schema_id: str) -> Dict[str, Any]:
+    """Load and validate a schema by its ID."""
+    
+    global _SCHEMA_CACHE
+    
+    # Check cache first
+    if schema_id in _SCHEMA_CACHE:
+        return _SCHEMA_CACHE[schema_id]
+    
+    # Find schemas directory
+    schemas_dir = None
+    for candidate in _SCHEMAS_DIR_CANDIDATES:
+        if candidate.exists() and candidate.is_dir():
+            schemas_dir = candidate
+            break
+    
+    if not schemas_dir:
+        raise SchemaValidationError([f"Schemas directory not found"])
+    
+    # Try to find schema file by ID
+    schema_path = None
+    for candidate_name in [f"{schema_id}.yaml", f"{schema_id}.yml"]:
+        candidate_path = schemas_dir / candidate_name
+        if candidate_path.exists():
+            schema_path = candidate_path
+            break
+    
+    if not schema_path:
+        raise SchemaValidationError([f"Schema file not found for ID: {schema_id}"])
+    
+    return load_job_schema(schema_path)
+
+
 def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
     """Load and validate the job input schema from disk."""
 
     global _SCHEMA_CACHE
-    if path:
-        schema_path = Path(path)
-    else:
-        for candidate in _DEFAULT_SCHEMA_PATH_CANDIDATES:
-            if candidate.exists():
-                schema_path = candidate
-                break
-        else:
-            schema_path = _DEFAULT_SCHEMA_PATH_CANDIDATES[0]
+    if not path:
+        raise SchemaValidationError(["Schema path is required. Use load_schema_by_id() instead."])
+    
+    schema_path = Path(path)
 
     if not schema_path.exists():
         raise SchemaValidationError([f"Schema file not found: {schema_path}"])
@@ -170,7 +198,8 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
                     ]
                 )
 
-    _SCHEMA_CACHE = raw
+    schema_id = raw.get("id", "unknown")
+    _SCHEMA_CACHE[schema_id] = raw
     logger.info(
         "Loaded job input schema '%s' version %s", raw.get("id", "default"), raw["version"]
     )
@@ -178,12 +207,40 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
 
 
 def get_job_schema() -> Dict[str, Any]:
-    """Return the cached job input schema, loading it if required."""
-
-    global _SCHEMA_CACHE
-    if _SCHEMA_CACHE is None:
-        return load_job_schema()
-    return _SCHEMA_CACHE
+    """Return a composed schema from the 3 component schemas.
+    
+    This function composes a unified schema from:
+    - vm-create: VM hardware and guest configuration fields
+    - disk-create: Disk fields (excluding vm_id)
+    - nic-create: NIC hardware and guest IP configuration fields (excluding vm_id)
+    
+    Fields marked with guest_config: true remain in the schema for form rendering,
+    but are filtered out when sending to agent scripts and held for initialization.
+    """
+    # Compose schema from the 3 component schemas
+    vm_schema = load_schema_by_id("vm-create")
+    disk_schema = load_schema_by_id("disk-create")
+    nic_schema = load_schema_by_id("nic-create")
+    
+    # Build a combined field map
+    all_fields = {}
+    all_parameter_sets = []
+    
+    for schema in [vm_schema, disk_schema, nic_schema]:
+        for field in schema.get("fields", []):
+            # Skip vm_id field as it's only for component creation, not managed deployment
+            if field.get("id") != "vm_id":
+                all_fields[field["id"]] = field
+        
+        # Collect parameter sets from all schemas
+        for param_set in schema.get("parameter_sets", []) or []:
+            all_parameter_sets.append(param_set)
+    
+    return {
+        "version": vm_schema.get("version"),
+        "fields": list(all_fields.values()),
+        "parameter_sets": all_parameter_sets,
+    }
 
 
 def validate_job_submission(values: Dict[str, Any], schema: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
