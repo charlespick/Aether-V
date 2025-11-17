@@ -641,15 +641,17 @@ class JobService:
         This is server-side orchestration that calls 4 component scripts sequentially:
         1. Invoke-CreateVmJob.ps1 - creates the VM (hardware only) and returns its ID
         2. Invoke-CreateDiskJob.ps1 - creates and attaches disk to the VM
-        3. Invoke-CreateNicJob.ps1 - creates and attaches NIC to the VM
+        3. Invoke-CreateNicJob.ps1 - creates and attaches NIC to the VM (hardware only)
         4. Invoke-InitializeVmJob.ps1 - applies guest configuration (hostname, IP, domain join, etc.)
         
         The managed deployment job type exists to provide a simplified UX where users
         don't need to manually orchestrate the 4 API calls and track resource IDs.
         
-        Guest configuration fields are collected from the input, held during VM/disk/NIC creation,
-        and then passed to the initialization step.
+        Guest configuration fields (marked with guest_config: true in schemas) are held
+        during VM/disk/NIC creation and then passed to the initialization step.
         """
+        from .core.job_schema import load_schema_by_id
+        
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -668,33 +670,40 @@ class JobService:
         if not prepared:
             raise RuntimeError(f"Failed to prepare host {target_host} for deployment")
         
-        # Separate VM hardware fields from guest configuration fields
-        vm_hardware_fields = {k: v for k, v in {
-            "vm_name": fields.get("vm_name"),
-            "image_name": fields.get("image_name"),
-            "gb_ram": fields.get("gb_ram"),
-            "cpu_cores": fields.get("cpu_cores"),
-            "storage_class": fields.get("storage_class"),
-            "vm_clustered": fields.get("vm_clustered"),
-        }.items() if v is not None}
+        # Load schemas to determine which fields are guest config
+        vm_schema = load_schema_by_id("vm-create")
+        nic_schema = load_schema_by_id("nic-create")
         
-        # Hold guest configuration fields for step 4
-        guest_config_fields = {k: v for k, v in {
-            "guest_la_uid": fields.get("guest_la_uid"),
-            "guest_la_pw": fields.get("guest_la_pw"),
-            "guest_domain_jointarget": fields.get("guest_domain_jointarget"),
-            "guest_domain_joinuid": fields.get("guest_domain_joinuid"),
-            "guest_domain_joinpw": fields.get("guest_domain_joinpw"),
-            "guest_domain_joinou": fields.get("guest_domain_joinou"),
-            "cnf_ansible_ssh_user": fields.get("cnf_ansible_ssh_user"),
-            "cnf_ansible_ssh_key": fields.get("cnf_ansible_ssh_key"),
-            "guest_v4_ipaddr": fields.get("guest_v4_ipaddr"),
-            "guest_v4_cidrprefix": fields.get("guest_v4_cidrprefix"),
-            "guest_v4_defaultgw": fields.get("guest_v4_defaultgw"),
-            "guest_v4_dns1": fields.get("guest_v4_dns1"),
-            "guest_v4_dns2": fields.get("guest_v4_dns2"),
-            "guest_net_dnssuffix": fields.get("guest_net_dnssuffix"),
-        }.items() if v is not None}
+        # Build sets of guest config field IDs
+        guest_config_field_ids = set()
+        for field in vm_schema.get("fields", []):
+            if field.get("guest_config", False):
+                guest_config_field_ids.add(field.get("id"))
+        for field in nic_schema.get("fields", []):
+            if field.get("guest_config", False):
+                guest_config_field_ids.add(field.get("id"))
+        
+        # Separate VM hardware fields from guest configuration fields
+        vm_hardware_fields = {}
+        vm_guest_config_fields = {}
+        for field in vm_schema.get("fields", []):
+            field_id = field.get("id")
+            if field_id in fields:
+                if field.get("guest_config", False):
+                    vm_guest_config_fields[field_id] = fields[field_id]
+                else:
+                    vm_hardware_fields[field_id] = fields[field_id]
+        
+        # Separate NIC hardware fields from guest IP configuration fields
+        nic_hardware_fields = {}
+        nic_guest_config_fields = {}
+        for field in nic_schema.get("fields", []):
+            field_id = field.get("id")
+            if field_id in fields:
+                if field.get("guest_config", False):
+                    nic_guest_config_fields[field_id] = fields[field_id]
+                elif field_id != "vm_id":  # Skip vm_id (added dynamically)
+                    nic_hardware_fields[field_id] = fields[field_id]
         
         # Step 1: Create VM (hardware only, no guest config)
         await self._append_job_output(job.job_id, "Step 1/4: Creating virtual machine (hardware only)...")
@@ -752,20 +761,16 @@ class JobService:
             await self._append_job_output(job.job_id, "✓ Disk created and attached successfully")
             await self._append_job_output(job.job_id, "")
         
-        # Step 3: Create and attach NIC (if network is specified)
-        if fields.get("network"):
-            await self._append_job_output(job.job_id, "Step 3/4: Creating and attaching network adapter...")
+        # Step 3: Create and attach NIC (hardware only, if network is specified)
+        if nic_hardware_fields.get("network"):
+            await self._append_job_output(job.job_id, "Step 3/4: Creating and attaching network adapter (hardware only)...")
             
-            nic_fields = {
-                "vm_id": vm_id,
-                "network": fields.get("network"),
-            }
-            if fields.get("adapter_name"):
-                nic_fields["adapter_name"] = fields.get("adapter_name")
+            # Add vm_id to NIC hardware fields
+            nic_hardware_fields["vm_id"] = vm_id
             
             nic_definition = {
                 "schema": {"id": "nic-create", "version": schema_version},
-                "fields": nic_fields,
+                "fields": nic_hardware_fields,
             }
             
             json_payload = await asyncio.to_thread(
@@ -780,24 +785,23 @@ class JobService:
             await self._append_job_output(job.job_id, "✓ Network adapter created and attached successfully")
             await self._append_job_output(job.job_id, "")
         
-        # Step 4: Initialize VM with guest configuration
-        if guest_config_fields:
+        # Step 4: Initialize VM with guest configuration (if any guest config fields provided)
+        # Combine VM guest config fields and NIC guest IP config fields
+        all_guest_config_fields = {**vm_guest_config_fields, **nic_guest_config_fields}
+        
+        if all_guest_config_fields:
             await self._append_job_output(job.job_id, "Step 4/4: Initializing VM with guest configuration...")
             
             # Add VM ID and name to guest config
             init_fields = {
                 "vm_id": vm_id,
                 "vm_name": vm_name,
-                **guest_config_fields
+                **all_guest_config_fields
             }
             
-            init_definition = {
-                "schema": {"id": "vm-initialize", "version": schema_version},
-                "fields": init_fields,
-            }
-            
+            # Call initialization script (no schema, direct field passing)
             json_payload = await asyncio.to_thread(
-                json.dumps, init_definition, ensure_ascii=False, separators=(",", ":")
+                json.dumps, init_fields, ensure_ascii=False, separators=(",", ":")
             )
             command = self._build_agent_invocation_command("Invoke-InitializeVmJob.ps1", json_payload)
             

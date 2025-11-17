@@ -1,7 +1,7 @@
 version: 1
 id: nic-create
 name: "Network adapter creation"
-description: "Schema for creating and attaching a new network adapter to an existing VM (hardware only - no guest IP configuration)."
+description: "Schema for creating and attaching a new network adapter to an existing VM. Hardware properties are sent to the agent; guest IP configuration (marked with guest_config: true) is held for initialization step."
 fields:
   - id: vm_id
     label: "VM ID"
@@ -24,3 +24,55 @@ fields:
     hint: "Network Adapter 2"
     type: string
     required: false
+  - id: guest_v4_ipaddr
+    label: "IPv4 address"
+    description: "Static IPv4 address to assign to the guest adapter."
+    hint: "192.0.2.50"
+    type: ipv4
+    required: false
+    guest_config: true
+  - id: guest_v4_cidrprefix
+    label: "IPv4 prefix length"
+    description: "CIDR prefix length that accompanies the static IPv4 address."
+    hint: "24"
+    type: integer
+    required: false
+    guest_config: true
+  - id: guest_v4_defaultgw
+    label: "Default gateway"
+    description: "Default IPv4 gateway for the guest adapter."
+    hint: "192.0.2.1"
+    type: ipv4
+    required: false
+    guest_config: true
+  - id: guest_v4_dns1
+    label: "Primary DNS server"
+    description: "Primary IPv4 DNS server for the guest adapter."
+    hint: "192.0.2.53"
+    type: ipv4
+    required: false
+    guest_config: true
+  - id: guest_v4_dns2
+    label: "Secondary DNS server"
+    description: "Secondary IPv4 DNS server for the guest adapter."
+    hint: "192.0.2.54"
+    type: ipv4
+    required: false
+    guest_config: true
+  - id: guest_net_dnssuffix
+    label: "DNS suffix"
+    description: "DNS search suffix for the guest network configuration."
+    hint: "corp.example.com"
+    type: string
+    required: false
+    guest_config: true
+parameter_sets:
+  - id: static-ip-config
+    name: "Static IP configuration"
+    description: "Configuration for static IPv4 addressing."
+    mode: all-or-none
+    members:
+      - guest_v4_ipaddr
+      - guest_v4_cidrprefix
+      - guest_v4_defaultgw
+      - guest_v4_dns1

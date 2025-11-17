@@ -207,35 +207,39 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
 
 
 def get_job_schema() -> Dict[str, Any]:
-    """Return a composed schema from component schemas including guest configuration.
+    """Return a composed schema from the 3 component schemas.
     
-    This function is kept for backward compatibility but the frontend should
-    directly fetch and compose the component schemas plus vm-initialize.
-    
-    The composed schema includes:
-    - vm-create: VM hardware fields
+    This function composes a unified schema from:
+    - vm-create: VM hardware and guest configuration fields
     - disk-create: Disk fields (excluding vm_id)
-    - nic-create: NIC fields (excluding vm_id)  
-    - vm-initialize: Guest configuration fields (excluding vm_id and vm_name)
+    - nic-create: NIC hardware and guest IP configuration fields (excluding vm_id)
+    
+    Fields marked with guest_config: true remain in the schema for form rendering,
+    but are filtered out when sending to agent scripts and held for initialization.
     """
-    # Compose schema from the component schemas
+    # Compose schema from the 3 component schemas
     vm_schema = load_schema_by_id("vm-create")
     disk_schema = load_schema_by_id("disk-create")
     nic_schema = load_schema_by_id("nic-create")
-    init_schema = load_schema_by_id("vm-initialize")
     
     # Build a combined field map
     all_fields = {}
-    for schema in [vm_schema, disk_schema, nic_schema, init_schema]:
+    all_parameter_sets = []
+    
+    for schema in [vm_schema, disk_schema, nic_schema]:
         for field in schema.get("fields", []):
-            # Skip vm_id and vm_name fields as those are for component creation only
-            # (vm_name is collected from vm-create schema, not from vm-initialize)
-            if field.get("id") not in ["vm_id", "vm_name"]:
+            # Skip vm_id field as it's only for component creation, not managed deployment
+            if field.get("id") != "vm_id":
                 all_fields[field["id"]] = field
+        
+        # Collect parameter sets from all schemas
+        for param_set in schema.get("parameter_sets", []) or []:
+            all_parameter_sets.append(param_set)
     
     return {
         "version": vm_schema.get("version"),
         "fields": list(all_fields.values()),
+        "parameter_sets": all_parameter_sets,
     }
 
 

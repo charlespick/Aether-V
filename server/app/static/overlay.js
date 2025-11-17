@@ -787,19 +787,17 @@ class ProvisionJobOverlay extends BaseOverlay {
     }
 
     async fetchSchema() {
-        // Fetch all four schemas and compose them into a single form
-        // vm-create: VM hardware
+        // Fetch all three component schemas and compose them into a single form
+        // vm-create: VM hardware + guest configuration (local admin, domain join, ansible)
         // disk-create: Disk configuration
-        // nic-create: Network adapter configuration
-        // vm-initialize: Guest OS configuration (hostname, IP, domain join, etc.)
-        const [vmSchema, diskSchema, nicSchema, initSchema] = await Promise.all([
+        // nic-create: Network adapter hardware + guest IP configuration
+        const [vmSchema, diskSchema, nicSchema] = await Promise.all([
             fetch('/api/v1/schema/vm-create', { credentials: 'same-origin' }).then(r => r.json()),
             fetch('/api/v1/schema/disk-create', { credentials: 'same-origin' }).then(r => r.json()),
             fetch('/api/v1/schema/nic-create', { credentials: 'same-origin' }).then(r => r.json()),
-            fetch('/api/v1/schema/vm-initialize', { credentials: 'same-origin' }).then(r => r.json()),
         ]);
 
-        // Compose a single schema from the four component schemas
+        // Compose a single schema from the three component schemas
         const composedSchema = {
             id: 'managed-deployment',
             name: 'Virtual Machine Deployment',
@@ -809,7 +807,7 @@ class ProvisionJobOverlay extends BaseOverlay {
             parameter_sets: []
         };
 
-        // Add VM hardware fields
+        // Add all VM fields (hardware + guest config)
         vmSchema.fields.forEach(field => {
             composedSchema.fields.push(field);
         });
@@ -829,34 +827,22 @@ class ProvisionJobOverlay extends BaseOverlay {
             }
         });
 
-        // Add network fields (excluding vm_id)
+        // Add network fields including guest IP configuration (excluding vm_id)
         nicSchema.fields.forEach(field => {
             if (field.id !== 'vm_id' && field.id !== 'adapter_name') {
                 // Skip adapter_name as the primary adapter doesn't need naming
+                // Include both hardware (network) and guest config (IP settings) fields
                 composedSchema.fields.push(field);
             }
         });
 
-        // Add guest configuration fields from vm-initialize (excluding vm_id and vm_name)
-        // vm_name comes from vm-create, vm_id is internal
-        initSchema.fields.forEach(field => {
-            if (field.id !== 'vm_id' && field.id !== 'vm_name') {
-                // These are guest config fields: local admin, domain join, ansible, IP settings
-                if (!composedSchema.fields.find(f => f.id === field.id)) {
-                    composedSchema.fields.push(field);
-                }
-            }
-        });
-
-        // Combine parameter sets from schemas (vm-initialize might have domain join param sets)
+        // Combine parameter sets from all schemas
         if (vmSchema.parameter_sets) {
             composedSchema.parameter_sets.push(...vmSchema.parameter_sets);
         }
         if (nicSchema.parameter_sets) {
             composedSchema.parameter_sets.push(...nicSchema.parameter_sets);
         }
-        // Note: vm-initialize parameter sets are from the old schema, no longer needed
-        // as they're now in vm-create for domain join
 
         return composedSchema;
     }
