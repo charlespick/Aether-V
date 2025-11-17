@@ -787,37 +787,43 @@ class ProvisionJobOverlay extends BaseOverlay {
     }
 
     async fetchSchema() {
-        // Fetch all three schemas and compose them into a single form
-        const [vmSchema, diskSchema, nicSchema] = await Promise.all([
+        // Fetch all four schemas and compose them into a single form
+        // vm-create: VM hardware
+        // disk-create: Disk configuration
+        // nic-create: Network adapter configuration
+        // vm-initialize: Guest OS configuration (hostname, IP, domain join, etc.)
+        const [vmSchema, diskSchema, nicSchema, initSchema] = await Promise.all([
             fetch('/api/v1/schema/vm-create', { credentials: 'same-origin' }).then(r => r.json()),
             fetch('/api/v1/schema/disk-create', { credentials: 'same-origin' }).then(r => r.json()),
             fetch('/api/v1/schema/nic-create', { credentials: 'same-origin' }).then(r => r.json()),
+            fetch('/api/v1/schema/vm-initialize', { credentials: 'same-origin' }).then(r => r.json()),
         ]);
 
-        // Compose a single schema from the three component schemas
-        // Use managed-deployment as the base structure
+        // Compose a single schema from the four component schemas
         const composedSchema = {
             id: 'managed-deployment',
             name: 'Virtual Machine Deployment',
-            description: 'Create a complete virtual machine with disk and network adapter',
+            description: 'Create a complete virtual machine with disk, network adapter, and guest configuration',
             version: vmSchema.version || 1,
             fields: [],
             parameter_sets: []
         };
 
-        // Add VM fields (excluding vm_id which is for component creation)
+        // Add VM hardware fields
         vmSchema.fields.forEach(field => {
             composedSchema.fields.push(field);
         });
 
-        // Add disk fields (excluding vm_id, adding disk_size_gb)
+        // Add disk fields (excluding vm_id)
         diskSchema.fields.forEach(field => {
             if (field.id !== 'vm_id') {
-                // Rename to avoid conflicts and make it clear this is for the initial disk
+                // Add disk fields, avoiding duplicates with VM schema
                 if (field.id === 'disk_size_gb') {
                     composedSchema.fields.push(field);
                 } else if (field.id === 'storage_class' && !composedSchema.fields.find(f => f.id === 'storage_class')) {
                     // Only add storage_class if not already present from VM schema
+                    composedSchema.fields.push(field);
+                } else if (!composedSchema.fields.find(f => f.id === field.id)) {
                     composedSchema.fields.push(field);
                 }
             }
@@ -831,13 +837,26 @@ class ProvisionJobOverlay extends BaseOverlay {
             }
         });
 
-        // Combine parameter sets from all schemas
+        // Add guest configuration fields from vm-initialize (excluding vm_id and vm_name)
+        // vm_name comes from vm-create, vm_id is internal
+        initSchema.fields.forEach(field => {
+            if (field.id !== 'vm_id' && field.id !== 'vm_name') {
+                // These are guest config fields: local admin, domain join, ansible, IP settings
+                if (!composedSchema.fields.find(f => f.id === field.id)) {
+                    composedSchema.fields.push(field);
+                }
+            }
+        });
+
+        // Combine parameter sets from schemas (vm-initialize might have domain join param sets)
         if (vmSchema.parameter_sets) {
             composedSchema.parameter_sets.push(...vmSchema.parameter_sets);
         }
         if (nicSchema.parameter_sets) {
             composedSchema.parameter_sets.push(...nicSchema.parameter_sets);
         }
+        // Note: vm-initialize parameter sets are from the old schema, no longer needed
+        // as they're now in vm-create for domain join
 
         return composedSchema;
     }

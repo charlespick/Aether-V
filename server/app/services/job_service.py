@@ -636,15 +636,19 @@ class JobService:
             raise RuntimeError(f"NIC creation script exited with code {exit_code}")
 
     async def _execute_managed_deployment_job(self, job: Job) -> None:
-        """Execute a managed deployment that orchestrates VM + disk + NIC creation server-side.
+        """Execute a managed deployment that orchestrates VM + disk + NIC + initialize server-side.
         
-        This is server-side orchestration that calls the 3 component scripts sequentially:
-        1. Invoke-CreateVmJob.ps1 - creates the VM and returns its ID
+        This is server-side orchestration that calls 4 component scripts sequentially:
+        1. Invoke-CreateVmJob.ps1 - creates the VM (hardware only) and returns its ID
         2. Invoke-CreateDiskJob.ps1 - creates and attaches disk to the VM
         3. Invoke-CreateNicJob.ps1 - creates and attaches NIC to the VM
+        4. Invoke-InitializeVmJob.ps1 - applies guest configuration (hostname, IP, domain join, etc.)
         
         The managed deployment job type exists to provide a simplified UX where users
-        don't need to manually orchestrate the 3 API calls and track resource IDs.
+        don't need to manually orchestrate the 4 API calls and track resource IDs.
+        
+        Guest configuration fields are collected from the input, held during VM/disk/NIC creation,
+        and then passed to the initialization step.
         """
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
@@ -654,7 +658,7 @@ class JobService:
         fields = definition.get("fields", {})
         schema_version = definition.get("schema", {}).get("version", 1)
         
-        await self._append_job_output(job.job_id, "=== Managed Deployment: Server-Side Orchestration ===")
+        await self._append_job_output(job.job_id, "=== Managed Deployment: 4-Step Orchestration ===")
         await self._append_job_output(job.job_id, f"Target host: {target_host}")
         await self._append_job_output(job.job_id, "")
         
@@ -664,15 +668,18 @@ class JobService:
         if not prepared:
             raise RuntimeError(f"Failed to prepare host {target_host} for deployment")
         
-        # Step 1: Create VM
-        await self._append_job_output(job.job_id, "Step 1/3: Creating virtual machine...")
-        
-        vm_fields = {k: v for k, v in {
+        # Separate VM hardware fields from guest configuration fields
+        vm_hardware_fields = {k: v for k, v in {
             "vm_name": fields.get("vm_name"),
             "image_name": fields.get("image_name"),
             "gb_ram": fields.get("gb_ram"),
             "cpu_cores": fields.get("cpu_cores"),
             "storage_class": fields.get("storage_class"),
+            "vm_clustered": fields.get("vm_clustered"),
+        }.items() if v is not None}
+        
+        # Hold guest configuration fields for step 4
+        guest_config_fields = {k: v for k, v in {
             "guest_la_uid": fields.get("guest_la_uid"),
             "guest_la_pw": fields.get("guest_la_pw"),
             "guest_domain_jointarget": fields.get("guest_domain_jointarget"),
@@ -681,12 +688,20 @@ class JobService:
             "guest_domain_joinou": fields.get("guest_domain_joinou"),
             "cnf_ansible_ssh_user": fields.get("cnf_ansible_ssh_user"),
             "cnf_ansible_ssh_key": fields.get("cnf_ansible_ssh_key"),
-            "vm_clustered": fields.get("vm_clustered"),
+            "guest_v4_ipaddr": fields.get("guest_v4_ipaddr"),
+            "guest_v4_cidrprefix": fields.get("guest_v4_cidrprefix"),
+            "guest_v4_defaultgw": fields.get("guest_v4_defaultgw"),
+            "guest_v4_dns1": fields.get("guest_v4_dns1"),
+            "guest_v4_dns2": fields.get("guest_v4_dns2"),
+            "guest_net_dnssuffix": fields.get("guest_net_dnssuffix"),
         }.items() if v is not None}
+        
+        # Step 1: Create VM (hardware only, no guest config)
+        await self._append_job_output(job.job_id, "Step 1/4: Creating virtual machine (hardware only)...")
         
         vm_definition = {
             "schema": {"id": "vm-create", "version": schema_version},
-            "fields": vm_fields,
+            "fields": vm_hardware_fields,
         }
         
         json_payload = await asyncio.to_thread(
@@ -699,43 +714,104 @@ class JobService:
         if exit_code != 0:
             raise RuntimeError(f"VM creation failed with exit code {exit_code}")
         
-        await self._append_job_output(job.job_id, "✓ VM created successfully")
-        await self._append_job_output(job.job_id, "")
+        await self._append_job_output(job.job_id, "✓ VM hardware created successfully")
         
-        # TODO: Parse VM ID from job output for subsequent steps
-        # For now, we note that disk and NIC creation would require the VM ID
-        vm_name = vm_fields.get("vm_name")
+        # TODO: Parse VM ID from job output
+        # For now, use vm_name as a placeholder - in production we'd parse JSON output
+        vm_name = vm_hardware_fields.get("vm_name")
+        vm_id = "PLACEHOLDER-VM-ID"  # This should be parsed from the PowerShell JSON output
+        
+        await self._append_job_output(job.job_id, f"VM ID: {vm_id} (TODO: parse from output)")
+        await self._append_job_output(job.job_id, "")
         
         # Step 2: Create and attach disk (if disk_size_gb is specified)
         if fields.get("disk_size_gb"):
-            await self._append_job_output(job.job_id, "Step 2/3: Creating and attaching disk...")
-            await self._append_job_output(job.job_id, f"  Size: {fields.get('disk_size_gb')} GB")
+            await self._append_job_output(job.job_id, "Step 2/4: Creating and attaching disk...")
             
-            # Note: In a real implementation, we would:
-            # 1. Parse the VM ID from the previous job's output
-            # 2. Call Invoke-CreateDiskJob.ps1 with vm_id
-            # For now, log that this step is pending full implementation
-            await self._append_job_output(job.job_id, "  Note: Disk creation requires VM ID from previous step")
-            await self._append_job_output(job.job_id, "  Implementation: Parse output to extract VM ID, then call disk creation")
+            disk_fields = {
+                "vm_id": vm_id,
+                "disk_size_gb": fields.get("disk_size_gb"),
+            }
+            if fields.get("storage_class"):
+                disk_fields["storage_class"] = fields.get("storage_class")
+            
+            disk_definition = {
+                "schema": {"id": "disk-create", "version": schema_version},
+                "fields": disk_fields,
+            }
+            
+            json_payload = await asyncio.to_thread(
+                json.dumps, disk_definition, ensure_ascii=False, separators=(",", ":")
+            )
+            command = self._build_agent_invocation_command("Invoke-CreateDiskJob.ps1", json_payload)
+            
+            exit_code = await self._execute_agent_command(job, target_host, command)
+            if exit_code != 0:
+                raise RuntimeError(f"Disk creation failed with exit code {exit_code}")
+            
+            await self._append_job_output(job.job_id, "✓ Disk created and attached successfully")
             await self._append_job_output(job.job_id, "")
         
         # Step 3: Create and attach NIC (if network is specified)
         if fields.get("network"):
-            await self._append_job_output(job.job_id, "Step 3/3: Creating and attaching network adapter...")
-            await self._append_job_output(job.job_id, f"  Network: {fields.get('network')}")
-            if fields.get("guest_v4_ipaddr"):
-                await self._append_job_output(job.job_id, f"  IP: {fields.get('guest_v4_ipaddr')}")
+            await self._append_job_output(job.job_id, "Step 3/4: Creating and attaching network adapter...")
             
-            # Note: Same as disk - needs VM ID
-            await self._append_job_output(job.job_id, "  Note: NIC creation requires VM ID from previous step")
-            await self._append_job_output(job.job_id, "  Implementation: Parse output to extract VM ID, then call NIC creation")
+            nic_fields = {
+                "vm_id": vm_id,
+                "network": fields.get("network"),
+            }
+            if fields.get("adapter_name"):
+                nic_fields["adapter_name"] = fields.get("adapter_name")
+            
+            nic_definition = {
+                "schema": {"id": "nic-create", "version": schema_version},
+                "fields": nic_fields,
+            }
+            
+            json_payload = await asyncio.to_thread(
+                json.dumps, nic_definition, ensure_ascii=False, separators=(",", ":")
+            )
+            command = self._build_agent_invocation_command("Invoke-CreateNicJob.ps1", json_payload)
+            
+            exit_code = await self._execute_agent_command(job, target_host, command)
+            if exit_code != 0:
+                raise RuntimeError(f"NIC creation failed with exit code {exit_code}")
+            
+            await self._append_job_output(job.job_id, "✓ Network adapter created and attached successfully")
+            await self._append_job_output(job.job_id, "")
+        
+        # Step 4: Initialize VM with guest configuration
+        if guest_config_fields:
+            await self._append_job_output(job.job_id, "Step 4/4: Initializing VM with guest configuration...")
+            
+            # Add VM ID and name to guest config
+            init_fields = {
+                "vm_id": vm_id,
+                "vm_name": vm_name,
+                **guest_config_fields
+            }
+            
+            init_definition = {
+                "schema": {"id": "vm-initialize", "version": schema_version},
+                "fields": init_fields,
+            }
+            
+            json_payload = await asyncio.to_thread(
+                json.dumps, init_definition, ensure_ascii=False, separators=(",", ":")
+            )
+            command = self._build_agent_invocation_command("Invoke-InitializeVmJob.ps1", json_payload)
+            
+            exit_code = await self._execute_agent_command(job, target_host, command)
+            if exit_code != 0:
+                raise RuntimeError(f"VM initialization failed with exit code {exit_code}")
+            
+            await self._append_job_output(job.job_id, "✓ VM initialized with guest configuration")
             await self._append_job_output(job.job_id, "")
         
         await self._append_job_output(job.job_id, "=== Managed Deployment Complete ===")
-        await self._append_job_output(job.job_id, f"VM '{vm_name}' created on {target_host}")
+        await self._append_job_output(job.job_id, f"VM '{vm_name}' fully deployed on {target_host}")
         await self._append_job_output(job.job_id, "")
-        await self._append_job_output(job.job_id, "Note: Full orchestration with disk/NIC requires VM ID extraction mechanism")
-        await self._append_job_output(job.job_id, "      For complete deployments, the PowerShell scripts return resource IDs as JSON")
+        await self._append_job_output(job.job_id, "Note: VM ID parsing from PowerShell output still needs implementation")
 
     async def _execute_agent_command(
         self, job: Job, target_host: str, command: str

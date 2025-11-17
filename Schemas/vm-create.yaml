@@ -1,7 +1,7 @@
 version: 1
 id: vm-create
 name: "Virtual machine creation"
-description: "Schema for creating a new virtual machine (without disk or network adapter)."
+description: "Schema for creating a new virtual machine (hardware only - no guest configuration)."
 fields:
   - id: vm_name
     label: "VM name"
@@ -42,98 +42,9 @@ fields:
     hint: "fast-ssd"
     type: string
     required: false
-  - id: guest_la_uid
-    label: "Local administrator"
-    description: "Username for the guest operating system's local administrator."
-    hint: "Administrator"
-    type: string
-    required: true
-  - id: guest_la_pw
-    label: "Local administrator password"
-    description: "Password for the guest operating system's local administrator."
-    type: secret
-    required: true
-  - id: guest_domain_jointarget
-    label: "Domain FQDN"
-    description: "Fully qualified domain name to join."
-    hint: "corp.example.com"
-    type: string
-    required: false
-    applicability:
-      os_family:
-        - windows
-  - id: guest_domain_joinuid
-    label: "Domain join account"
-    description: "User account used to join the domain."
-    hint: "EXAMPLE\\svc_join"
-    type: string
-    required: false
-    applicability:
-      os_family:
-        - windows
-  - id: guest_domain_joinpw
-    label: "Domain join password"
-    description: "Password for the domain join account."
-    type: secret
-    required: false
-    applicability:
-      os_family:
-        - windows
-  - id: guest_domain_joinou
-    label: "Domain join OU"
-    description: "Organizational unit path for the computer account."
-    hint: "OU=Servers,DC=corp,DC=example,DC=com"
-    type: string
-    required: false
-    applicability:
-      os_family:
-        - windows
-  - id: cnf_ansible_ssh_user
-    label: "Ansible SSH user"
-    description: "Username used by Ansible for SSH automation."
-    hint: "ansible"
-    type: string
-    required: false
-    applicability:
-      os_family:
-        - linux
-  - id: cnf_ansible_ssh_key
-    label: "Ansible SSH public key"
-    description: "Public key provided to the guest for Ansible SSH access."
-    hint: "ssh-ed25519 AAAA..."
-    type: multiline
-    required: false
-    applicability:
-      os_family:
-        - linux
   - id: vm_clustered
     label: "Add VM to cluster"
     description: "Request that the new VM be registered with the Failover Cluster."
     type: boolean
     required: false
     default: false
-parameter_sets:
-  - id: windows_domain_join
-    label: "Windows domain join"
-    description: "Provide domain join credentials to add the VM to an Active Directory domain."
-    variants:
-      - id: domain_join_minimal
-        label: "Domain join without OU"
-        required:
-          - guest_domain_jointarget
-          - guest_domain_joinuid
-          - guest_domain_joinpw
-      - id: domain_join_with_ou
-        label: "Domain join with OU"
-        required:
-          - guest_domain_jointarget
-          - guest_domain_joinuid
-          - guest_domain_joinpw
-          - guest_domain_joinou
-  - id: linux_ansible
-    label: "Linux Ansible automation"
-    description: "Provide SSH credentials to enable Ansible automation on Linux guests."
-    mode: all-or-none
-    members:
-      - cnf_ansible_ssh_user
-      - cnf_ansible_ssh_key

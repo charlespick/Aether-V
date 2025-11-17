@@ -207,22 +207,30 @@ def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
 
 
 def get_job_schema() -> Dict[str, Any]:
-    """Return a composed schema from the three component schemas.
+    """Return a composed schema from component schemas including guest configuration.
     
     This function is kept for backward compatibility but the frontend should
-    directly fetch and compose the three component schemas.
+    directly fetch and compose the component schemas plus vm-initialize.
+    
+    The composed schema includes:
+    - vm-create: VM hardware fields
+    - disk-create: Disk fields (excluding vm_id)
+    - nic-create: NIC fields (excluding vm_id)  
+    - vm-initialize: Guest configuration fields (excluding vm_id and vm_name)
     """
-    # Compose schema from the three component schemas
+    # Compose schema from the component schemas
     vm_schema = load_schema_by_id("vm-create")
     disk_schema = load_schema_by_id("disk-create")
     nic_schema = load_schema_by_id("nic-create")
+    init_schema = load_schema_by_id("vm-initialize")
     
     # Build a combined field map
     all_fields = {}
-    for schema in [vm_schema, disk_schema, nic_schema]:
+    for schema in [vm_schema, disk_schema, nic_schema, init_schema]:
         for field in schema.get("fields", []):
-            # Skip vm_id fields as those are for component creation only
-            if field.get("id") != "vm_id":
+            # Skip vm_id and vm_name fields as those are for component creation only
+            # (vm_name is collected from vm-create schema, not from vm-initialize)
+            if field.get("id") not in ["vm_id", "vm_name"]:
                 all_fields[field["id"]] = field
     
     return {

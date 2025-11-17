@@ -79,6 +79,7 @@ async def lifespan(app: FastAPI):
         load_schema_by_id("vm-create")
         load_schema_by_id("disk-create")
         load_schema_by_id("nic-create")
+        load_schema_by_id("vm-initialize")
     except SchemaValidationError as exc:
         logger.error("Failed to load component schemas: %s", "; ".join(exc.errors))
         raise

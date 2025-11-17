@@ -782,16 +782,23 @@ async def create_managed_deployment(
     submission: JobSubmission,
     user: dict = Depends(require_permission(Permission.WRITER))
 ):
-    """Create a complete VM deployment with disk and network adapter.
+    """Create a complete VM deployment with disk, network adapter, and guest configuration.
     
-    The schema for this endpoint is composed client-side from vm-create, disk-create, 
-    and nic-create schemas. The server validates against each component schema.
+    The schema for this endpoint is composed client-side from vm-create, disk-create,  
+    nic-create, and vm-initialize schemas. The server validates against each component schema.
+    
+    The managed deployment orchestrates 4 steps:
+    1. Create VM (hardware only)
+    2. Attach disk
+    3. Attach network adapter
+    4. Initialize guest OS (hostname, IP, domain join, etc.)
     """
 
-    # Load the three component schemas for validation
+    # Load the component schemas for validation (including vm-initialize for guest config)
     vm_schema = load_schema_by_id("vm-create")
     disk_schema = load_schema_by_id("disk-create")
     nic_schema = load_schema_by_id("nic-create")
+    init_schema = load_schema_by_id("vm-initialize")
     
     # For version checking, use the VM schema version as the canonical version
     if submission.schema_version != vm_schema.get("version"):
@@ -805,15 +812,17 @@ async def create_managed_deployment(
         )
 
     # Validate fields against the appropriate schemas
-    # VM fields are required, disk and NIC fields are from their respective schemas
     try:
         # Create a combined field map for validation
+        # Include all fields from vm, disk, nic, and init schemas
+        # Skip vm_id (used internally) and vm_name from init (comes from vm-create)
         all_fields = {}
-        for schema in [vm_schema, disk_schema, nic_schema]:
+        for schema in [vm_schema, disk_schema, nic_schema, init_schema]:
             for field in schema.get("fields", []):
-                # Skip vm_id fields as those are for component creation only
-                if field.get("id") != "vm_id":
-                    all_fields[field["id"]] = field
+                # Skip vm_id and vm_name from init schema (vm_name comes from vm-create)
+                if field.get("id") not in ["vm_id", "vm_name"] or schema.get("id") == "vm-create":
+                    if field.get("id") not in all_fields:  # Avoid duplicate vm_name
+                        all_fields[field["id"]] = field
         
         # Build a temporary combined schema for validation
         combined_schema = {
@@ -860,7 +869,7 @@ async def create_managed_deployment(
             )
 
     # Job definition uses a virtual "managed-deployment" schema ID for tracking
-    # but the actual validation happens against the 3 component schemas
+    # but the actual validation happens against the 4 component schemas
     job_definition = {
         "schema": {
             "id": "managed-deployment",
