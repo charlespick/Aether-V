@@ -40,7 +40,11 @@ run:
 
 test:
 	@echo "⚠️  'make test' only runs Python tests for now. Run JavaScript and PowerShell tests manually."
-	pytest server/tests/
+	@if [ -f .venv/bin/pytest ]; then \
+		.venv/bin/pytest server/tests/; \
+	else \
+		pytest server/tests/; \
+	fi
 
 all: isos build
 	@echo "✅ All components built successfully"
