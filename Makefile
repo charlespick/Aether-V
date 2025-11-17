@@ -39,8 +39,8 @@ run:
 	docker run -p 8000:8000 --env-file server/.env aetherv:latest
 
 test:
-	@echo "Tests not yet implemented"
-# pytest server/tests/
+	@echo "⚠️  'make test' only runs Python tests for now. Run JavaScript and PowerShell tests manually."
+	pytest server/tests/
 
 all: isos build
 	@echo "✅ All components built successfully"
