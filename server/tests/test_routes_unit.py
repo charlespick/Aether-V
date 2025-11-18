@@ -3,7 +3,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.testclient import TestClient
 
 # Kerberos is disabled via environment variables in conftest.py
@@ -93,7 +93,10 @@ async def test_readiness_check_reflects_config_errors(monkeypatch):
 
     monkeypatch.setattr(routes, "get_config_validation_result", lambda: DummyResult())
 
-    response = await routes.readiness_check()
+    api_response = Response()
+
+    response = await routes.readiness_check(api_response)
+    assert api_response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert response.status == "config_error"
 
 
@@ -111,7 +114,10 @@ async def test_readiness_check_without_errors_reports_ready(monkeypatch):
     monkeypatch.setattr(routes, "build_metadata", fake_metadata)
     monkeypatch.setattr(routes, "get_config_validation_result", lambda: None)
 
-    response = await routes.readiness_check()
+    api_response = Response()
+
+    response = await routes.readiness_check(api_response)
+    assert api_response.status_code == status.HTTP_200_OK
     assert response.status == "ready"
 
 
