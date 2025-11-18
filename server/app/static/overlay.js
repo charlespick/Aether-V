@@ -1825,13 +1825,26 @@ class JobDetailsOverlay extends BaseOverlay {
         if (!jobType) {
             return 'Unknown';
         }
-        if (jobType === 'provision_vm') {
-            return 'Create VM';
+        const labels = {
+            managed_deployment: 'Managed Deployment',
+            provision_vm: 'Create VM',
+            create_vm: 'Create VM',
+            delete_vm: 'Delete VM',
+            create_disk: 'Create Disk',
+            update_vm: 'Update VM',
+            update_disk: 'Update Disk',
+            update_nic: 'Update NIC',
+            delete_disk: 'Delete Disk',
+            delete_nic: 'Delete NIC',
+            create_nic: 'Create NIC',
+            initialize_vm: 'Initialize VM',
+        };
+        if (labels[jobType]) {
+            return labels[jobType];
         }
-        if (jobType === 'delete_vm') {
-            return 'Delete VM';
-        }
-        return jobType.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+        return jobType
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, (char) => char.toUpperCase());
     }
 
     extractVmName(job) {
