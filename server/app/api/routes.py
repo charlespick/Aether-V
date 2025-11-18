@@ -1354,11 +1354,18 @@ async def initialize_vm_resource(
             },
         )
 
+    fields = {"vm_id": vm_id}
+    fields.update(request.guest_configuration)
+    fields["vm_id"] = vm_id
+
+    if not fields.get("vm_name"):
+        fields["vm_name"] = vm.name
+
     job_definition = {
         "schema": {
             "id": "initialize-vm",
         },
-        "fields": {"vm_id": vm_id, "guest_configuration": request.guest_configuration},
+        "fields": fields,
     }
 
     job = await job_service.submit_resource_job(
