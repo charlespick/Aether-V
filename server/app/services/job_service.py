@@ -833,7 +833,12 @@ class JobService:
             raise RuntimeError("Managed deployment job is missing a target host")
 
         fields = definition.get("fields", {})
-        schema_version = definition.get("schema", {}).get("version", 1)
+        schema_info = definition.get("schema", {})
+        schema_version = schema_info.get("version", 1)
+        component_versions = schema_info.get("components", {})
+        vm_schema_version = component_versions.get("vm-create", schema_version)
+        disk_schema_version = component_versions.get("disk-create", schema_version)
+        nic_schema_version = component_versions.get("nic-create", schema_version)
 
         await self._append_job_output(
             job.job_id,
@@ -870,7 +875,7 @@ class JobService:
                     nic_hardware_fields[field_id] = fields[field_id]
 
         vm_definition = {
-            "schema": {"id": "vm-create", "version": schema_version},
+            "schema": {"id": "vm-create", "version": vm_schema_version},
             "fields": vm_hardware_fields,
         }
 
@@ -907,7 +912,7 @@ class JobService:
             disk_fields["vm_id"] = vm_id
 
             disk_definition = {
-                "schema": {"id": "disk-create", "version": schema_version},
+                "schema": {"id": "disk-create", "version": disk_schema_version},
                 "fields": disk_fields,
             }
 
@@ -929,7 +934,7 @@ class JobService:
             nic_hardware_fields["vm_id"] = vm_id
 
             nic_definition = {
-                "schema": {"id": "nic-create", "version": schema_version},
+                "schema": {"id": "nic-create", "version": nic_schema_version},
                 "fields": nic_hardware_fields,
             }
 
@@ -956,7 +961,7 @@ class JobService:
             }
 
             init_job_definition = {
-                "schema": {"id": "initialize-vm", "version": schema_version},
+                "schema": {"id": "initialize-vm", "version": vm_schema_version},
                 "fields": init_fields,
             }
 
