@@ -1528,7 +1528,7 @@ class InventoryService:
         try:
             text = str(value).strip()
         except Exception:  # pragma: no cover - defensive
-            logger.debug("Unable to coerce %r to str", value)
+            logger.debug("Unable to coerce value of type %r to str", type(value).__name__)
             return None
 
         return text or None
