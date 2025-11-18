@@ -19,7 +19,6 @@ sys.modules['authlib.integrations.starlette_client'] = MagicMock()
 sys.modules['cryptography'] = MagicMock()
 sys.modules['cryptography.fernet'] = MagicMock()
 sys.modules['krb5'] = MagicMock()
-sys.modules['gssapi'] = MagicMock()
 sys.modules['pyspnego'] = MagicMock()
 sys.modules['ldap3'] = MagicMock()
 

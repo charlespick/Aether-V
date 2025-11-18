@@ -1,15 +1,8 @@
 """Tests for FastAPI lifespan behaviour in main application."""
 
-import sys
 from datetime import datetime
-from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
-
-sys.modules.setdefault("gssapi", MagicMock())
-sys.modules.setdefault("gssapi.raw", MagicMock())
-sys.modules.setdefault("dns", MagicMock())
-sys.modules.setdefault("dns.resolver", MagicMock())
 
 from app import main
 from app.core import config as app_config, config_validation
