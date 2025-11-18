@@ -281,10 +281,81 @@ def _current_build_info() -> BuildInfo:
 def _application_base_url(request: Request) -> str:
     """Construct the base application URL respecting HTTPS enforcement settings."""
 
+    def _normalize_host(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+
+        try:
+            parsed = urlsplit(f"//{value}", allow_fragments=False)
+        except ValueError:
+            return None
+
+        if not parsed.hostname:
+            return None
+
+        hostname = parsed.hostname.lower()
+        if parsed.port:
+            return f"{hostname}:{parsed.port}"
+        return hostname
+
+    def _host_is_allowed(host: str, allowed_hosts: List[str]) -> bool:
+        if not allowed_hosts:
+            return True
+
+        if host in allowed_hosts:
+            return True
+
+        hostname, _, _ = host.partition(":")
+        if hostname in allowed_hosts:
+            return True
+
+        for allowed in allowed_hosts:
+            allowed_hostname, _, _ = allowed.partition(":")
+            if allowed_hostname == hostname:
+                return True
+
+        return False
+
+    explicit_base = settings.get_application_base_url()
+    configured_scheme = None
+    configured_host = None
+
+    if explicit_base:
+        parsed_base = urlsplit(explicit_base)
+        configured_scheme = parsed_base.scheme
+        configured_host = parsed_base.netloc
+
+    allowed_hosts: List[str] = []
+    if configured_host:
+        allowed_hosts.append(configured_host.lower())
+
+    if settings.oidc_redirect_uri:
+        redirect_parts = urlsplit(settings.oidc_redirect_uri)
+        if redirect_parts.netloc:
+            allowed_hosts.append(redirect_parts.netloc.lower())
+            if not configured_scheme:
+                configured_scheme = redirect_parts.scheme
+            if not configured_host:
+                configured_host = redirect_parts.netloc
+
+    allowed_hosts.extend([_normalize_host(host) for host in getattr(settings, "trusted_hosts", [])])
+    allowed_hosts = [host for host in allowed_hosts if host]
+
     scheme = "https" if settings.oidc_force_https else request.url.scheme
-    host_header = request.headers.get("host")
-    if host_header:
-        return f"{scheme}://{host_header.rstrip('/')}"
+    preferred_scheme = "https" if settings.oidc_force_https else configured_scheme or scheme
+
+    host_header = _normalize_host(request.headers.get("host"))
+    if host_header and _host_is_allowed(host_header, allowed_hosts):
+        return f"{preferred_scheme}://{host_header}"
+
+    if host_header and allowed_hosts:
+        logger.warning("Rejecting untrusted Host header '%s'", request.headers.get("host"))
+
+    if configured_host:
+        return urlunsplit((preferred_scheme, configured_host, "", "", "")).rstrip("/")
+
+    if allowed_hosts:
+        return f"{preferred_scheme}://{allowed_hosts[0]}"
 
     base_url = str(request.base_url).rstrip("/")
     if settings.oidc_force_https and base_url.startswith("http://"):
@@ -1667,10 +1738,7 @@ async def login(request: Request):
     redirect_uri = settings.oidc_redirect_uri
     if not redirect_uri:
         # Auto-generate redirect URI
-        host = request.headers.get("host", str(
-            request.base_url).split("://")[1])
-        scheme = "https" if settings.oidc_force_https else request.url.scheme
-        redirect_uri = f"{scheme}://{host}/auth/callback"
+        redirect_uri = f"{_application_base_url(request)}/auth/callback"
 
     # Redirect to OIDC provider
     return await oauth.oidc.authorize_redirect(request, redirect_uri, state=state)

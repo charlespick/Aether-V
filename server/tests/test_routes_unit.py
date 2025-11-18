@@ -343,6 +343,8 @@ async def test_logout_get_prefers_idp_redirect(monkeypatch):
 async def test_logout_get_handles_post_logout_callback(monkeypatch):
     monkeypatch.setattr(routes.settings, "oidc_force_https", False)
     monkeypatch.setattr(routes.settings, "oidc_post_logout_redirect_uri", None)
+    monkeypatch.setattr(routes.settings, "application_base_url", None)
+    monkeypatch.setattr(routes.settings, "trusted_hosts", [])
 
     scope = {
         "type": "http",
@@ -362,3 +364,51 @@ async def test_logout_get_handles_post_logout_callback(monkeypatch):
 
     assert isinstance(response, routes.RedirectResponse)
     assert response.headers["location"] == "http://example.com/"
+
+
+def test_application_base_url_prefers_configured_base(monkeypatch):
+    monkeypatch.setattr(routes.settings, "application_base_url", "https://external.example")
+    monkeypatch.setattr(routes.settings, "oidc_redirect_uri", None)
+    monkeypatch.setattr(routes.settings, "trusted_hosts", [])
+    monkeypatch.setattr(routes.settings, "oidc_force_https", False)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"host", b"example.test")],
+        "client": ("127.0.0.1", 9999),
+        "scheme": "http",
+        "server": ("example.test", 80),
+        "query_string": b"",
+        "app": SimpleNamespace(),
+        "session": {},
+    }
+
+    request = Request(scope)
+
+    assert routes._application_base_url(request) == "https://external.example"
+
+
+def test_application_base_url_rejects_untrusted_host(monkeypatch):
+    monkeypatch.setattr(routes.settings, "application_base_url", None)
+    monkeypatch.setattr(routes.settings, "oidc_redirect_uri", "https://app.example/auth/callback")
+    monkeypatch.setattr(routes.settings, "trusted_hosts", ["app.example"])
+    monkeypatch.setattr(routes.settings, "oidc_force_https", True)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"host", b"malicious.test")],
+        "client": ("127.0.0.1", 9999),
+        "scheme": "http",
+        "server": ("malicious.test", 80),
+        "query_string": b"",
+        "app": SimpleNamespace(),
+        "session": {},
+    }
+
+    request = Request(scope)
+
+    assert routes._application_base_url(request) == "https://app.example"

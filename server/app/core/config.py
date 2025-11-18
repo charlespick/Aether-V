@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings
 
 
@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     oidc_force_https: bool = True  # Always use HTTPS for OIDC callbacks
     oidc_end_session_endpoint: Optional[str] = None  # Optional override for OIDC single logout
     oidc_post_logout_redirect_uri: Optional[str] = None  # Where IdPs should return users after logout
+    application_base_url: Optional[AnyHttpUrl] = None  # External base URL for callbacks and redirects
+    trusted_hosts: List[str] = Field(default_factory=list)  # Optional list of allowed host headers
 
     # Session management settings
     session_secret_key: Optional[str] = None  # Session middleware secret key
@@ -127,6 +129,14 @@ class Settings(BaseSettings):
     def version_file_path(self) -> str:
         """Get path to version file in container."""
         return str(AGENT_VERSION_PATH)
+
+    def get_application_base_url(self) -> Optional[str]:
+        """Return the configured application base URL if provided."""
+
+        if not self.application_base_url:
+            return None
+
+        return str(self.application_base_url).rstrip("/")
 
     class Config:
         env_file = ".env"
