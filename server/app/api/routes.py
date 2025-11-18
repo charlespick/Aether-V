@@ -866,6 +866,13 @@ async def create_disk_resource(
             detail="VM ID is required for disk creation",
         )
 
+    vm = _get_vm_or_404(vm_id)
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
     job_definition = {
         "schema": {
             "id": "disk-create",
@@ -1114,6 +1121,13 @@ async def create_nic_resource(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="VM ID is required for NIC creation",
+        )
+
+    vm = _get_vm_or_404(vm_id)
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
         )
 
     job_definition = {
