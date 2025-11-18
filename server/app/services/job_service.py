@@ -539,7 +539,7 @@ class JobService:
                 stream_type, payload = item
                 await self._handle_stream_chunk(job.job_id, stream_type, payload)
         finally:
-            await self._finalize_job_streams(job.job_id)
+            await self._finalize_job_streams(job.job_id, line_callback=line_callback)
 
         exit_code = await command_task
         if exit_code != 0:
@@ -707,30 +707,74 @@ class JobService:
         
         # Step 1: Create VM (hardware only, no guest config)
         await self._append_job_output(job.job_id, "Step 1/4: Creating virtual machine (hardware only)...")
-        
+
         vm_definition = {
             "schema": {"id": "vm-create", "version": schema_version},
             "fields": vm_hardware_fields,
         }
-        
+
         json_payload = await asyncio.to_thread(
             json.dumps, vm_definition, ensure_ascii=False, separators=(",", ":")
         )
         command = self._build_agent_invocation_command("Invoke-CreateVmJob.ps1", json_payload)
-        
+
+        vm_creation_lines: List[str] = []
+
+        def _capture_vm_output(line: str) -> None:
+            vm_creation_lines.append(line)
+
         # Execute VM creation and capture output
-        exit_code = await self._execute_agent_command(job, target_host, command)
+        exit_code = await self._execute_agent_command(
+            job, target_host, command, line_callback=_capture_vm_output
+        )
         if exit_code != 0:
             raise RuntimeError(f"VM creation failed with exit code {exit_code}")
-        
+
         await self._append_job_output(job.job_id, "✓ VM hardware created successfully")
-        
-        # TODO: Parse VM ID from job output
-        # For now, use vm_name as a placeholder - in production we'd parse JSON output
+
         vm_name = vm_hardware_fields.get("vm_name")
-        vm_id = "PLACEHOLDER-VM-ID"  # This should be parsed from the PowerShell JSON output
-        
-        await self._append_job_output(job.job_id, f"VM ID: {vm_id} (TODO: parse from output)")
+        vm_id: Optional[str] = None
+
+        for line in vm_creation_lines:
+            # Try direct JSON parse
+            parsed: Optional[Dict[str, Any]] = None
+            try:
+                candidate = line[line.index("{") : line.rindex("}") + 1]
+                parsed = json.loads(candidate)
+            except (ValueError, json.JSONDecodeError):
+                try:
+                    parsed = json.loads(line)
+                except Exception:
+                    parsed = None
+
+            if isinstance(parsed, dict):
+                for key in ("vm_id", "vmId", "id", "Id", "ID"):
+                    value = parsed.get(key)
+                    if isinstance(value, str) and value.strip():
+                        vm_id = value.strip()
+                        break
+                if not vm_id:
+                    nested_vm = parsed.get("vm")
+                    if isinstance(nested_vm, dict):
+                        for key in ("id", "vm_id", "vmId", "Id", "ID"):
+                            value = nested_vm.get(key)
+                            if isinstance(value, str) and value.strip():
+                                vm_id = value.strip()
+                                break
+            if vm_id:
+                break
+
+            id_match = re.search(r"vm[_\s-]?id\s*[:=]\s*([^\s]+)", line, flags=re.IGNORECASE)
+            if id_match:
+                vm_id = id_match.group(1).strip()
+                break
+
+        if not vm_id:
+            raise RuntimeError("Unable to parse VM ID from VM creation output")
+
+        job.parameters["vm_id"] = vm_id
+        await self._update_job(job.job_id, parameters=job.parameters)
+        await self._append_job_output(job.job_id, f"VM ID: {vm_id}")
         await self._append_job_output(job.job_id, "")
         
         # Step 2: Create and attach disk (if disk_size_gb is specified)
@@ -815,10 +859,13 @@ class JobService:
         await self._append_job_output(job.job_id, "=== Managed Deployment Complete ===")
         await self._append_job_output(job.job_id, f"VM '{vm_name}' fully deployed on {target_host}")
         await self._append_job_output(job.job_id, "")
-        await self._append_job_output(job.job_id, "Note: VM ID parsing from PowerShell output still needs implementation")
 
     async def _execute_agent_command(
-        self, job: Job, target_host: str, command: str
+        self,
+        job: Job,
+        target_host: str,
+        command: str,
+        line_callback: Optional[Callable[[str], None]] = None,
     ) -> int:
         """Helper to execute an agent command with streaming output."""
         loop = asyncio.get_running_loop()
@@ -853,14 +900,20 @@ class JobService:
                 if item is None:
                     break
                 stream_type, payload = item
-                await self._handle_stream_chunk(job.job_id, stream_type, payload)
+                await self._handle_stream_chunk(
+                    job.job_id, stream_type, payload, line_callback=line_callback
+                )
         finally:
-            await self._finalize_job_streams(job.job_id)
+            await self._finalize_job_streams(job.job_id, line_callback=line_callback)
 
         return await command_task
 
     async def _handle_stream_chunk(
-        self, job_id: str, stream: str, payload: str
+        self,
+        job_id: str,
+        stream: str,
+        payload: str,
+        line_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         if not payload:
             return
@@ -878,21 +931,46 @@ class JobService:
         if not lines:
             return
 
-        if stream.lower() == "stderr":
-            lines = [f"STDERR: {line}" for line in lines]
+        formatted_lines: List[str] = []
+        for line in lines:
+            if stream.lower() == "stdout" and line_callback:
+                try:
+                    line_callback(line)
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.exception("line_callback failed for job %s", job_id)
 
-        await self._append_job_output(job_id, *lines)
+            if stream.lower() == "stderr":
+                line = f"STDERR: {line}"
 
-    async def _finalize_job_streams(self, job_id: str) -> None:
+            formatted_lines.append(line)
+
+        await self._append_job_output(job_id, *formatted_lines)
+
+    async def _finalize_job_streams(
+        self,
+        job_id: str,
+        line_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
         pending_keys = [key for key in self._stream_decoders if key[0] == job_id]
         for key in pending_keys:
             decoder = self._stream_decoders.pop(key)
             trailing = decoder.finalize()
             if not trailing:
                 continue
-            if key[1] == "stderr":
-                trailing = [f"STDERR: {line}" for line in trailing]
-            await self._append_job_output(job_id, *trailing)
+            formatted_lines: List[str] = []
+            for line in trailing:
+                if key[1] == "stdout" and line_callback:
+                    try:
+                        line_callback(line)
+                    except Exception:  # pragma: no cover - defensive logging
+                        logger.exception("line_callback failed for job %s", job_id)
+
+                if key[1] == "stderr":
+                    line = f"STDERR: {line}"
+
+                formatted_lines.append(line)
+
+            await self._append_job_output(job_id, *formatted_lines)
 
     _CLIXML_PREFIX = "#< CLIXML"
     _CLIXML_TEXT_TAGS = {"S", "AV"}
