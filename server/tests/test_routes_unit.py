@@ -96,7 +96,7 @@ async def test_readiness_check_reflects_config_errors(monkeypatch):
     api_response = Response()
 
     response = await routes.readiness_check(api_response)
-    assert api_response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert api_response.status_code == status.HTTP_200_OK
     assert response.status == "config_error"
 
 

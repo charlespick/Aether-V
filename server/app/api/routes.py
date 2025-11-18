@@ -376,7 +376,7 @@ async def readiness_check(response: Response):
     # application and the user can see the configuration warning page.
     config_result = get_config_validation_result()
     if config_result and config_result.has_errors:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        response.status_code = status.HTTP_200_OK
         return HealthResponse(
             status="config_error",
             version=build_metadata.version,
