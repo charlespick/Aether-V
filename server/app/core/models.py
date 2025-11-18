@@ -191,6 +191,7 @@ class Job(BaseModel):
     output: List[str] = Field(default_factory=list)
     error: Optional[str] = None
     notification_id: Optional[str] = None
+    child_jobs: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class InventoryResponse(BaseModel):
