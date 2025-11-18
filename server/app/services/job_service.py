@@ -381,6 +381,16 @@ class JobService:
                     await self._execute_create_disk_job(job)
                 elif job.job_type == "create_nic":
                     await self._execute_create_nic_job(job)
+                elif job.job_type == "update_vm":
+                    await self._execute_update_vm_job(job)
+                elif job.job_type == "update_disk":
+                    await self._execute_update_disk_job(job)
+                elif job.job_type == "update_nic":
+                    await self._execute_update_nic_job(job)
+                elif job.job_type == "delete_disk":
+                    await self._execute_delete_disk_job(job)
+                elif job.job_type == "delete_nic":
+                    await self._execute_delete_nic_job(job)
                 elif job.job_type == "managed_deployment":
                     await self._execute_managed_deployment_job(job)
                 elif job.job_type == "initialize_vm":
@@ -638,6 +648,151 @@ class JobService:
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
             raise RuntimeError(f"NIC creation script exited with code {exit_code}")
+
+    async def _execute_update_vm_job(self, job: Job) -> None:
+        """Execute a VM update job."""
+
+        definition = job.parameters.get("definition", {})
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError("VM update job is missing a target host")
+
+        fields = definition.get("fields", {})
+        vm_id = fields.get("vm_id")
+        if not vm_id:
+            raise RuntimeError("VM update requires vm_id")
+
+        await self._validate_job_against_host_config(definition, target_host)
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(f"Failed to prepare host {target_host} for VM update")
+
+        json_payload = await asyncio.to_thread(
+            json.dumps, definition, ensure_ascii=False, separators=(",", ":")
+        )
+        command = self._build_agent_invocation_command(
+            "Invoke-UpdateVmJob.ps1", json_payload
+        )
+
+        exit_code = await self._execute_agent_command(job, target_host, command)
+        if exit_code != 0:
+            raise RuntimeError(f"VM update script exited with code {exit_code}")
+
+    async def _execute_update_disk_job(self, job: Job) -> None:
+        """Execute a disk update job."""
+
+        definition = job.parameters.get("definition", {})
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError("Disk update job is missing a target host")
+
+        fields = definition.get("fields", {})
+        vm_id = fields.get("vm_id")
+        if not vm_id:
+            raise RuntimeError("Disk update requires vm_id")
+
+        await self._validate_job_against_host_config(definition, target_host)
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(f"Failed to prepare host {target_host} for disk update")
+
+        json_payload = await asyncio.to_thread(
+            json.dumps, definition, ensure_ascii=False, separators=(",", ":")
+        )
+        command = self._build_agent_invocation_command(
+            "Invoke-UpdateDiskJob.ps1", json_payload
+        )
+
+        exit_code = await self._execute_agent_command(job, target_host, command)
+        if exit_code != 0:
+            raise RuntimeError(f"Disk update script exited with code {exit_code}")
+
+    async def _execute_update_nic_job(self, job: Job) -> None:
+        """Execute a NIC update job."""
+
+        definition = job.parameters.get("definition", {})
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError("NIC update job is missing a target host")
+
+        fields = definition.get("fields", {})
+        vm_id = fields.get("vm_id")
+        if not vm_id:
+            raise RuntimeError("NIC update requires vm_id")
+
+        await self._validate_job_against_host_config(definition, target_host)
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(f"Failed to prepare host {target_host} for NIC update")
+
+        json_payload = await asyncio.to_thread(
+            json.dumps, definition, ensure_ascii=False, separators=(",", ":")
+        )
+        command = self._build_agent_invocation_command(
+            "Invoke-UpdateNicJob.ps1", json_payload
+        )
+
+        exit_code = await self._execute_agent_command(job, target_host, command)
+        if exit_code != 0:
+            raise RuntimeError(f"NIC update script exited with code {exit_code}")
+
+    async def _execute_delete_disk_job(self, job: Job) -> None:
+        """Execute a disk deletion job."""
+
+        definition = job.parameters.get("definition", {})
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError("Disk deletion job is missing a target host")
+
+        fields = definition.get("fields", {})
+        vm_id = fields.get("vm_id")
+        resource_id = fields.get("resource_id")
+        if not vm_id or not resource_id:
+            raise RuntimeError("Disk deletion requires vm_id and resource_id")
+
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(f"Failed to prepare host {target_host} for disk deletion")
+
+        json_payload = await asyncio.to_thread(
+            json.dumps, fields, ensure_ascii=False, separators=(",", ":")
+        )
+        command = self._build_agent_invocation_command(
+            "Invoke-DeleteDiskJob.ps1", json_payload
+        )
+
+        exit_code = await self._execute_agent_command(job, target_host, command)
+        if exit_code != 0:
+            raise RuntimeError(f"Disk deletion script exited with code {exit_code}")
+
+    async def _execute_delete_nic_job(self, job: Job) -> None:
+        """Execute a NIC deletion job."""
+
+        definition = job.parameters.get("definition", {})
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError("NIC deletion job is missing a target host")
+
+        fields = definition.get("fields", {})
+        vm_id = fields.get("vm_id")
+        resource_id = fields.get("resource_id")
+        if not vm_id or not resource_id:
+            raise RuntimeError("NIC deletion requires vm_id and resource_id")
+
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(f"Failed to prepare host {target_host} for NIC deletion")
+
+        json_payload = await asyncio.to_thread(
+            json.dumps, fields, ensure_ascii=False, separators=(",", ":")
+        )
+        command = self._build_agent_invocation_command(
+            "Invoke-DeleteNicJob.ps1", json_payload
+        )
+
+        exit_code = await self._execute_agent_command(job, target_host, command)
+        if exit_code != 0:
+            raise RuntimeError(f"NIC deletion script exited with code {exit_code}")
 
     async def _execute_initialize_vm_job(self, job: Job) -> None:
         """Execute a VM initialization job that applies guest configuration."""

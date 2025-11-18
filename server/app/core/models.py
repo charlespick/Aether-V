@@ -165,10 +165,33 @@ class NicCreateRequest(ResourceCreateRequest):
     pass
 
 
+class ResourceUpdateRequest(ResourceCreateRequest):
+    """Request to update an existing resource."""
+
+    resource_id: str = Field(
+        ..., description="Hyper-V ID of the resource being updated"
+    )
+
+
 class ResourceDeleteRequest(BaseModel):
     """Request to delete a resource by ID."""
     resource_id: str = Field(..., description="Hyper-V ID of the resource to delete")
     hyperv_host: str = Field(..., description="Host where the resource is located")
+
+
+class VMInitializationRequest(BaseModel):
+    """Request to initialize an existing VM with guest configuration."""
+
+    target_host: str = Field(
+        ..., description="Hostname of the connected Hyper-V host that will execute the job"
+    )
+    guest_configuration: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Pre-formed guest configuration values to apply to the VM. External callers "
+            "must persist and supply these values when triggering initialization."
+        ),
+    )
 
 
 class JobResult(BaseModel):
