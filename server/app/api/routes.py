@@ -1999,7 +1999,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.close(code=1000, reason="Connection time limit reached")
                     break
 
-                data = await websocket.receive_json()
+                try:
+                    data = await asyncio.wait_for(
+                        websocket.receive_json(), timeout=MAX_CONNECTION_TIME
+                    )
+                except asyncio.TimeoutError:
+                    logger.info(
+                        f"WebSocket idle timeout reached for {client_id} ({username})"
+                    )
+                    await websocket.close(code=1000, reason="Connection idle timeout")
+                    break
                 await websocket_manager.handle_client_message(client_id, data)
             except WebSocketDisconnect:
                 logger.info(f"Client {client_id} ({username}) disconnected")
