@@ -1408,16 +1408,24 @@ async def create_managed_deployment(
     disk_schema = load_schema_by_id("disk-create")
     nic_schema = load_schema_by_id("nic-create")
     
-    # For version checking, use the VM schema version as the canonical version
-    if submission.schema_version != vm_schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": vm_schema.get("version"),
-                "received": submission.schema_version,
-            },
-        )
+    component_versions = {
+        "vm-create": vm_schema.get("version"),
+        "disk-create": disk_schema.get("version"),
+        "nic-create": nic_schema.get("version"),
+    }
+
+    # Ensure the submitted schema version matches each component schema
+    for schema_id, expected_version in component_versions.items():
+        if submission.schema_version != expected_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": f"Schema version mismatch for {schema_id}",
+                    "schema_id": schema_id,
+                    "expected": expected_version,
+                    "received": submission.schema_version,
+                },
+            )
 
     # Validate fields against the appropriate schemas
     try:
@@ -1489,6 +1497,7 @@ async def create_managed_deployment(
         "schema": {
             "id": "managed-deployment",
             "version": submission.schema_version,
+            "components": component_versions,
         },
         "fields": validated_values,
     }
