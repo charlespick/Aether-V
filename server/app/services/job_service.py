@@ -539,7 +539,7 @@ class JobService:
                 stream_type, payload = item
                 await self._handle_stream_chunk(job.job_id, stream_type, payload)
         finally:
-            await self._finalize_job_streams(job.job_id)
+            await self._finalize_job_streams(job.job_id, line_callback=line_callback)
 
         exit_code = await command_task
         if exit_code != 0:
@@ -904,7 +904,7 @@ class JobService:
                     job.job_id, stream_type, payload, line_callback=line_callback
                 )
         finally:
-            await self._finalize_job_streams(job.job_id)
+            await self._finalize_job_streams(job.job_id, line_callback=line_callback)
 
         return await command_task
 
@@ -946,16 +946,31 @@ class JobService:
 
         await self._append_job_output(job_id, *formatted_lines)
 
-    async def _finalize_job_streams(self, job_id: str) -> None:
+    async def _finalize_job_streams(
+        self,
+        job_id: str,
+        line_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
         pending_keys = [key for key in self._stream_decoders if key[0] == job_id]
         for key in pending_keys:
             decoder = self._stream_decoders.pop(key)
             trailing = decoder.finalize()
             if not trailing:
                 continue
-            if key[1] == "stderr":
-                trailing = [f"STDERR: {line}" for line in trailing]
-            await self._append_job_output(job_id, *trailing)
+            formatted_lines: List[str] = []
+            for line in trailing:
+                if key[1] == "stdout" and line_callback:
+                    try:
+                        line_callback(line)
+                    except Exception:  # pragma: no cover - defensive logging
+                        logger.exception("line_callback failed for job %s", job_id)
+
+                if key[1] == "stderr":
+                    line = f"STDERR: {line}"
+
+                formatted_lines.append(line)
+
+            await self._append_job_output(job_id, *formatted_lines)
 
     _CLIXML_PREFIX = "#< CLIXML"
     _CLIXML_TEXT_TAGS = {"S", "AV"}
