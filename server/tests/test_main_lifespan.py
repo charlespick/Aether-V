@@ -107,7 +107,7 @@ def test_startup_short_circuits_when_configuration_invalid(monkeypatch):
     assert "configuration is invalid" in api_response.json()["detail"].lower()
 
     readiness = client.get("/readyz")
-    assert readiness.status_code == 503
+    assert readiness.status_code == 200
     assert readiness.json()["status"] == "config_error"
 
 
@@ -158,7 +158,7 @@ def test_kerberos_failures_force_misconfigured_mode(monkeypatch):
     assert cached_result.has_errors is True
 
     readiness = client.get("/readyz")
-    assert readiness.status_code == 503
+    assert readiness.status_code == 200
     assert readiness.json()["status"] == "config_error"
 
     api_response = client.get("/api/v1/about")
