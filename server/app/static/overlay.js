@@ -1370,6 +1370,7 @@ class JobDetailsOverlay extends BaseOverlay {
         this.copyButtonEl = null;
         this.logContainerEl = null;
         this.logCodeEl = null;
+        this.childJobsContainer = null;
     }
 
     getTitle() {
@@ -1401,6 +1402,7 @@ class JobDetailsOverlay extends BaseOverlay {
         const logText = this.logLines.length ? this.logLines.join('\n') : 'Waiting for output...';
         const details = job.parameters ? JSON.stringify(job.parameters, null, 2) : '{}';
         const jobSummaryTitle = this.getJobSummaryTitle(job);
+        const childJobsSection = this.renderChildJobSection(job.child_jobs);
 
         return `
             <div class='job-details' data-job-id='${this.escapeHtml(jobId)}'>
@@ -1461,6 +1463,7 @@ class JobDetailsOverlay extends BaseOverlay {
                         <pre>${this.escapeHtml(details)}</pre>
                     </div>
                 </div>
+                ${childJobsSection}
                 <div class='job-section'>
                     <h3>Activity log</h3>
                     <div class='job-log-toolbar'>
@@ -1475,6 +1478,61 @@ class JobDetailsOverlay extends BaseOverlay {
                 ${job.error ? `<div class='job-section job-error'><h3>Error</h3><div class='job-error-box'><pre>${this.escapeHtml(job.error)}</pre></div></div>` : ''}
             </div>
         `;
+    }
+
+    renderChildJobSection(childJobs = []) {
+        const jobs = Array.isArray(childJobs) ? childJobs : [];
+        const shouldShow = jobs.length > 0 || this.job?.job_type === 'managed_deployment';
+        if (!shouldShow) {
+            return '';
+        }
+
+        const content = this.renderChildJobItems(jobs);
+        const fallback = '<div class="job-child-empty">Sub-jobs will appear once the deployment starts.</div>';
+
+        return `
+            <div class='job-section job-child-section'>
+                <h3>Sub-jobs</h3>
+                <div class='job-sub-jobs' data-field='child-jobs'>
+                    ${content || fallback}
+                </div>
+            </div>
+        `;
+    }
+
+    renderChildJobItems(childJobs = []) {
+        if (!Array.isArray(childJobs) || !childJobs.length) {
+            return '';
+        }
+
+        return childJobs
+            .map((child) => {
+                const jobId = child.job_id || '';
+                const status = child.status || 'pending';
+                const statusLabel = this.formatStatus(status);
+                const statusClass = `job-status-badge status-${status}`;
+                const jobTypeLabel = child.job_type_label || this.formatJobType(child.job_type || '');
+                const vmName = child.vm_name || jobId || 'Job';
+                const host = child.target_host || '—';
+
+                return `
+                    <div class='job-child-card'>
+                        <div class='job-child-main'>
+                            <div class='job-child-title'>${this.escapeHtml(jobTypeLabel)}</div>
+                            <div class='job-child-meta'>
+                                <span class='job-child-target'>${this.escapeHtml(vmName)}</span>
+                                <span class='job-child-host'>on ${this.escapeHtml(host)}</span>
+                                <span class='job-child-id'>ID: ${this.escapeHtml(jobId)}</span>
+                            </div>
+                        </div>
+                        <div class='job-child-actions'>
+                            <span class='${statusClass}'>${this.escapeHtml(statusLabel)}</span>
+                            <button class='job-child-view' data-sub-job-id='${this.escapeHtml(jobId)}' type='button'>View</button>
+                        </div>
+                    </div>
+                `;
+            })
+            .join('');
     }
 
     init() {
@@ -1500,12 +1558,14 @@ class JobDetailsOverlay extends BaseOverlay {
         this.copyButtonEl = document.getElementById('job-log-copy');
         this.logContainerEl = this.rootEl.querySelector('.job-output');
         this.logCodeEl = document.getElementById('job-log-output');
+        this.childJobsContainer = this.rootEl.querySelector('[data-field="child-jobs"]');
 
         this.autoScrollInput?.addEventListener('change', (event) => {
             this.followOutput = !!event.target.checked;
         });
         this.detailsToggleEl?.addEventListener('click', () => this.toggleDetails());
         this.copyButtonEl?.addEventListener('click', () => this.copyLogs());
+        this.bindChildJobLinks();
 
         this.refreshSummary();
         this.updateLog();
@@ -1562,6 +1622,7 @@ class JobDetailsOverlay extends BaseOverlay {
         if (this.imageEl) {
             this.imageEl.textContent = this.extractField(job, ['image_name', 'image']) || '—';
         }
+        this.updateChildJobs();
         this.updateTiming();
         if (job.status === 'running') {
             this.startDurationTimer();
@@ -1582,6 +1643,30 @@ class JobDetailsOverlay extends BaseOverlay {
         if (this.followOutput && this.logContainerEl) {
             this.logContainerEl.scrollTop = this.logContainerEl.scrollHeight;
         }
+    }
+
+    updateChildJobs() {
+        const container = this.childJobsContainer || this.rootEl?.querySelector('[data-field="child-jobs"]');
+        const children = Array.isArray(this.job?.child_jobs) ? this.job.child_jobs : [];
+        if (!container) {
+            return;
+        }
+
+        const content = this.renderChildJobItems(children);
+        container.innerHTML = content || '<div class="job-child-empty">Sub-jobs will appear once the deployment starts.</div>';
+        this.bindChildJobLinks();
+    }
+
+    bindChildJobLinks() {
+        const buttons = this.rootEl?.querySelectorAll('[data-sub-job-id]') || [];
+        buttons.forEach((button) => {
+            button.addEventListener('click', async () => {
+                const jobId = button.getAttribute('data-sub-job-id');
+                if (jobId && typeof window.openJobDetails === 'function') {
+                    await window.openJobDetails(jobId, { autoSubscribe: true });
+                }
+            });
+        });
     }
 
     appendLogLines(lines) {

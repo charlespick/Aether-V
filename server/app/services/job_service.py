@@ -183,7 +183,7 @@ class JobService:
         """Return the remote execution category and timeout for a job type."""
 
         # Long-running jobs that create/modify VMs
-        if job_type in {"delete_vm", "create_vm", "managed_deployment"}:
+        if job_type in {"delete_vm", "create_vm", "managed_deployment", "initialize_vm"}:
             return (
                 RemoteTaskCategory.JOB,
                 float(settings.job_long_timeout_seconds),
@@ -280,6 +280,7 @@ class JobService:
         schema_id: str,
         payload: Dict[str, Any],
         target_host: str,
+        parent_job_id: Optional[str] = None,
     ) -> Job:
         """Submit a resource creation/update/delete job."""
         
@@ -299,6 +300,7 @@ class JobService:
             parameters={
                 "definition": payload,
                 "schema_id": schema_id,
+                **({"parent_job_id": parent_job_id} if parent_job_id else {}),
             },
         )
         
@@ -358,9 +360,9 @@ class JobService:
         try:
             # Acquire host slot for jobs that need serialization
             job_types_needing_serialization = {
-                "delete_vm", "create_vm", "create_disk", 
-                "create_nic", "managed_deployment", "update_vm", "update_disk", 
-                "update_nic", "delete_disk", "delete_nic"
+                "delete_vm", "create_vm", "create_disk",
+                "create_nic", "update_vm", "update_disk",
+                "update_nic", "delete_disk", "delete_nic", "initialize_vm"
             }
             if job.job_type in job_types_needing_serialization and host_key:
                 await self._acquire_host_slot(host_key, job.job_id)
@@ -381,6 +383,8 @@ class JobService:
                     await self._execute_create_nic_job(job)
                 elif job.job_type == "managed_deployment":
                     await self._execute_managed_deployment_job(job)
+                elif job.job_type == "initialize_vm":
+                    await self._execute_initialize_vm_job(job)
                 else:
                     raise NotImplementedError(
                         f"Job type '{job.job_type}' is not supported"
@@ -635,23 +639,39 @@ class JobService:
         if exit_code != 0:
             raise RuntimeError(f"NIC creation script exited with code {exit_code}")
 
+    async def _execute_initialize_vm_job(self, job: Job) -> None:
+        """Execute a VM initialization job that applies guest configuration."""
+
+        definition = job.parameters.get("definition", {})
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError("VM initialization job is missing a target host")
+
+        fields = definition.get("fields", {})
+        vm_id = fields.get("vm_id")
+        if not vm_id:
+            raise RuntimeError("VM initialization requires vm_id")
+
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(f"Failed to prepare host {target_host} for initialization")
+
+        json_payload = await asyncio.to_thread(
+            json.dumps, fields, ensure_ascii=False, separators=(",", ":")
+        )
+        command = self._build_agent_invocation_command(
+            "Invoke-InitializeVmJob.ps1", json_payload
+        )
+
+        exit_code = await self._execute_agent_command(job, target_host, command)
+        if exit_code != 0:
+            raise RuntimeError(f"VM initialization script exited with code {exit_code}")
+
     async def _execute_managed_deployment_job(self, job: Job) -> None:
-        """Execute a managed deployment that orchestrates VM + disk + NIC + initialize server-side.
-        
-        This is server-side orchestration that calls 4 component scripts sequentially:
-        1. Invoke-CreateVmJob.ps1 - creates the VM (hardware only) and returns its ID
-        2. Invoke-CreateDiskJob.ps1 - creates and attaches disk to the VM
-        3. Invoke-CreateNicJob.ps1 - creates and attaches NIC to the VM (hardware only)
-        4. Invoke-InitializeVmJob.ps1 - applies guest configuration (hostname, IP, domain join, etc.)
-        
-        The managed deployment job type exists to provide a simplified UX where users
-        don't need to manually orchestrate the 4 API calls and track resource IDs.
-        
-        Guest configuration fields (marked with guest_config: true in schemas) are held
-        during VM/disk/NIC creation and then passed to the initialization step.
-        """
+        """Execute a managed deployment via component sub-jobs instead of direct scripts."""
+
         from ..core.job_schema import load_schema_by_id
-        
+
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -659,33 +679,22 @@ class JobService:
 
         fields = definition.get("fields", {})
         schema_version = definition.get("schema", {}).get("version", 1)
-        
-        await self._append_job_output(job.job_id, "=== Managed Deployment: 4-Step Orchestration ===")
-        await self._append_job_output(job.job_id, f"Target host: {target_host}")
-        await self._append_job_output(job.job_id, "")
-        
-        # Prepare host
+
+        await self._append_job_output(
+            job.job_id,
+            "Managed deployment is orchestrating component jobs. See sub-job list for progress.",
+        )
+
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
             raise RuntimeError(f"Failed to prepare host {target_host} for deployment")
-        
-        # Load schemas to determine which fields are guest config
+
         vm_schema = load_schema_by_id("vm-create")
         nic_schema = load_schema_by_id("nic-create")
-        
-        # Build sets of guest config field IDs
-        guest_config_field_ids = set()
-        for field in vm_schema.get("fields", []):
-            if field.get("guest_config", False):
-                guest_config_field_ids.add(field.get("id"))
-        for field in nic_schema.get("fields", []):
-            if field.get("guest_config", False):
-                guest_config_field_ids.add(field.get("id"))
-        
-        # Separate VM hardware fields from guest configuration fields
-        vm_hardware_fields = {}
-        vm_guest_config_fields = {}
+
+        vm_hardware_fields: Dict[str, Any] = {}
+        vm_guest_config_fields: Dict[str, Any] = {}
         for field in vm_schema.get("fields", []):
             field_id = field.get("id")
             if field_id in fields:
@@ -693,50 +702,223 @@ class JobService:
                     vm_guest_config_fields[field_id] = fields[field_id]
                 else:
                     vm_hardware_fields[field_id] = fields[field_id]
-        
-        # Separate NIC hardware fields from guest IP configuration fields
-        nic_hardware_fields = {}
-        nic_guest_config_fields = {}
+
+        nic_hardware_fields: Dict[str, Any] = {}
+        nic_guest_config_fields: Dict[str, Any] = {}
         for field in nic_schema.get("fields", []):
             field_id = field.get("id")
             if field_id in fields:
                 if field.get("guest_config", False):
                     nic_guest_config_fields[field_id] = fields[field_id]
-                elif field_id != "vm_id":  # Skip vm_id (added dynamically)
+                elif field_id != "vm_id":
                     nic_hardware_fields[field_id] = fields[field_id]
-        
-        # Step 1: Create VM (hardware only, no guest config)
-        await self._append_job_output(job.job_id, "Step 1/4: Creating virtual machine (hardware only)...")
 
         vm_definition = {
             "schema": {"id": "vm-create", "version": schema_version},
             "fields": vm_hardware_fields,
         }
 
-        json_payload = await asyncio.to_thread(
-            json.dumps, vm_definition, ensure_ascii=False, separators=(",", ":")
+        vm_job = await self._queue_child_job(
+            job,
+            job_type="create_vm",
+            schema_id="vm-create",
+            payload=vm_definition,
         )
-        command = self._build_agent_invocation_command("Invoke-CreateVmJob.ps1", json_payload)
+        vm_job_result = await self._wait_for_child_job_completion(job.job_id, vm_job.job_id)
+        if vm_job_result.status != JobStatus.COMPLETED:
+            raise RuntimeError(
+                f"VM creation job {vm_job.job_id} failed: {vm_job_result.error or 'unknown error'}"
+            )
 
-        vm_creation_lines: List[str] = []
+        vm_id = self._extract_vm_id_from_output(vm_job_result.output)
+        if not vm_id:
+            raise RuntimeError("Unable to parse VM ID from VM creation output")
 
-        def _capture_vm_output(line: str) -> None:
-            vm_creation_lines.append(line)
-
-        # Execute VM creation and capture output
-        exit_code = await self._execute_agent_command(
-            job, target_host, command, line_callback=_capture_vm_output
-        )
-        if exit_code != 0:
-            raise RuntimeError(f"VM creation failed with exit code {exit_code}")
-
-        await self._append_job_output(job.job_id, "✓ VM hardware created successfully")
+        job.parameters["vm_id"] = vm_id
+        await self._update_job(job.job_id, parameters=job.parameters)
 
         vm_name = vm_hardware_fields.get("vm_name")
-        vm_id: Optional[str] = None
 
-        for line in vm_creation_lines:
-            # Try direct JSON parse
+        if fields.get("disk_size_gb"):
+            disk_fields = {
+                "vm_id": vm_id,
+                "disk_size_gb": fields.get("disk_size_gb"),
+            }
+            if fields.get("storage_class"):
+                disk_fields["storage_class"] = fields.get("storage_class")
+
+            disk_definition = {
+                "schema": {"id": "disk-create", "version": schema_version},
+                "fields": disk_fields,
+            }
+
+            disk_job = await self._queue_child_job(
+                job,
+                job_type="create_disk",
+                schema_id="disk-create",
+                payload=disk_definition,
+            )
+            disk_job_result = await self._wait_for_child_job_completion(
+                job.job_id, disk_job.job_id
+            )
+            if disk_job_result.status != JobStatus.COMPLETED:
+                raise RuntimeError(
+                    f"Disk creation job {disk_job.job_id} failed: {disk_job_result.error or 'unknown error'}"
+                )
+
+        if nic_hardware_fields.get("network"):
+            nic_hardware_fields["vm_id"] = vm_id
+
+            nic_definition = {
+                "schema": {"id": "nic-create", "version": schema_version},
+                "fields": nic_hardware_fields,
+            }
+
+            nic_job = await self._queue_child_job(
+                job,
+                job_type="create_nic",
+                schema_id="nic-create",
+                payload=nic_definition,
+            )
+            nic_job_result = await self._wait_for_child_job_completion(
+                job.job_id, nic_job.job_id
+            )
+            if nic_job_result.status != JobStatus.COMPLETED:
+                raise RuntimeError(
+                    f"NIC creation job {nic_job.job_id} failed: {nic_job_result.error or 'unknown error'}"
+                )
+
+        all_guest_config_fields = {**vm_guest_config_fields, **nic_guest_config_fields}
+        if all_guest_config_fields:
+            init_fields = {
+                "vm_id": vm_id,
+                "vm_name": vm_name,
+                **all_guest_config_fields,
+            }
+
+            init_job_definition = {
+                "schema": {"id": "initialize-vm", "version": schema_version},
+                "fields": init_fields,
+            }
+
+            init_job = await self._queue_child_job(
+                job,
+                job_type="initialize_vm",
+                schema_id="initialize-vm",
+                payload=init_job_definition,
+            )
+            init_job_result = await self._wait_for_child_job_completion(
+                job.job_id, init_job.job_id
+            )
+            if init_job_result.status != JobStatus.COMPLETED:
+                raise RuntimeError(
+                    f"VM initialization job {init_job.job_id} failed: {init_job_result.error or 'unknown error'}"
+                )
+
+        await self._append_job_output(
+            job.job_id,
+            f"Managed deployment complete. VM '{vm_name or vm_id}' fully deployed on {target_host}.",
+        )
+
+    async def _queue_child_job(
+        self,
+        parent_job: Job,
+        job_type: str,
+        schema_id: str,
+        payload: Dict[str, Any],
+    ) -> Job:
+        """Queue a component job and track it against the parent deployment job."""
+
+        child_job = await self.submit_resource_job(
+            job_type=job_type,
+            schema_id=schema_id,
+            payload=payload,
+            target_host=parent_job.target_host or "",
+            parent_job_id=parent_job.job_id,
+        )
+
+        await self._update_child_job_summary(parent_job.job_id, child_job.job_id)
+        return child_job
+
+    async def _wait_for_child_job_completion(
+        self, parent_job_id: str, child_job_id: str
+    ) -> Job:
+        """Poll for child job completion while syncing status to the parent job."""
+
+        last_status: Optional[JobStatus] = None
+        while True:
+            async with self._lock:
+                child_job = self.jobs.get(child_job_id)
+
+            if not child_job:
+                raise RuntimeError(f"Child job {child_job_id} not found")
+
+            if child_job.status != last_status:
+                await self._update_child_job_summary(parent_job_id, child_job_id)
+                last_status = child_job.status
+
+            if child_job.status in {JobStatus.COMPLETED, JobStatus.FAILED}:
+                await self._update_child_job_summary(parent_job_id, child_job_id)
+                return self._prepare_job_response(child_job)
+
+            await asyncio.sleep(1)
+
+    async def _update_child_job_summary(
+        self, parent_job_id: str, child_job_id: str
+    ) -> None:
+        """Update the parent job's child job list with the latest child status."""
+
+        async with self._lock:
+            parent_job = self.jobs.get(parent_job_id)
+            child_job = self.jobs.get(child_job_id)
+            existing_children = list(parent_job.child_jobs) if parent_job else []
+
+        if not parent_job or not child_job:
+            return
+
+        summary = self._build_child_job_summary(child_job)
+        updated_children = self._merge_child_job_list(existing_children, summary)
+        await self._update_job(parent_job_id, child_jobs=updated_children)
+
+    def _build_child_job_summary(self, child_job: Job) -> Dict[str, Any]:
+        """Build a lightweight summary for UI consumption."""
+
+        status_value = (
+            child_job.status.value if isinstance(child_job.status, JobStatus) else child_job.status
+        )
+        return {
+            "job_id": child_job.job_id,
+            "job_type": child_job.job_type,
+            "job_type_label": self._job_type_label(child_job),
+            "status": status_value,
+            "created_at": child_job.created_at,
+            "started_at": child_job.started_at,
+            "completed_at": child_job.completed_at,
+            "target_host": child_job.target_host,
+            "error": child_job.error,
+            "vm_name": self._extract_vm_name(child_job),
+        }
+
+    @staticmethod
+    def _merge_child_job_list(
+        existing_children: List[Dict[str, Any]], new_child: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        replaced = False
+        for child in existing_children:
+            if child.get("job_id") == new_child.get("job_id"):
+                merged.append(new_child)
+                replaced = True
+            else:
+                merged.append(child)
+        if not replaced:
+            merged.append(new_child)
+        return merged
+
+    def _extract_vm_id_from_output(self, lines: List[str]) -> Optional[str]:
+        """Parse a VM ID from the output of a child VM creation job."""
+
+        for line in lines:
             parsed: Optional[Dict[str, Any]] = None
             try:
                 candidate = line[line.index("{") : line.rindex("}") + 1]
@@ -751,114 +933,20 @@ class JobService:
                 for key in ("vm_id", "vmId", "id", "Id", "ID"):
                     value = parsed.get(key)
                     if isinstance(value, str) and value.strip():
-                        vm_id = value.strip()
-                        break
-                if not vm_id:
-                    nested_vm = parsed.get("vm")
-                    if isinstance(nested_vm, dict):
-                        for key in ("id", "vm_id", "vmId", "Id", "ID"):
-                            value = nested_vm.get(key)
-                            if isinstance(value, str) and value.strip():
-                                vm_id = value.strip()
-                                break
-            if vm_id:
-                break
+                        return value.strip()
+
+                nested_vm = parsed.get("vm")
+                if isinstance(nested_vm, dict):
+                    for key in ("id", "vm_id", "vmId", "Id", "ID"):
+                        value = nested_vm.get(key)
+                        if isinstance(value, str) and value.strip():
+                            return value.strip()
 
             id_match = re.search(r"vm[_\s-]?id\s*[:=]\s*([^\s]+)", line, flags=re.IGNORECASE)
             if id_match:
-                vm_id = id_match.group(1).strip()
-                break
+                return id_match.group(1).strip()
 
-        if not vm_id:
-            raise RuntimeError("Unable to parse VM ID from VM creation output")
-
-        job.parameters["vm_id"] = vm_id
-        await self._update_job(job.job_id, parameters=job.parameters)
-        await self._append_job_output(job.job_id, f"VM ID: {vm_id}")
-        await self._append_job_output(job.job_id, "")
-        
-        # Step 2: Create and attach disk (if disk_size_gb is specified)
-        if fields.get("disk_size_gb"):
-            await self._append_job_output(job.job_id, "Step 2/4: Creating and attaching disk...")
-            
-            disk_fields = {
-                "vm_id": vm_id,
-                "disk_size_gb": fields.get("disk_size_gb"),
-            }
-            if fields.get("storage_class"):
-                disk_fields["storage_class"] = fields.get("storage_class")
-            
-            disk_definition = {
-                "schema": {"id": "disk-create", "version": schema_version},
-                "fields": disk_fields,
-            }
-            
-            json_payload = await asyncio.to_thread(
-                json.dumps, disk_definition, ensure_ascii=False, separators=(",", ":")
-            )
-            command = self._build_agent_invocation_command("Invoke-CreateDiskJob.ps1", json_payload)
-            
-            exit_code = await self._execute_agent_command(job, target_host, command)
-            if exit_code != 0:
-                raise RuntimeError(f"Disk creation failed with exit code {exit_code}")
-            
-            await self._append_job_output(job.job_id, "✓ Disk created and attached successfully")
-            await self._append_job_output(job.job_id, "")
-        
-        # Step 3: Create and attach NIC (hardware only, if network is specified)
-        if nic_hardware_fields.get("network"):
-            await self._append_job_output(job.job_id, "Step 3/4: Creating and attaching network adapter (hardware only)...")
-            
-            # Add vm_id to NIC hardware fields
-            nic_hardware_fields["vm_id"] = vm_id
-            
-            nic_definition = {
-                "schema": {"id": "nic-create", "version": schema_version},
-                "fields": nic_hardware_fields,
-            }
-            
-            json_payload = await asyncio.to_thread(
-                json.dumps, nic_definition, ensure_ascii=False, separators=(",", ":")
-            )
-            command = self._build_agent_invocation_command("Invoke-CreateNicJob.ps1", json_payload)
-            
-            exit_code = await self._execute_agent_command(job, target_host, command)
-            if exit_code != 0:
-                raise RuntimeError(f"NIC creation failed with exit code {exit_code}")
-            
-            await self._append_job_output(job.job_id, "✓ Network adapter created and attached successfully")
-            await self._append_job_output(job.job_id, "")
-        
-        # Step 4: Initialize VM with guest configuration (if any guest config fields provided)
-        # Combine VM guest config fields and NIC guest IP config fields
-        all_guest_config_fields = {**vm_guest_config_fields, **nic_guest_config_fields}
-        
-        if all_guest_config_fields:
-            await self._append_job_output(job.job_id, "Step 4/4: Initializing VM with guest configuration...")
-            
-            # Add VM ID and name to guest config
-            init_fields = {
-                "vm_id": vm_id,
-                "vm_name": vm_name,
-                **all_guest_config_fields
-            }
-            
-            # Call initialization script (no schema, direct field passing)
-            json_payload = await asyncio.to_thread(
-                json.dumps, init_fields, ensure_ascii=False, separators=(",", ":")
-            )
-            command = self._build_agent_invocation_command("Invoke-InitializeVmJob.ps1", json_payload)
-            
-            exit_code = await self._execute_agent_command(job, target_host, command)
-            if exit_code != 0:
-                raise RuntimeError(f"VM initialization failed with exit code {exit_code}")
-            
-            await self._append_job_output(job.job_id, "✓ VM initialized with guest configuration")
-            await self._append_job_output(job.job_id, "")
-        
-        await self._append_job_output(job.job_id, "=== Managed Deployment Complete ===")
-        await self._append_job_output(job.job_id, f"VM '{vm_name}' fully deployed on {target_host}")
-        await self._append_job_output(job.job_id, "")
+        return None
 
     async def _execute_agent_command(
         self,
@@ -1156,6 +1244,8 @@ class JobService:
             return "Delete Disk"
         if job.job_type == "delete_nic":
             return "Delete Network Adapter"
+        if job.job_type == "initialize_vm":
+            return "Initialize VM"
         return job.job_type.replace("_", " ").title()
 
     def _extract_vm_name(self, job: Job) -> Optional[str]:
