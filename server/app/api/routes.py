@@ -9,7 +9,7 @@ import secrets
 import uuid
 import zlib
 from urllib.parse import urlencode, urlsplit, urlunsplit
-from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
 from datetime import datetime
@@ -368,7 +368,7 @@ async def health_check():
 
 
 @router.get("/readyz", response_model=HealthResponse, tags=["Health"])
-async def readiness_check():
+async def readiness_check(response: Response):
     """Readiness check endpoint."""
 
     # When startup detected configuration errors we still want the
@@ -376,6 +376,7 @@ async def readiness_check():
     # application and the user can see the configuration warning page.
     config_result = get_config_validation_result()
     if config_result and config_result.has_errors:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return HealthResponse(
             status="config_error",
             version=build_metadata.version,
@@ -385,6 +386,7 @@ async def readiness_check():
 
     readiness_status = "ready"
 
+    response.status_code = status.HTTP_200_OK
     return HealthResponse(
         status=readiness_status,
         version=build_metadata.version,
