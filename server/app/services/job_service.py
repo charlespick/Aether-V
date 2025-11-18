@@ -16,13 +16,7 @@ from xml.etree import ElementTree
 
 from ..core.config import settings
 from ..core.job_schema import redact_job_parameters
-from ..core.models import (
-    Job,
-    JobStatus,
-    JobSubmission,
-    VMDeleteRequest,
-    NotificationLevel,
-)
+from ..core.models import Job, JobStatus, VMDeleteRequest, NotificationLevel
 from .host_deployment_service import host_deployment_service
 from .host_resources_service import host_resources_service
 from .notification_service import notification_service
@@ -553,7 +547,7 @@ class JobService:
                 stream_type, payload = item
                 await self._handle_stream_chunk(job.job_id, stream_type, payload)
         finally:
-            await self._finalize_job_streams(job.job_id, line_callback=line_callback)
+            await self._finalize_job_streams(job.job_id)
 
         exit_code = await command_task
         if exit_code != 0:

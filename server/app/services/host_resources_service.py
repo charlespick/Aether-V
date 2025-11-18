@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from ..core.config import settings
 from .winrm_service import winrm_service
 
 logger = logging.getLogger(__name__)

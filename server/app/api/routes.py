@@ -33,7 +33,6 @@ from ..core.models import (
     ResourceCreateRequest,
     DiskCreateRequest,
     NicCreateRequest,
-    ResourceDeleteRequest,
     ResourceUpdateRequest,
     VMInitializationRequest,
     JobResult,
@@ -1874,7 +1873,7 @@ async def get_auth_token(request: Request):
                             "identity_type": user_info.get("identity_type"),
                         }
                     }
-            except Exception as e:
+            except Exception:
                 # Session is invalid, clear it
                 request.session.pop("user_info", None)
                 # Log the stack trace for debugging, but do not return details to the user

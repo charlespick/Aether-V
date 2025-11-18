@@ -38,9 +38,7 @@ class SchemaValidationError(Exception):
 
 def load_schema_by_id(schema_id: str) -> Dict[str, Any]:
     """Load and validate a schema by its ID."""
-    
-    global _SCHEMA_CACHE
-    
+
     # Check cache first
     if schema_id in _SCHEMA_CACHE:
         return _SCHEMA_CACHE[schema_id]
@@ -53,7 +51,7 @@ def load_schema_by_id(schema_id: str) -> Dict[str, Any]:
             break
     
     if not schemas_dir:
-        raise SchemaValidationError([f"Schemas directory not found"])
+        raise SchemaValidationError(["Schemas directory not found"])
     
     # Try to find schema file by ID
     schema_path = None
@@ -66,13 +64,13 @@ def load_schema_by_id(schema_id: str) -> Dict[str, Any]:
     if not schema_path:
         raise SchemaValidationError([f"Schema file not found for ID: {schema_id}"])
     
-    return load_job_schema(schema_path)
+    schema = load_job_schema(schema_path)
+    _SCHEMA_CACHE[schema_id] = schema
+    return schema
 
 
 def load_job_schema(path: Optional[Path] = None) -> Dict[str, Any]:
     """Load and validate the job input schema from disk."""
-
-    global _SCHEMA_CACHE
     if not path:
         raise SchemaValidationError(["Schema path is required. Use load_schema_by_id() instead."])
     
