@@ -1564,6 +1564,70 @@ tbody tr:last-child td {
     margin-bottom: 12px;
 }
 
+.job-child-section .job-sub-jobs {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.job-child-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--card-bg);
+}
+
+.job-child-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.job-child-title {
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.job-child-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: var(--muted-ink);
+    font-size: 13px;
+}
+
+.job-child-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.job-child-view {
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--ink);
+    padding: 6px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.job-child-view:hover {
+    background: var(--muted);
+}
+
+.job-child-id {
+    font-family: monospace;
+}
+
+.job-child-empty {
+    color: var(--muted-ink);
+    font-size: 14px;
+}
+
 .job-output {
     background: #1e1e1e;
     color: #d4d4d4;

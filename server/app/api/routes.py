@@ -1,6 +1,7 @@
 """API route handlers."""
 import asyncio
 import base64
+import copy
 import json
 import logging
 import traceback
@@ -8,7 +9,7 @@ import secrets
 import uuid
 import zlib
 from urllib.parse import urlencode, urlsplit, urlunsplit
-from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
 from datetime import datetime
@@ -17,6 +18,8 @@ from dataclasses import dataclass
 from ..core.models import (
     Host,
     VM,
+    VMDisk,
+    VMNetworkAdapter,
     Job,
     VMDeleteRequest,
     InventoryResponse,
@@ -27,6 +30,12 @@ from ..core.models import (
     BuildInfo,
     VMState,
     ServiceDiagnosticsResponse,
+    ResourceCreateRequest,
+    DiskCreateRequest,
+    NicCreateRequest,
+    ResourceUpdateRequest,
+    VMInitializationRequest,
+    JobResult,
 )
 from ..core.auth import (
     Permission,
@@ -45,7 +54,7 @@ from ..core.config import settings, get_config_validation_result
 from ..core.build_info import build_metadata
 from ..core.job_schema import (
     SchemaValidationError,
-    get_job_schema,
+    load_schema_by_id,
     validate_job_submission,
 )
 from ..services.inventory_service import inventory_service
@@ -149,6 +158,59 @@ def _normalize_vm_state(state: Optional[object]) -> VMState:
             if candidate.value.lower() == normalized:
                 return candidate
     return VMState.UNKNOWN
+
+
+def _ensure_connected_host(hostname: str) -> None:
+    """Validate that the specified host is connected."""
+
+    host_record = inventory_service.hosts.get(hostname)
+    if not host_record or not host_record.connected:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Host {hostname} is not currently connected",
+        )
+
+
+def _get_vm_or_404(vm_id: str) -> VM:
+    """Return a VM by ID or raise a 404 error."""
+
+    vm = inventory_service.get_vm_by_id(vm_id)
+    if not vm:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"VM with ID {vm_id} not found",
+        )
+    return vm
+
+
+def _build_schema_with_vm_id(schema: Dict[str, object]) -> Dict[str, object]:
+    """Add vm_id to the provided schema for update and initialization flows."""
+
+    schema_copy = copy.deepcopy(schema)
+    field_ids = {field.get("id") for field in schema_copy.get("fields", [])}
+    if "vm_id" not in field_ids:
+        schema_copy.setdefault("fields", []).append(
+            {
+                "id": "vm_id",
+                "type": "string",
+                "required": True,
+                "label": "VM ID",
+                "description": "Hyper-V unique ID for the virtual machine",
+            }
+        )
+    return schema_copy
+
+
+def _find_vm_disk(vm: VM, disk_id: str) -> Optional[VMDisk]:
+    """Locate a disk by ID on a VM."""
+
+    return next((disk for disk in vm.disks if disk.id == disk_id), None)
+
+
+def _find_vm_nic(vm: VM, nic_id: str) -> Optional[VMNetworkAdapter]:
+    """Locate a NIC by ID on a VM."""
+
+    return next((nic for nic in vm.networks if nic.id == nic_id), None)
 
 
 async def _handle_vm_action(
@@ -306,7 +368,7 @@ async def health_check():
 
 
 @router.get("/readyz", response_model=HealthResponse, tags=["Health"])
-async def readiness_check():
+async def readiness_check(response: Response):
     """Readiness check endpoint."""
 
     # When startup detected configuration errors we still want the
@@ -314,6 +376,7 @@ async def readiness_check():
     # application and the user can see the configuration warning page.
     config_result = get_config_validation_result()
     if config_result and config_result.has_errors:
+        response.status_code = status.HTTP_200_OK
         return HealthResponse(
             status="config_error",
             version=build_metadata.version,
@@ -323,6 +386,7 @@ async def readiness_check():
 
     readiness_status = "ready"
 
+    response.status_code = status.HTTP_200_OK
     return HealthResponse(
         status=readiness_status,
         version=build_metadata.version,
@@ -478,81 +542,6 @@ async def reset_vm_action(
     return await _handle_vm_action("reset", hostname, vm_name)
 
 
-@router.get("/api/v1/schema/job-inputs", tags=["Schema"])
-async def get_job_input_schema(user: dict = Depends(require_permission(Permission.READER))):
-    """Return the active job input schema."""
-    return get_job_schema()
-
-
-@router.post("/api/v1/jobs/provision", response_model=Job, tags=["Jobs"])
-async def submit_provisioning_job(
-    submission: JobSubmission,
-    user: dict = Depends(require_permission(Permission.WRITER))
-):
-    """Accept a schema-driven provisioning request."""
-
-    schema = get_job_schema()
-    if submission.schema_version != schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": schema.get("version"),
-                "received": submission.schema_version,
-            },
-        )
-
-    try:
-        validated_values = validate_job_submission(submission.values, schema)
-    except SchemaValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": exc.errors})
-
-    if not host_deployment_service.is_provisioning_available():
-        summary = host_deployment_service.get_startup_summary()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "message": "Provisioning agents are still deploying. VM provisioning is temporarily unavailable.",
-                "agent_deployment": summary,
-            },
-        )
-
-    target_host = (submission.target_host or "").strip()
-    if not target_host:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Target host is required",
-        )
-
-    connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
-    if not host_match:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host {target_host} is not currently connected",
-        )
-
-    vm_name = validated_values.get("vm_name")
-    if vm_name:
-        existing_vm = inventory_service.get_vm(target_host, vm_name)
-        if existing_vm:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"VM {vm_name} already exists on host {target_host}",
-            )
-
-    schema_id = schema.get("id", "vm-provisioning") if schema else "vm-provisioning"
-    job_definition = {
-        "schema": {
-            "id": schema_id,
-            "version": submission.schema_version,
-        },
-        "fields": validated_values,
-    }
-    job = await job_service.submit_provisioning_job(submission, job_definition, target_host)
-    return job
-
-
 @router.post("/api/v1/vms/delete", response_model=Job, tags=["VMs"])
 async def delete_vm(
     request: VMDeleteRequest,
@@ -617,6 +606,944 @@ async def get_job(
         )
 
     return job
+
+
+# New Resource-based API endpoints
+
+@router.get("/api/v1/resources/vms", response_model=List[VM], tags=["Resources"])
+async def list_vm_resources(
+    user: dict = Depends(require_permission(Permission.READER)),
+):
+    """List all VM resources."""
+
+    return inventory_service.get_all_vms()
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}", response_model=VM, tags=["Resources"]
+)
+async def get_vm_resource(
+    vm_id: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """Fetch a VM resource by its ID."""
+
+    return _get_vm_or_404(vm_id)
+
+
+@router.post("/api/v1/resources/vms", response_model=JobResult, tags=["Resources"])
+async def create_vm_resource(
+    request: ResourceCreateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Create a new virtual machine (without disk or NIC)."""
+    
+    schema = load_schema_by_id("vm-create")
+    if request.schema_version != schema.get("version"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Schema version mismatch",
+                "expected": schema.get("version"),
+                "received": request.schema_version,
+            },
+        )
+
+    try:
+        validated_values = validate_job_submission(request.values, schema)
+    except SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": exc.errors}
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. VM creation is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    vm_name = validated_values.get("vm_name")
+    if vm_name:
+        existing_vm = inventory_service.get_vm(target_host, vm_name)
+        if existing_vm:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"VM {vm_name} already exists on host {target_host}",
+            )
+
+    job_definition = {
+        "schema": {
+            "id": "vm-create",
+            "version": request.schema_version,
+        },
+        "fields": validated_values,
+    }
+    
+    job = await job_service.submit_resource_job(
+        job_type="create_vm",
+        schema_id="vm-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+    
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"VM creation job queued for host {target_host}",
+    )
+
+
+@router.put(
+    "/api/v1/resources/vms/{vm_id}", response_model=JobResult, tags=["Resources"]
+)
+async def update_vm_resource(
+    vm_id: str,
+    request: ResourceUpdateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Update an existing virtual machine."""
+
+    vm = _get_vm_or_404(vm_id)
+    schema = load_schema_by_id("vm-create")
+    if request.schema_version != schema.get("version"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Schema version mismatch",
+                "expected": schema.get("version"),
+                "received": request.schema_version,
+            },
+        )
+
+    augmented_schema = _build_schema_with_vm_id(schema)
+    try:
+        values_with_id = {**request.values, "vm_id": vm_id}
+        validated_values = validate_job_submission(values_with_id, augmented_schema)
+    except SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": exc.errors},
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. VM updates are temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    _ensure_connected_host(target_host)
+
+    job_definition = {
+        "schema": {
+            "id": "vm-create",
+            "version": request.schema_version,
+        },
+        "fields": validated_values,
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="update_vm",
+        schema_id="vm-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"VM update job queued for {vm.name}",
+    )
+
+
+@router.delete(
+    "/api/v1/resources/vms/{vm_id}", response_model=JobResult, tags=["Resources"]
+)
+async def delete_vm_resource(
+    vm_id: str,
+    force: bool = False,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Delete a VM by ID using the job queue."""
+
+    vm = _get_vm_or_404(vm_id)
+    _ensure_connected_host(vm.host)
+
+    normalized_state = _normalize_vm_state(vm.state)
+    if normalized_state != VMState.OFF and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Virtual machine must be turned off before deletion. "
+                "Set force=true to override when using the API."
+            ),
+        )
+
+    delete_request = VMDeleteRequest(
+        vm_name=vm.name, hyperv_host=vm.host, force=force
+    )
+    job = await job_service.submit_delete_job(delete_request)
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"VM deletion job queued for {vm.name}",
+    )
+
+
+@router.post("/api/v1/resources/disks", response_model=JobResult, tags=["Resources"])
+async def create_disk_resource(
+    request: DiskCreateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Create and attach a new disk to an existing VM."""
+    
+    schema = load_schema_by_id("disk-create")
+    if request.schema_version != schema.get("version"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Schema version mismatch",
+                "expected": schema.get("version"),
+                "received": request.schema_version,
+            },
+        )
+
+    try:
+        validated_values = validate_job_submission(request.values, schema)
+    except SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": exc.errors}
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Disk creation is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    # Validate that VM exists
+    vm_id = validated_values.get("vm_id")
+    if not vm_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VM ID is required for disk creation",
+        )
+
+    vm = _get_vm_or_404(vm_id)
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    job_definition = {
+        "schema": {
+            "id": "disk-create",
+            "version": request.schema_version,
+        },
+        "fields": validated_values,
+    }
+    
+    job = await job_service.submit_resource_job(
+        job_type="create_disk",
+        schema_id="disk-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+    
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Disk creation job queued for VM {vm_id}",
+    )
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}/disks",
+    response_model=List[VMDisk],
+    tags=["Resources"],
+)
+async def list_vm_disks(
+    vm_id: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """List disks attached to a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    return vm.disks
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
+    response_model=VMDisk,
+    tags=["Resources"],
+)
+async def get_vm_disk(
+    vm_id: str,
+    disk_id: str,
+    user: dict = Depends(require_permission(Permission.READER)),
+):
+    """Get a specific disk attached to a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    disk = _find_vm_disk(vm, disk_id)
+    if not disk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Disk {disk_id} not found on VM {vm_id}",
+        )
+    return disk
+
+
+@router.put(
+    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def update_disk_resource(
+    vm_id: str,
+    disk_id: str,
+    request: ResourceUpdateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Update an existing disk resource."""
+
+    vm = _get_vm_or_404(vm_id)
+    disk = _find_vm_disk(vm, disk_id)
+    if not disk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Disk {disk_id} not found on VM {vm_id}",
+        )
+
+    if request.resource_id != disk_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resource ID in payload does not match disk in path",
+        )
+
+    schema = load_schema_by_id("disk-create")
+    if request.schema_version != schema.get("version"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Schema version mismatch",
+                "expected": schema.get("version"),
+                "received": request.schema_version,
+            },
+        )
+
+    try:
+        values_with_vm = {**request.values, "vm_id": vm_id}
+        validated_values = validate_job_submission(values_with_vm, schema)
+    except SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": exc.errors},
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Disk updates are temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    _ensure_connected_host(target_host)
+
+    job_definition = {
+        "schema": {
+            "id": "disk-create",
+            "version": request.schema_version,
+        },
+        "fields": {**validated_values, "resource_id": request.resource_id},
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="update_disk",
+        schema_id="disk-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Disk update job queued for VM {vm_id}",
+    )
+
+
+@router.delete(
+    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def delete_disk_resource(
+    vm_id: str,
+    disk_id: str,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Delete a disk resource from a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    disk = _find_vm_disk(vm, disk_id)
+    if not disk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Disk {disk_id} not found on VM {vm_id}",
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Disk deletion is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    _ensure_connected_host(vm.host)
+
+    job_definition = {
+        "schema": {"id": "disk-delete", "version": 1},
+        "fields": {"vm_id": vm_id, "resource_id": disk_id},
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="delete_disk",
+        schema_id="disk-delete",
+        payload=job_definition,
+        target_host=vm.host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Disk deletion job queued for VM {vm_id}",
+    )
+
+
+@router.post("/api/v1/resources/nics", response_model=JobResult, tags=["Resources"])
+async def create_nic_resource(
+    request: NicCreateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Create and attach a new network adapter to an existing VM."""
+    
+    schema = load_schema_by_id("nic-create")
+    if request.schema_version != schema.get("version"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Schema version mismatch",
+                "expected": schema.get("version"),
+                "received": request.schema_version,
+            },
+        )
+
+    try:
+        validated_values = validate_job_submission(request.values, schema)
+    except SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": exc.errors}
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. NIC creation is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    # Validate that VM exists
+    vm_id = validated_values.get("vm_id")
+    if not vm_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VM ID is required for NIC creation",
+        )
+
+    vm = _get_vm_or_404(vm_id)
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    job_definition = {
+        "schema": {
+            "id": "nic-create",
+            "version": request.schema_version,
+        },
+        "fields": validated_values,
+    }
+    
+    job = await job_service.submit_resource_job(
+        job_type="create_nic",
+        schema_id="nic-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+    
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"NIC creation job queued for VM {vm_id}",
+    )
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}/nics",
+    response_model=List[VMNetworkAdapter],
+    tags=["Resources"],
+)
+async def list_vm_nics(
+    vm_id: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """List NICs attached to a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    return vm.networks
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
+    response_model=VMNetworkAdapter,
+    tags=["Resources"],
+)
+async def get_vm_nic(
+    vm_id: str,
+    nic_id: str,
+    user: dict = Depends(require_permission(Permission.READER)),
+):
+    """Get a specific NIC attached to a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    nic = _find_vm_nic(vm, nic_id)
+    if not nic:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"NIC {nic_id} not found on VM {vm_id}",
+        )
+    return nic
+
+
+@router.put(
+    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def update_nic_resource(
+    vm_id: str,
+    nic_id: str,
+    request: ResourceUpdateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Update an existing NIC resource."""
+
+    vm = _get_vm_or_404(vm_id)
+    nic = _find_vm_nic(vm, nic_id)
+    if not nic:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"NIC {nic_id} not found on VM {vm_id}",
+        )
+
+    if request.resource_id != nic_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resource ID in payload does not match NIC in path",
+        )
+
+    schema = load_schema_by_id("nic-create")
+    if request.schema_version != schema.get("version"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Schema version mismatch",
+                "expected": schema.get("version"),
+                "received": request.schema_version,
+            },
+        )
+
+    try:
+        values_with_vm = {**request.values, "vm_id": vm_id}
+        validated_values = validate_job_submission(values_with_vm, schema)
+    except SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": exc.errors},
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. NIC updates are temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    _ensure_connected_host(target_host)
+
+    job_definition = {
+        "schema": {
+            "id": "nic-create",
+            "version": request.schema_version,
+        },
+        "fields": {**validated_values, "resource_id": request.resource_id},
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="update_nic",
+        schema_id="nic-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"NIC update job queued for VM {vm_id}",
+    )
+
+
+@router.delete(
+    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def delete_nic_resource(
+    vm_id: str,
+    nic_id: str,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Delete a NIC resource from a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    nic = _find_vm_nic(vm, nic_id)
+    if not nic:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"NIC {nic_id} not found on VM {vm_id}",
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. NIC deletion is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    _ensure_connected_host(vm.host)
+
+    job_definition = {
+        "schema": {"id": "nic-delete", "version": 1},
+        "fields": {"vm_id": vm_id, "resource_id": nic_id},
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="delete_nic",
+        schema_id="nic-delete",
+        payload=job_definition,
+        target_host=vm.host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"NIC deletion job queued for VM {vm_id}",
+    )
+
+
+@router.post(
+    "/api/v1/resources/vms/{vm_id}/initialize",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def initialize_vm_resource(
+    vm_id: str,
+    request: VMInitializationRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Trigger guest initialization for an existing VM."""
+
+    vm = _get_vm_or_404(vm_id)
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Initialization is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    _ensure_connected_host(target_host)
+
+    if not request.guest_configuration:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "guest_configuration is required for initialization and must not be empty"
+            },
+        )
+
+    fields = {"vm_id": vm_id}
+    fields.update(request.guest_configuration)
+    fields["vm_id"] = vm_id
+
+    if not fields.get("vm_name"):
+        fields["vm_name"] = vm.name
+
+    job_definition = {
+        "schema": {
+            "id": "initialize-vm",
+        },
+        "fields": fields,
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="initialize_vm",
+        schema_id="initialize-vm",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Initialization job queued for VM {vm_id}",
+    )
+
+
+@router.post("/api/v1/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
+async def create_managed_deployment(
+    submission: JobSubmission,
+    user: dict = Depends(require_permission(Permission.WRITER))
+):
+    """Create a complete VM deployment with disk, network adapter, and guest configuration.
+    
+    The schema for this endpoint is composed client-side from vm-create, disk-create,  
+    and nic-create schemas. The server validates against these component schemas.
+    
+    Guest configuration fields (marked with guest_config: true in vm-create and nic-create)
+    are collected and used during initialization.
+    
+    The managed deployment orchestrates 4 steps:
+    1. Create VM (hardware only)
+    2. Attach disk
+    3. Attach network adapter
+    4. Initialize guest OS (hostname, IP, domain join, etc.)
+    """
+
+    # Load the component schemas for validation
+    # Guest config fields come from vm-create and nic-create (marked with guest_config: true)
+    vm_schema = load_schema_by_id("vm-create")
+    disk_schema = load_schema_by_id("disk-create")
+    nic_schema = load_schema_by_id("nic-create")
+    
+    component_versions = {
+        "vm-create": vm_schema.get("version"),
+        "disk-create": disk_schema.get("version"),
+        "nic-create": nic_schema.get("version"),
+    }
+
+    # Ensure the submitted schema version matches each component schema
+    for schema_id, expected_version in component_versions.items():
+        if submission.schema_version != expected_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": f"Schema version mismatch for {schema_id}",
+                    "schema_id": schema_id,
+                    "expected": expected_version,
+                    "received": submission.schema_version,
+                },
+            )
+
+    # Validate fields against the appropriate schemas
+    try:
+        # Create a combined field map for validation
+        # Include all fields from vm, disk, and nic schemas
+        # Skip vm_id from disk and nic (used internally, added during orchestration)
+        all_fields = {}
+        for schema in [vm_schema, disk_schema, nic_schema]:
+            for field in schema.get("fields", []):
+                # Skip vm_id from disk/nic schemas (added dynamically during orchestration)
+                if field.get("id") == "vm_id" and schema.get("id") in ["disk-create", "nic-create"]:
+                    continue
+                if field.get("id") not in all_fields:
+                    all_fields[field["id"]] = field
+        
+        # Collect parameter sets from all schemas for validation
+        all_parameter_sets = []
+        for schema in [vm_schema, disk_schema, nic_schema]:
+            all_parameter_sets.extend(schema.get("parameter_sets", []) or [])
+        
+        # Build a temporary combined schema for validation
+        combined_schema = {
+            "version": vm_schema.get("version"),
+            "fields": list(all_fields.values()),
+            "parameter_sets": all_parameter_sets,
+        }
+        
+        validated_values = validate_job_submission(submission.values, combined_schema)
+    except SchemaValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": exc.errors})
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. VM provisioning is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = (submission.target_host or "").strip()
+    if not target_host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target host is required",
+        )
+
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    vm_name = validated_values.get("vm_name")
+    if vm_name:
+        existing_vm = inventory_service.get_vm(target_host, vm_name)
+        if existing_vm:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"VM {vm_name} already exists on host {target_host}",
+            )
+
+    # Job definition uses a virtual "managed-deployment" schema ID for tracking
+    # but the actual validation happens against the 4 component schemas
+    job_definition = {
+        "schema": {
+            "id": "managed-deployment",
+            "version": submission.schema_version,
+            "components": component_versions,
+        },
+        "fields": validated_values,
+    }
+    
+    job = await job_service.submit_resource_job(
+        job_type="managed_deployment",
+        schema_id="managed-deployment",
+        payload=job_definition,
+        target_host=target_host,
+    )
+    
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Managed deployment queued for host {target_host}",
+    )
+
+
+@router.get("/api/v1/schema/{schema_id}", tags=["Schema"])
+async def get_schema_by_id(
+    schema_id: str,
+    user: dict = Depends(require_permission(Permission.READER))
+):
+    """Return a specific job input schema by ID."""
+    try:
+        return load_schema_by_id(schema_id)
+    except SchemaValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc)
+        )
 
 
 @router.get("/api/v1/notifications", response_model=NotificationsResponse, tags=["Notifications"])
@@ -948,7 +1875,7 @@ async def get_auth_token(request: Request):
                             "identity_type": user_info.get("identity_type"),
                         }
                     }
-            except Exception as e:
+            except Exception:
                 # Session is invalid, clear it
                 request.session.pop("user_info", None)
                 # Log the stack trace for debugging, but do not return details to the user
@@ -1072,7 +1999,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.close(code=1000, reason="Connection time limit reached")
                     break
 
-                data = await websocket.receive_json()
+                try:
+                    data = await asyncio.wait_for(
+                        websocket.receive_json(), timeout=MAX_CONNECTION_TIME
+                    )
+                except asyncio.TimeoutError:
+                    logger.info(
+                        f"WebSocket idle timeout reached for {client_id} ({username})"
+                    )
+                    await websocket.close(code=1000, reason="Connection idle timeout")
+                    break
                 await websocket_manager.handle_client_message(client_id, data)
             except WebSocketDisconnect:
                 logger.info(f"Client {client_id} ({username}) disconnected")

@@ -9,8 +9,8 @@ from pathlib import Path
 import secrets
 import uvicorn
 from fastapi import FastAPI, Request, status
-from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -31,7 +31,7 @@ from .services.job_service import job_service
 from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
 from .services.websocket_service import websocket_manager
-from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
+from .core.job_schema import load_schema_by_id, SchemaValidationError
 from .services.kerberos_manager import (
     initialize_kerberos,
     cleanup_kerberos,
@@ -75,9 +75,12 @@ async def lifespan(app: FastAPI):
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
 
     try:
-        load_job_schema()
+        # Load component schemas to validate they exist
+        load_schema_by_id("vm-create")
+        load_schema_by_id("disk-create")
+        load_schema_by_id("nic-create")
     except SchemaValidationError as exc:
-        logger.error("Failed to load job schema: %s", "; ".join(exc.errors))
+        logger.error("Failed to load component schemas: %s", "; ".join(exc.errors))
         raise
 
     config_result = run_config_checks()
@@ -87,6 +90,9 @@ async def lifespan(app: FastAPI):
             logger.error("Configuration error: %s", issue.message)
             if issue.hint:
                 logger.error("Hint: %s", issue.hint)
+        logger.error(
+            "Configuration errors detected; application will start in a degraded, misconfigured state"
+        )
 
     if config_result.has_warnings:
         for issue in config_result.warnings:
@@ -99,7 +105,7 @@ async def lifespan(app: FastAPI):
     kerberos_realm = settings.get_kerberos_realm()
 
     # Initialize Kerberos if configured
-    if settings.has_kerberos_config():
+    if not config_result.has_errors and settings.has_kerberos_config():
         logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
         try:
             initialize_kerberos(
@@ -177,6 +183,10 @@ async def lifespan(app: FastAPI):
                     )
                 else:
                     logger.info("Kerberos host validation completed successfully")
+    elif settings.has_kerberos_config():
+        logger.error(
+            "Skipping Kerberos initialization because configuration errors were detected"
+        )
     else:
         logger.warning("Kerberos credentials not configured; WinRM operations will fail")
 
@@ -185,11 +195,13 @@ async def lifespan(app: FastAPI):
     job_started = False
     inventory_started = False
 
-    if not kerberos_failed:
+    if not kerberos_failed and not config_result.has_errors:
         await remote_task_service.start()
         remote_started = True
     else:
-        logger.error("Skipping remote task service startup because Kerberos authentication is unavailable")
+        logger.error(
+            "Skipping remote task service startup because Kerberos authentication is unavailable or configuration is invalid"
+        )
 
     await notification_service.start()
     notifications_started = True
@@ -199,7 +211,7 @@ async def lifespan(app: FastAPI):
 
     notification_service.publish_startup_configuration_result(config_result)
 
-    if not kerberos_failed:
+    if not kerberos_failed and not config_result.has_errors:
         await host_deployment_service.start_startup_deployment(
             settings.get_hyperv_hosts_list()
         )
@@ -389,6 +401,27 @@ else:  # pragma: no cover - filesystem dependent
     )
 
 # Add security headers and audit logging middleware
+
+
+@app.middleware("http")
+async def misconfiguration_guard(request: Request, call_next):
+    """Short-circuit API calls when startup configuration errors exist."""
+
+    config_result = get_config_validation_result()
+    if config_result and config_result.has_errors:
+        path = request.url.path
+        if path.startswith("/api") or path.startswith("/ws"):
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "detail": (
+                        "Application configuration is invalid. Resolve startup errors "
+                        "and restart the server."
+                    )
+                },
+            )
+
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -592,7 +625,7 @@ async def root(request: Request):
                         "websocket_refresh_time": settings.websocket_refresh_time * 1000,
                         # Convert to milliseconds
                         "websocket_ping_interval": settings.websocket_ping_interval * 1000,
-                        "job_schema": get_job_schema(),
+                        "job_schema": None,  # Frontend composes schema from component schemas
                         "agent_deployment": host_deployment_service.get_startup_summary(),
                         "build_metadata": build_metadata,
                         "build_metadata_payload": _build_metadata_payload(),

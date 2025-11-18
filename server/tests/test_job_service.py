@@ -441,7 +441,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_only_one_provisioning_job_runs_per_host(self):
         await self.job_service.start()
 
-        original_execute = self.job_service._execute_provisioning_job
+        # Test with managed_deployment job type instead of the removed provision_vm
+        original_execute = self.job_service._execute_managed_deployment_job
 
         first_job_started = asyncio.Event()
         second_job_started = asyncio.Event()
@@ -456,25 +457,24 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             else:
                 second_job_started.set()
 
-        self.job_service._execute_provisioning_job = fake_execute  # type: ignore[assignment]
+        self.job_service._execute_managed_deployment_job = fake_execute  # type: ignore[assignment]
 
-        submission = JobSubmission(schema_version=1, values={})
         payload = {
-            "schema": {"id": "vm-provisioning", "version": 1},
+            "schema": {"id": "vm-create", "version": 1},
             "fields": {"vm_name": "vm-a"},
         }
 
-        job1 = await self.job_service.submit_provisioning_job(
-            submission, payload, "hyperv01"
+        job1 = await self.job_service.submit_resource_job(
+            "managed_deployment", "vm-create", payload, "hyperv01"
         )
 
         payload2 = {
-            "schema": {"id": "vm-provisioning", "version": 1},
+            "schema": {"id": "vm-create", "version": 1},
             "fields": {"vm_name": "vm-b"},
         }
 
-        job2 = await self.job_service.submit_provisioning_job(
-            submission, payload2, "HYPERV01"
+        job2 = await self.job_service.submit_resource_job(
+            "managed_deployment", "vm-create", payload2, "HYPERV01"
         )
 
         try:
@@ -489,7 +489,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             await asyncio.wait_for(second_job_started.wait(), timeout=1)
             self.assertEqual(start_order, [job1.job_id, job2.job_id])
         finally:
-            self.job_service._execute_provisioning_job = original_execute
+            self.job_service._execute_managed_deployment_job = original_execute
 
     async def test_only_one_delete_job_runs_per_host(self):
         await self.job_service.start()

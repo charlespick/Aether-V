@@ -3,7 +3,6 @@
 import base64
 import logging
 import os
-import re
 import struct
 import subprocess
 import tempfile
@@ -1464,20 +1463,26 @@ def _check_wsman_spn(host: str, realm: Optional[str] = None) -> Tuple[bool, str]
             )
 
             if result.returncode == 0:
-                return (True, f"WSMAN SPN validated via kvno")
+                return (True, "WSMAN SPN validated via kvno")
             else:
-                return (False, f"WSMAN SPN '{kvno_spn}' not found or inaccessible: {result.stderr.strip()}")
+                return (
+                    False,
+                    f"WSMAN SPN '{kvno_spn}' not found or inaccessible: {result.stderr.strip()}",
+                )
 
         except FileNotFoundError:
-            logger.warning("Neither setspn nor kvno available - cannot validate WSMAN SPN for %s", host)
-            return (False, f"Cannot validate WSMAN SPN - setspn and kvno tools not available")
+            logger.warning(
+                "Neither setspn nor kvno available - cannot validate WSMAN SPN for %s",
+                host,
+            )
+            return (False, "Cannot validate WSMAN SPN - setspn and kvno tools not available")
         except subprocess.TimeoutExpired:
-            return (False, f"WSMAN SPN check timed out using kvno")
+            return (False, "WSMAN SPN check timed out using kvno")
         except Exception as exc:
             return (False, f"WSMAN SPN validation failed: {exc}")
 
     except subprocess.TimeoutExpired:
-        return (False, f"WSMAN SPN check timed out")
+        return (False, "WSMAN SPN check timed out")
     except Exception as exc:
         return (False, f"WSMAN SPN check failed: {exc}")
 
