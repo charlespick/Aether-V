@@ -196,21 +196,21 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             "See documentation for detailed migration instructions.",
         )
 
-    # Kerberos credentials - warn when missing or partially configured.
+    # Kerberos credentials - treat missing or partial configuration as fatal.
     if settings.winrm_kerberos_principal and not settings.winrm_keytab_b64:
-        _warn(
+        _error(
             result,
             "WINRM_KERBEROS_PRINCIPAL is set but WINRM_KEYTAB_B64 is missing.",
             "Set WINRM_KEYTAB_B64 with base64-encoded keytab so hosts can be managed.",
         )
     elif settings.winrm_keytab_b64 and not settings.winrm_kerberos_principal:
-        _warn(
+        _error(
             result,
             "WINRM_KEYTAB_B64 is set but WINRM_KERBEROS_PRINCIPAL is missing.",
             "Set WINRM_KERBEROS_PRINCIPAL to the service principal name (e.g., user@REALM).",
         )
     elif not settings.winrm_kerberos_principal and not settings.winrm_keytab_b64:
-        _warn(
+        _error(
             result,
             "Kerberos credentials are not configured.",
             "Provide WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64 to manage Hyper-V hosts.",

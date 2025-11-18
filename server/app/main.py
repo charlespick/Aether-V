@@ -100,9 +100,11 @@ async def lifespan(app: FastAPI):
     kerberos_failed = False
     kerberos_initialized = False
     kerberos_realm = settings.get_kerberos_realm()
+    kerberos_configured = settings.has_kerberos_config()
+    kerberos_blocking_issue = None
 
     # Initialize Kerberos if configured
-    if settings.has_kerberos_config():
+    if kerberos_configured:
         logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
         try:
             initialize_kerberos(
@@ -113,10 +115,11 @@ async def lifespan(app: FastAPI):
             )
         except KerberosManagerError as exc:
             kerberos_failed = True
+            kerberos_blocking_issue = f"Kerberos initialization failed: {exc}"
             logger.error("Failed to initialize Kerberos authentication: %s", exc)
             config_result.errors.append(
                 ConfigIssue(
-                    message=f"Kerberos initialization failed: {exc}",
+                    message=kerberos_blocking_issue,
                     hint="Verify Kerberos principal, keytab, realm, and KDC settings.",
                 )
             )
@@ -181,18 +184,25 @@ async def lifespan(app: FastAPI):
                 else:
                     logger.info("Kerberos host validation completed successfully")
     else:
-        logger.warning("Kerberos credentials not configured; WinRM operations will fail")
+        kerberos_failed = True
+        kerberos_blocking_issue = (
+            "Kerberos authentication is required for WinRM operations but credentials are not configured."
+        )
+        logger.error(kerberos_blocking_issue)
+        if not any(issue.message == kerberos_blocking_issue for issue in config_result.errors):
+            config_result.errors.append(
+                ConfigIssue(
+                    message=kerberos_blocking_issue,
+                    hint=(
+                        "Set WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64 so remote management and deployments can start."
+                    ),
+                )
+            )
 
     remote_started = False
     notifications_started = False
     job_started = False
     inventory_started = False
-
-    if not kerberos_failed:
-        await remote_task_service.start()
-        remote_started = True
-    else:
-        logger.error("Skipping remote task service startup because Kerberos authentication is unavailable")
 
     await notification_service.start()
     notifications_started = True
@@ -202,7 +212,24 @@ async def lifespan(app: FastAPI):
 
     notification_service.publish_startup_configuration_result(config_result)
 
-    if not kerberos_failed:
+    kerberos_available = kerberos_configured and not kerberos_failed
+
+    if not kerberos_available and kerberos_blocking_issue:
+        notification_service.upsert_system_notification(
+            "kerberos-configuration",
+            title="Kerberos configuration required",
+            message=kerberos_blocking_issue,
+            level=NotificationLevel.ERROR,
+            metadata={"winrm_enabled": False},
+        )
+
+    if kerberos_available:
+        await remote_task_service.start()
+        remote_started = True
+    else:
+        logger.error("Skipping remote task service startup because Kerberos authentication is unavailable")
+
+    if kerberos_available:
         await host_deployment_service.start_startup_deployment(
             settings.get_hyperv_hosts_list()
         )
