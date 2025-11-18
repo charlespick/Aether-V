@@ -228,9 +228,11 @@ def get_job_schema() -> Dict[str, Any]:
     
     for schema in [vm_schema, disk_schema, nic_schema]:
         for field in schema.get("fields", []):
-            # Skip vm_id field as it's only for component creation, not managed deployment
-            if field.get("id") != "vm_id":
-                all_fields[field["id"]] = field
+            # Skip vm_id from disk/nic schemas (added dynamically during orchestration)
+            if field.get("id") == "vm_id" and schema.get("id") in ["disk-create", "nic-create"]:
+                continue
+
+            all_fields[field["id"]] = field
         
         # Collect parameter sets from all schemas
         for param_set in schema.get("parameter_sets", []) or []:

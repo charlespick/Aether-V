@@ -1,6 +1,8 @@
 """Unit tests for managed deployment endpoint and schema composition."""
 
+import asyncio
 import pytest
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
@@ -9,6 +11,8 @@ import sys
 sys.modules['psutil'] = MagicMock()
 sys.modules['pypsrp'] = MagicMock()
 sys.modules['pypsrp.exceptions'] = MagicMock()
+sys.modules['pypsrp.powershell'] = MagicMock()
+sys.modules['pypsrp.wsman'] = MagicMock()
 sys.modules['authlib'] = MagicMock()
 sys.modules['authlib.integrations'] = MagicMock()
 sys.modules['authlib.integrations.starlette_client'] = MagicMock()
@@ -106,14 +110,17 @@ class TestManagedDeploymentSchemaComposition:
                     all_fields[field["id"]] = field
         
         field_ids = list(all_fields.keys())
-        
+
         # vm_id should NOT be in the combined schema
         assert 'vm_id' not in field_ids, "vm_id should be excluded from combined schema"
-        
+
         # But other fields should be present
         assert 'vm_name' in field_ids
         assert 'disk_size_gb' in field_ids
         assert 'network' in field_ids
+        assert 'disk_type' in field_ids
+        assert 'controller_type' in field_ids
+        assert 'adapter_name' in field_ids
     
     def test_combined_schema_includes_parameter_sets(self):
         """Verify that combined schema includes parameter sets from all components."""
@@ -231,18 +238,18 @@ class TestManagedDeploymentSchemaComposition:
         
         # Should validate without errors
         validated = validate_job_submission(values, combined_schema)
-        
+
         assert validated["guest_domain_jointarget"] == "corp.example.com"
         assert validated["guest_domain_joinuid"] == "EXAMPLE\\svc_join"
-    
+
     def test_managed_deployment_validation_with_static_ip(self):
         """Test validation with static IP parameter set."""
         from app.core.job_schema import load_schema_by_id, validate_job_submission
-        
+
         vm_schema = load_schema_by_id("vm-create")
         disk_schema = load_schema_by_id("disk-create")
         nic_schema = load_schema_by_id("nic-create")
-        
+
         # Build combined schema
         all_fields = {}
         for schema in [vm_schema, disk_schema, nic_schema]:
@@ -251,17 +258,17 @@ class TestManagedDeploymentSchemaComposition:
                     continue
                 if field.get("id") not in all_fields:
                     all_fields[field["id"]] = field
-        
+
         all_parameter_sets = []
         for schema in [vm_schema, disk_schema, nic_schema]:
             all_parameter_sets.extend(schema.get("parameter_sets", []) or [])
-        
+
         combined_schema = {
             "version": vm_schema.get("version"),
             "fields": list(all_fields.values()),
             "parameter_sets": all_parameter_sets,
         }
-        
+
         # Valid submission with static IP configuration
         values = {
             "vm_name": "test-vm-01",
@@ -277,12 +284,113 @@ class TestManagedDeploymentSchemaComposition:
             "guest_v4_defaultgw": "192.0.2.1",
             "guest_v4_dns1": "192.0.2.53",
         }
-        
+
         # Should validate without errors
         validated = validate_job_submission(values, combined_schema)
-        
+
         assert validated["guest_v4_ipaddr"] == "192.0.2.50"
         assert validated["guest_v4_cidrprefix"] == 24
+
+
+def test_managed_deployment_forwards_component_fields(monkeypatch):
+    """Ensure managed deployment forwards disk/NIC fields unchanged to child jobs."""
+
+    from app.core.models import Job, JobStatus
+    from app.services import job_service as job_service_module
+
+    job_service = job_service_module.job_service
+
+    managed_fields = {
+        "vm_name": "test-vm-01",
+        "image_name": "Windows Server 2022",
+        "gb_ram": 16,
+        "cpu_cores": 4,
+        "disk_size_gb": 150,
+        "storage_class": "fast-ssd",
+        "disk_type": "Fixed",
+        "controller_type": "IDE",
+        "network": "Production",
+        "adapter_name": "Prod Adapter",
+        "guest_v4_ipaddr": "192.0.2.50",
+        "guest_v4_cidrprefix": 24,
+        "guest_v4_defaultgw": "192.0.2.1",
+    }
+
+    job_definition = {
+        "schema": {"id": "managed-deployment", "version": 1},
+        "fields": managed_fields,
+    }
+
+    managed_job = Job(
+        job_id="parent-job",
+        job_type="managed_deployment",
+        schema_id="managed-deployment",
+        status=JobStatus.PENDING,
+        created_at=datetime.utcnow(),
+        parameters={"definition": job_definition},
+        target_host="host1",
+    )
+
+    queued_payloads = {}
+
+    async def fake_queue_child_job(parent_job, job_type, schema_id, payload):
+        queued_payloads[job_type] = payload
+        return Job(
+            job_id=f"{job_type}-1",
+            job_type=job_type,
+            schema_id=schema_id,
+            status=JobStatus.PENDING,
+            created_at=datetime.utcnow(),
+            parameters=payload,
+            target_host=parent_job.target_host,
+        )
+
+    async def fake_wait_for_child_job_completion(parent_job_id, child_job_id):
+        job_type = child_job_id.split("-")[0]
+        output = []
+        if job_type == "create_vm":
+            output = ['{"vm_id": "vm-123"}']
+
+        return Job(
+            job_id=child_job_id,
+            job_type=job_type,
+            schema_id="",
+            status=JobStatus.COMPLETED,
+            created_at=datetime.utcnow(),
+            parameters={},
+            output=output,
+            target_host="host1",
+        )
+
+    monkeypatch.setattr(job_service_module.host_deployment_service, "ensure_host_setup", AsyncMock(return_value=True))
+    monkeypatch.setattr(job_service, "_validate_job_against_host_config", AsyncMock())
+    monkeypatch.setattr(job_service, "_update_job", AsyncMock())
+    monkeypatch.setattr(job_service, "_append_job_output", AsyncMock())
+    monkeypatch.setattr(job_service, "_update_child_job_summary", AsyncMock())
+    monkeypatch.setattr(job_service, "_queue_child_job", AsyncMock(side_effect=fake_queue_child_job))
+    monkeypatch.setattr(
+        job_service,
+        "_wait_for_child_job_completion",
+        AsyncMock(side_effect=fake_wait_for_child_job_completion),
+    )
+
+    asyncio.run(job_service._execute_managed_deployment_job(managed_job))
+
+    disk_fields = queued_payloads["create_disk"]["fields"]
+    assert disk_fields["vm_id"] == "vm-123"
+    assert disk_fields["disk_size_gb"] == 150
+    assert disk_fields["storage_class"] == "fast-ssd"
+    assert disk_fields["disk_type"] == "Fixed"
+    assert disk_fields["controller_type"] == "IDE"
+
+    nic_fields = queued_payloads["create_nic"]["fields"]
+    assert nic_fields["vm_id"] == "vm-123"
+    assert nic_fields["network"] == "Production"
+    assert nic_fields["adapter_name"] == "Prod Adapter"
+
+    init_fields = queued_payloads["initialize_vm"]["fields"]
+    assert init_fields["guest_v4_ipaddr"] == "192.0.2.50"
+    assert init_fields["vm_id"] == "vm-123"
 
 
 class TestJobServiceImport:

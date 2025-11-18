@@ -846,6 +846,7 @@ class JobService:
             raise RuntimeError(f"Failed to prepare host {target_host} for deployment")
 
         vm_schema = load_schema_by_id("vm-create")
+        disk_schema = load_schema_by_id("disk-create")
         nic_schema = load_schema_by_id("nic-create")
 
         vm_hardware_fields: Dict[str, Any] = {}
@@ -894,13 +895,16 @@ class JobService:
 
         vm_name = vm_hardware_fields.get("vm_name")
 
-        if fields.get("disk_size_gb"):
-            disk_fields = {
-                "vm_id": vm_id,
-                "disk_size_gb": fields.get("disk_size_gb"),
-            }
-            if fields.get("storage_class"):
-                disk_fields["storage_class"] = fields.get("storage_class")
+        disk_fields: Dict[str, Any] = {}
+        for field in disk_schema.get("fields", []):
+            field_id = field.get("id")
+            if field_id == "vm_id":
+                continue
+            if field_id in fields:
+                disk_fields[field_id] = fields[field_id]
+
+        if disk_fields.get("disk_size_gb") is not None:
+            disk_fields["vm_id"] = vm_id
 
             disk_definition = {
                 "schema": {"id": "disk-create", "version": schema_version},
