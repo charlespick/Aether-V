@@ -840,6 +840,9 @@ class ProvisionJobOverlay extends BaseOverlay {
         if (vmSchema.parameter_sets) {
             composedSchema.parameter_sets.push(...vmSchema.parameter_sets);
         }
+        if (diskSchema.parameter_sets) {
+            composedSchema.parameter_sets.push(...diskSchema.parameter_sets);
+        }
         if (nicSchema.parameter_sets) {
             composedSchema.parameter_sets.push(...nicSchema.parameter_sets);
         }
