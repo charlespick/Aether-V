@@ -1,26 +1,42 @@
 """Unit tests for managed deployment endpoint and schema composition."""
 
 import asyncio
-import pytest
+import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi import HTTPException
 
-# Mock heavy dependencies before imports
-import sys
-sys.modules['psutil'] = MagicMock()
-sys.modules['pypsrp'] = MagicMock()
-sys.modules['pypsrp.exceptions'] = MagicMock()
-sys.modules['pypsrp.powershell'] = MagicMock()
-sys.modules['pypsrp.wsman'] = MagicMock()
-sys.modules['authlib'] = MagicMock()
-sys.modules['authlib.integrations'] = MagicMock()
-sys.modules['authlib.integrations.starlette_client'] = MagicMock()
-sys.modules['cryptography'] = MagicMock()
-sys.modules['cryptography.fernet'] = MagicMock()
-sys.modules['krb5'] = MagicMock()
-sys.modules['pyspnego'] = MagicMock()
-sys.modules['ldap3'] = MagicMock()
+
+@pytest.fixture(autouse=True, scope="module")
+def mock_heavy_dependencies():
+    """Mock optional heavy dependencies only for this module.
+
+    The managed deployment tests don't exercise any of these packages,
+    but importing shared modules can try to load them. Patch ``sys.modules``
+    temporarily so other tests are unaffected and can use real packages
+    (notably ``cryptography`` for token signing).
+    """
+
+    mocked_modules = {
+        'psutil': MagicMock(),
+        'pypsrp': MagicMock(),
+        'pypsrp.exceptions': MagicMock(),
+        'pypsrp.powershell': MagicMock(),
+        'pypsrp.wsman': MagicMock(),
+        'authlib': MagicMock(),
+        'authlib.integrations': MagicMock(),
+        'authlib.integrations.starlette_client': MagicMock(),
+        'cryptography': MagicMock(),
+        'cryptography.fernet': MagicMock(),
+        'krb5': MagicMock(),
+        'pyspnego': MagicMock(),
+        'ldap3': MagicMock(),
+    }
+
+    with patch.dict(sys.modules, mocked_modules):
+        yield
 
 
 class TestManagedDeploymentSchemaComposition:
