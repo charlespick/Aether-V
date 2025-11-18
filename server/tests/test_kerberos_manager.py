@@ -5,50 +5,12 @@ import copy
 import os
 import struct
 import subprocess
-import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-
-def _install_gssapi_stub() -> None:
-    """Provide a lightweight gssapi stub when the dependency is unavailable."""
-
-    if "gssapi" in sys.modules and "gssapi.raw" in sys.modules:
-        return
-
-    gssapi_module = types.ModuleType("gssapi")
-    gssapi_raw_module = types.ModuleType("gssapi.raw")
-
-    class _DummyCredentials:  # pragma: no cover - simple stub
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class _DummyName:  # pragma: no cover - simple stub
-        def __init__(self, *args, **kwargs):
-            self.raw = object()
-
-    def _dummy_acquire_cred_from(*args, **kwargs):  # pragma: no cover - simple stub
-        return SimpleNamespace(creds=object())
-
-    gssapi_raw_module.acquire_cred_from = _dummy_acquire_cred_from
-
-    gssapi_module.NameType = SimpleNamespace(kerberos_principal=object())
-    gssapi_module.exceptions = SimpleNamespace(GSSError=Exception)
-    gssapi_module.Name = _DummyName
-    gssapi_module.Credentials = _DummyCredentials
-    gssapi_module.raw = gssapi_raw_module
-
-    sys.modules.setdefault("gssapi", gssapi_module)
-    sys.modules.setdefault("gssapi.raw", gssapi_raw_module)
-
-
-_install_gssapi_stub()
-
 
 from app.services.kerberos_manager import (
     KerberosManager,
