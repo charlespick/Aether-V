@@ -15,8 +15,8 @@ sys.modules.setdefault("yaml", yaml_stub)
 # Kerberos is disabled via environment variables in conftest.py
 
 try:
-    import server.app.services.job_service as job_service_module
-    from server.app.core.models import (
+    import app.services.job_service as job_service_module
+    from app.core.models import (
         Job,
         JobStatus,
         Notification,
@@ -25,7 +25,7 @@ try:
         JobSubmission,
         VMDeleteRequest,
     )
-    from server.app.services.job_service import JobService
+    from app.services.job_service import JobService
     IMPORT_ERROR = None
 except ModuleNotFoundError as exc:  # pragma: no cover - environment guard
     job_service_module = None
@@ -347,7 +347,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "server.app.services.job_service.redact_job_parameters",
+            "app.services.job_service.redact_job_parameters",
             side_effect=RuntimeError("boom"),
         ):
             safe_job = self.job_service._prepare_job_response(job)
