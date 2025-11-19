@@ -599,22 +599,6 @@ try {
         $script:ProvisioningSucceeded = $true
         "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 
-        # Execute domain join module if needed (in case domain join was deferred to phase_one)
-        if (-not $global:DomainJoinSucceeded) {
-            # Load and execute domain module
-            $domainModulePath = Join-Path -Path $ModulesDir -ChildPath "mod_domain.ps1"
-            if (Test-Path $domainModulePath) {
-                . $domainModulePath
-                if (Get-Command "Invoke-ModDomain" -ErrorAction SilentlyContinue) {
-                    Invoke-ModDomain -DecryptedKeysDir $decryptedKeysDir
-                }
-            }
-        }
-
-    "phase_one" {
-        $script:ProvisioningSucceeded = $true
-        "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
-
         # Check if the "hlvmm.data.guest_domain_join_target" key exists
         $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_target.txt"
         if (Test-Path $guestDomainJoinTargetPath) {
