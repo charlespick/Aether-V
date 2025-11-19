@@ -37,11 +37,17 @@ function Invoke-ProvisioningCopyProvisioningIso {
         }
     }
 
-    Invoke-ValidateFolder -Path $StoragePath
-
-    # Ensure storage path exists
-    if (-not (Test-Path -LiteralPath $StoragePath)) {
-        New-Item -ItemType Directory -Path $StoragePath -Force | Out-Null
+    # Ensure storage path exists (create it if it does not)
+    if (-not (Test-Path -LiteralPath $StoragePath -PathType Container)) {
+        try {
+            New-Item -ItemType Directory -Path $StoragePath -Force | Out-Null
+        }
+        catch {
+            throw "Failed to create storage path '$StoragePath': $_"
+        }
+    }
+    else {
+        Invoke-ValidateFolder -Path $StoragePath
     }
 
     # Generate unique ID for the ISO to avoid collisions
