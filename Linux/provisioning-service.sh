@@ -360,15 +360,36 @@ write_hyperv_kvp() {
     fi
 
     local guest_pool="/var/lib/hyperv/.kvp_pool_1"
-    
+
     if [[ ! -w "$(dirname "$guest_pool")" ]]; then
         echo "ERROR: Cannot write to KVP directory" >&2
         return 1
     fi
-    
+
+    local record_size=$((512 + 2048))
+    local temp_pool
+    temp_pool=$(mktemp "$(dirname "$guest_pool")/kvp_pool_tmp.XXXX")
+
     # Build the 2560-byte record directly: 512 bytes key + 2048 bytes value
     {
         flock -x 9
+
+        # Copy existing entries except the one we are about to replace
+        if [[ -f "$guest_pool" ]]; then
+            local nb nkv offset existing_key
+            nb=$(wc -c < "$guest_pool")
+            nkv=$(( nb / record_size ))
+
+            for n in $(seq 0 $(( nkv - 1 )) ); do
+                offset=$(( n * record_size ))
+                existing_key=$(dd if="$guest_pool" bs=1 count=512 skip=$offset status=none | sed 's/\x0.*//g')
+
+                if [[ "$existing_key" != "$key" ]]; then
+                    dd if="$guest_pool" bs=1 count=$record_size skip=$offset status=none >> "$temp_pool"
+                fi
+            done
+        fi
+
         {
             printf '%s' "$key"
             dd if=/dev/zero bs=1 count=$((511 - ${#key})) 2>/dev/null
@@ -376,9 +397,12 @@ write_hyperv_kvp() {
             printf '%s' "$value"
             dd if=/dev/zero bs=1 count=$((2047 - ${#value})) 2>/dev/null
             printf '\0'
-        } >> "$guest_pool"
+        } >> "$temp_pool"
+
+        mv "$temp_pool" "$guest_pool"
+        chmod 600 "$guest_pool"
         flock -u 9
-    } 9>>"$guest_pool"
+    } 9>"$guest_pool"
 }
 
 # File to track service phase
