@@ -360,6 +360,7 @@ write_hyperv_kvp() {
     fi
 
     local guest_pool="/var/lib/hyperv/.kvp_pool_1"
+    local lock_file="${guest_pool}.lock"
 
     if [[ ! -w "$(dirname "$guest_pool")" ]]; then
         echo "ERROR: Cannot write to KVP directory" >&2
@@ -402,7 +403,7 @@ write_hyperv_kvp() {
         mv "$temp_pool" "$guest_pool"
         chmod 600 "$guest_pool"
         flock -u 9
-    } 9>"$guest_pool"
+    } 9>"$lock_file"
 }
 
 # File to track service phase
