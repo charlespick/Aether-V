@@ -1228,7 +1228,8 @@ class VMView extends BaseView {
             overlayManager.open('vm-edit', { 
                 vm_id: this.vmData.id,
                 vm_name: this.vmData.name, 
-                host: this.vmData.host 
+                host: this.vmData.host,
+                vm_data: this.vmData  // Pass actual VM data for pre-filling
             });
             return;
         }
@@ -2309,13 +2310,22 @@ class VMView extends BaseView {
 
     handleResourceAction(action, resourceType, resourceId) {
         if (action === 'edit') {
+            // Find the actual resource data to pass to the overlay
+            let resourceData = null;
+            if (resourceType === 'disk') {
+                resourceData = this.vmData.disks.find(d => d.id === resourceId);
+            } else if (resourceType === 'nic') {
+                resourceData = this.vmData.networks.find(n => n.id === resourceId);
+            }
+            
             const overlayName = resourceType === 'disk' ? 'disk-edit' : 'nic-edit';
             overlayManager.open(overlayName, {
                 vm_id: this.vmData.id,
                 vm_name: this.vmData.name,
                 host: this.vmData.host,
                 resource_id: resourceId,
-                resource_type: resourceType
+                resource_type: resourceType,
+                resource_data: resourceData  // Pass actual resource data
             });
         } else if (action === 'delete') {
             this.confirmResourceDelete(resourceType, resourceId);

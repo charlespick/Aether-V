@@ -2163,10 +2163,112 @@ class DiskEditOverlay extends DiskCreateOverlay {
     constructor(data = {}) {
         super(data);
         this.resourceId = data.resource_id || '';
+        this.resourceData = data.resource_data || {};
+        this.originalDiskSize = null;  // Track original size for validation
     }
 
     getTitle() {
         return `Edit Disk on ${this.vmName || 'VM'}`;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('disk-create-root');
+        if (!this.rootEl) {
+            console.error('Disk edit root element missing');
+            return;
+        }
+
+        try {
+            this.schema = await this.fetchSchema();
+            // Extract original disk size for validation
+            if (this.resourceData && this.resourceData.size_gb) {
+                this.originalDiskSize = parseFloat(this.resourceData.size_gb);
+            }
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load disk schema:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load disk edit form. Please try again later.</div>
+            `;
+        }
+    }
+
+    renderInputControl(field, fieldId) {
+        const type = (field.type || 'string').toLowerCase();
+        const validations = field.validations || {};
+        const requiredAttr = field.required ? 'required' : '';
+        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
+        
+        // Get current value from resource data, fallback to default
+        let currentValue = this.resourceData[field.id] ?? field.default ?? '';
+
+        if (type === 'boolean') {
+            const checked = (this.resourceData[field.id] !== undefined ? this.resourceData[field.id] : field.default) === true ? 'checked' : '';
+            return `
+                <label class="checkbox-field">
+                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
+                    <span>Enable</span>
+                </label>
+            `;
+        }
+
+        if (type === 'integer') {
+            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
+            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
+            const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
+            
+            // Add min constraint for disk size to prevent shrinking
+            let additionalAttrs = '';
+            if (field.id === 'disk_size_gb' && this.originalDiskSize) {
+                additionalAttrs = `min="${this.originalDiskSize}" data-original-size="${this.originalDiskSize}"`;
+            }
+            
+            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${additionalAttrs} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+        }
+
+        if (type === 'multiline') {
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(currentValue)}</textarea>`;
+        }
+
+        const inputType = type === 'secret' ? 'password' : 'text';
+        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
+        const pattern = patternValue ? `pattern="${patternValue}"` : '';
+        const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
+        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+    }
+
+    renderForm() {
+        if (!this.schema) return;
+
+        const fieldsHtml = this.schema.fields
+            .filter(field => field.id !== 'vm_id')
+            .map(field => this.renderField(field))
+            .join('');
+
+        // Add notice about disk size restrictions
+        const sizeNotice = this.originalDiskSize ? 
+            `<p class="field-note" style="margin-bottom: 16px;">
+                <strong>Note:</strong> Disk size cannot be reduced below its current size of ${this.originalDiskSize} GB.
+            </p>` : '';
+
+        this.rootEl.innerHTML = `
+            <form id="disk-create-form" class="schema-form-body">
+                <div id="disk-create-messages" class="form-messages" role="alert"></div>
+                ${sizeNotice}
+                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="disk-create-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="disk-create-submit">Update Disk</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('disk-create-form');
+        this.messagesEl = document.getElementById('disk-create-messages');
+        const cancelBtn = document.getElementById('disk-create-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
     }
 
     async handleSubmit(event) {
@@ -2186,6 +2288,12 @@ class DiskEditOverlay extends DiskCreateOverlay {
             } else {
                 values[key] = value;
             }
+        }
+
+        // Client-side validation: prevent disk shrinking
+        if (values.disk_size_gb && this.originalDiskSize && values.disk_size_gb < this.originalDiskSize) {
+            this.messagesEl.innerHTML = `<div class="form-error">Disk size cannot be reduced below its current size of ${this.originalDiskSize} GB.</div>`;
+            return;
         }
 
         try {
@@ -2423,10 +2531,103 @@ class NicEditOverlay extends NicCreateOverlay {
     constructor(data = {}) {
         super(data);
         this.resourceId = data.resource_id || '';
+        this.resourceData = data.resource_data || {};
     }
 
     getTitle() {
         return `Edit Network Adapter on ${this.vmName || 'VM'}`;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('nic-create-root');
+        if (!this.rootEl) {
+            console.error('NIC edit root element missing');
+            return;
+        }
+
+        try {
+            this.schema = await this.fetchSchema();
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load NIC schema:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load network adapter edit form. Please try again later.</div>
+            `;
+        }
+    }
+
+    renderInputControl(field, fieldId) {
+        const type = (field.type || 'string').toLowerCase();
+        const validations = field.validations || {};
+        const requiredAttr = field.required ? 'required' : '';
+        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
+        
+        // Map resource data fields to schema fields
+        let currentValue;
+        if (field.id === 'network') {
+            // Map from network_name or virtual_switch
+            currentValue = this.resourceData.network_name || this.resourceData.network || this.resourceData.virtual_switch || field.default || '';
+        } else if (field.id === 'adapter_name') {
+            currentValue = this.resourceData.adapter_name || this.resourceData.name || field.default || '';
+        } else {
+            currentValue = this.resourceData[field.id] ?? field.default ?? '';
+        }
+
+        if (type === 'boolean') {
+            const checked = (this.resourceData[field.id] !== undefined ? this.resourceData[field.id] : field.default) === true ? 'checked' : '';
+            return `
+                <label class="checkbox-field">
+                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
+                    <span>Enable</span>
+                </label>
+            `;
+        }
+
+        if (type === 'integer' || type === 'ipv4') {
+            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
+            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
+            const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
+            const inputMode = type === 'ipv4' ? 'text' : 'numeric';
+            const step = type === 'integer' ? 'step="1"' : '';
+            return `<input type="${type === 'ipv4' ? 'text' : 'number'}" inputmode="${inputMode}" ${step} id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+        }
+
+        if (type === 'multiline') {
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(currentValue)}</textarea>`;
+        }
+
+        const inputType = type === 'secret' ? 'password' : 'text';
+        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
+        const pattern = patternValue ? `pattern="${patternValue}"` : '';
+        const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
+        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+    }
+
+    renderForm() {
+        if (!this.schema) return;
+
+        const fieldsHtml = this.schema.fields
+            .filter(field => field.id !== 'vm_id')
+            .map(field => this.renderField(field))
+            .join('');
+
+        this.rootEl.innerHTML = `
+            <form id="nic-create-form" class="schema-form-body">
+                <div id="nic-create-messages" class="form-messages" role="alert"></div>
+                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="nic-create-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="nic-create-submit">Update Network Adapter</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('nic-create-form');
+        this.messagesEl = document.getElementById('nic-create-messages');
+        const cancelBtn = document.getElementById('nic-create-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
     }
 
     async handleSubmit(event) {
@@ -2446,6 +2647,12 @@ class NicEditOverlay extends NicCreateOverlay {
             } else {
                 values[key] = value;
             }
+        }
+
+        // Client-side validation: ensure network is specified
+        if (values.network && values.network.trim() === '') {
+            this.messagesEl.innerHTML = `<div class="form-error">Network name is required.</div>`;
+            return;
         }
 
         try {
@@ -2494,6 +2701,7 @@ class VMEditOverlay extends BaseOverlay {
         this.vmId = data.vm_id || '';
         this.vmName = data.vm_name || '';
         this.host = data.host || '';
+        this.vmData = data.vm_data || {};
         this.schema = null;
         this.rootEl = null;
         this.formEl = null;
@@ -2590,13 +2798,30 @@ class VMEditOverlay extends BaseOverlay {
 
     renderInputControl(field, fieldId) {
         const type = (field.type || 'string').toLowerCase();
-        const defaultValue = field.default ?? '';
         const validations = field.validations || {};
         const requiredAttr = field.required ? 'required' : '';
         const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
+        
+        // Map VM data fields to schema fields
+        let currentValue;
+        if (field.id === 'cpu_cores') {
+            currentValue = this.vmData.cpu_cores ?? field.default ?? '';
+        } else if (field.id === 'memory_gb') {
+            currentValue = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? field.default ?? '';
+        } else if (field.id === 'memory_startup_gb') {
+            currentValue = this.vmData.memory_startup_gb ?? field.default ?? '';
+        } else if (field.id === 'memory_min_gb') {
+            currentValue = this.vmData.memory_min_gb ?? field.default ?? '';
+        } else if (field.id === 'memory_max_gb') {
+            currentValue = this.vmData.memory_max_gb ?? field.default ?? '';
+        } else if (field.id === 'dynamic_memory_enabled') {
+            currentValue = this.vmData.dynamic_memory_enabled ?? field.default ?? false;
+        } else {
+            currentValue = this.vmData[field.id] ?? field.default ?? '';
+        }
 
         if (type === 'boolean') {
-            const checked = defaultValue === true ? 'checked' : '';
+            const checked = currentValue === true ? 'checked' : '';
             return `
                 <label class="checkbox-field">
                     <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
@@ -2608,18 +2833,18 @@ class VMEditOverlay extends BaseOverlay {
         if (type === 'integer') {
             const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
             const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
-            const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+            const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
             return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
         }
 
         if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(currentValue)}</textarea>`;
         }
 
         const inputType = type === 'secret' ? 'password' : 'text';
         const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
         const pattern = patternValue ? `pattern="${patternValue}"` : '';
-        const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+        const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
         return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
     }
 
