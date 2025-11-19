@@ -157,3 +157,43 @@ def test_kerberos_failures_force_misconfigured_mode(monkeypatch):
     api_response = client.get("/api/v1/about")
     assert api_response.status_code == 503
     assert "configuration is invalid" in api_response.json()["detail"].lower()
+
+
+def test_host_deployment_service_stops_during_shutdown(monkeypatch):
+    """The lifespan shutdown should cancel startup deployments."""
+
+    monkeypatch.setattr(app_config, "_config_validation_result", None, raising=False)
+
+    clean_result = config_validation.ConfigValidationResult(checked_at=datetime.utcnow())
+    monkeypatch.setattr(main, "run_config_checks", lambda: clean_result)
+
+    # Avoid real external calls during the test
+    monkeypatch.setattr(main.settings, "auth_enabled", False, raising=False)
+    monkeypatch.setattr(main.settings, "allow_dev_auth", True, raising=False)
+    monkeypatch.setattr(main, "initialize_kerberos", lambda **_: None)
+    monkeypatch.setattr(main, "cleanup_kerberos", lambda: None)
+
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(main.remote_task_service, "start", _noop)
+    monkeypatch.setattr(main.remote_task_service, "stop", _noop)
+    monkeypatch.setattr(main.notification_service, "start", _noop)
+    monkeypatch.setattr(main.notification_service, "stop", _noop)
+    monkeypatch.setattr(main.inventory_service, "start", _noop)
+    monkeypatch.setattr(main.inventory_service, "stop", _noop)
+    monkeypatch.setattr(main.job_service, "start", _noop)
+    monkeypatch.setattr(main.job_service, "stop", _noop)
+    monkeypatch.setattr(main.host_deployment_service, "start_startup_deployment", _noop)
+
+    stop_called = {}
+
+    async def _record_stop():
+        stop_called["called"] = True
+
+    monkeypatch.setattr(main.host_deployment_service, "stop", _record_stop)
+
+    with TestClient(main.app):
+        pass
+
+    assert stop_called.get("called") is True

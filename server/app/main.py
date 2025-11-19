@@ -334,6 +334,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("Shutting down application")
+        await host_deployment_service.stop()
         if inventory_started:
             await inventory_service.stop()
         if job_started:
