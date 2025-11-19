@@ -231,9 +231,18 @@ class JobService:
         assert self._queue is not None
         for _ in range(len(self._worker_tasks) or 1):
             await self._queue.put(None)
+        
+        # Wait for workers with timeout to prevent infinite hangs
         for task in self._worker_tasks:
             try:
-                await task
+                await asyncio.wait_for(task, timeout=5.0)
+            except asyncio.TimeoutError:  # pragma: no cover - defensive handling
+                logger.warning("Job worker task did not complete within timeout, cancelling")
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Job worker terminated with exception")
         self._worker_tasks = []
@@ -356,7 +365,8 @@ class JobService:
             job_types_needing_serialization = {
                 "delete_vm", "create_vm", "create_disk",
                 "create_nic", "update_vm", "update_disk",
-                "update_nic", "delete_disk", "delete_nic", "initialize_vm"
+                "update_nic", "delete_disk", "delete_nic", "initialize_vm",
+                "managed_deployment"
             }
             if job.job_type in job_types_needing_serialization and host_key:
                 await self._acquire_host_slot(host_key, job.job_id)
