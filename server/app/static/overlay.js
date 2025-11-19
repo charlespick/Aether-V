@@ -98,6 +98,11 @@ class OverlayManager {
         this.registerOverlay('provision-job', ProvisionJobOverlay);
         this.registerOverlay('job-details', JobDetailsOverlay);
         this.registerOverlay('notifications', NotificationsOverlay);
+        this.registerOverlay('disk-create', DiskCreateOverlay);
+        this.registerOverlay('disk-edit', DiskEditOverlay);
+        this.registerOverlay('nic-create', NicCreateOverlay);
+        this.registerOverlay('nic-edit', NicEditOverlay);
+        this.registerOverlay('vm-edit', VMEditOverlay);
     }
 }
 
@@ -1958,6 +1963,720 @@ class NotificationsOverlay extends BaseOverlay {
     clearAll() {
         console.log('Clear all notifications');
         overlayManager.close();
+    }
+}
+
+// Disk Create Overlay
+class DiskCreateOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.vmId = data.vm_id || '';
+        this.vmName = data.vm_name || '';
+        this.host = data.host || '';
+        this.schema = null;
+        this.rootEl = null;
+        this.formEl = null;
+        this.messagesEl = null;
+    }
+
+    getTitle() {
+        return `Add Disk to ${this.vmName || 'VM'}`;
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="disk-create-root">
+                <div class="form-loading">Loading schema...</div>
+            </div>
+        `;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('disk-create-root');
+        if (!this.rootEl) {
+            console.error('Disk create root element missing');
+            return;
+        }
+
+        try {
+            this.schema = await this.fetchSchema();
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load disk schema:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load disk creation form. Please try again later.</div>
+            `;
+        }
+    }
+
+    async fetchSchema() {
+        const response = await fetch('/api/v1/schema/disk-create', { credentials: 'same-origin' });
+        if (!response.ok) {
+            throw new Error(`Schema request failed: ${response.status}`);
+        }
+        return await response.json();
+    }
+
+    renderForm() {
+        if (!this.schema) return;
+
+        const fieldsHtml = this.schema.fields
+            .filter(field => field.id !== 'vm_id')
+            .map(field => this.renderField(field))
+            .join('');
+
+        this.rootEl.innerHTML = `
+            <form id="disk-create-form" class="schema-form-body">
+                <div id="disk-create-messages" class="form-messages" role="alert"></div>
+                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="disk-create-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="disk-create-submit">Create Disk</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('disk-create-form');
+        this.messagesEl = document.getElementById('disk-create-messages');
+        const cancelBtn = document.getElementById('disk-create-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    renderField(field) {
+        const fieldId = `schema-${field.id}`;
+        const requiredPill = field.required ? '<span class="field-required-pill">Required</span>' : '';
+        const labelText = this.escapeHtml(field.label || field.id);
+        const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
+        const inputControl = this.renderInputControl(field, fieldId);
+
+        return `
+            <div class="schema-field" data-field-id="${field.id}">
+                <div class="field-header">
+                    <div class="field-title">
+                        <label for="${fieldId}" class="field-label">${labelText}</label>
+                        ${requiredPill}
+                    </div>
+                </div>
+                <div class="field-control">${inputControl}</div>
+                ${description}
+            </div>
+        `;
+    }
+
+    renderInputControl(field, fieldId) {
+        const type = (field.type || 'string').toLowerCase();
+        const defaultValue = field.default ?? '';
+        const validations = field.validations || {};
+        const requiredAttr = field.required ? 'required' : '';
+        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
+
+        if (type === 'boolean') {
+            const checked = defaultValue === true ? 'checked' : '';
+            return `
+                <label class="checkbox-field">
+                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
+                    <span>Enable</span>
+                </label>
+            `;
+        }
+
+        if (type === 'integer') {
+            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
+            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
+            const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+        }
+
+        if (type === 'multiline') {
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
+        }
+
+        const inputType = type === 'secret' ? 'password' : 'text';
+        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
+        const pattern = patternValue ? `pattern="${patternValue}"` : '';
+        const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = { vm_id: this.vmId };
+
+        for (const [key, value] of formData.entries()) {
+            const field = this.schema.fields.find(f => f.id === key);
+            if (!field) continue;
+
+            if (field.type === 'integer') {
+                values[key] = parseInt(value, 10);
+            } else if (field.type === 'boolean') {
+                values[key] = formData.has(key);
+            } else {
+                values[key] = value;
+            }
+        }
+
+        try {
+            const response = await fetch('/api/v1/resources/disks', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    schema_version: this.schema.version || 1,
+                    values: values,
+                    target_host: this.host
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                // Refresh the VM view
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to create disk';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('Disk creation error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to create disk: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// Disk Edit Overlay
+class DiskEditOverlay extends DiskCreateOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.resourceId = data.resource_id || '';
+    }
+
+    getTitle() {
+        return `Edit Disk on ${this.vmName || 'VM'}`;
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = { vm_id: this.vmId };
+
+        for (const [key, value] of formData.entries()) {
+            const field = this.schema.fields.find(f => f.id === key);
+            if (!field) continue;
+
+            if (field.type === 'integer') {
+                values[key] = parseInt(value, 10);
+            } else if (field.type === 'boolean') {
+                values[key] = formData.has(key);
+            } else {
+                values[key] = value;
+            }
+        }
+
+        try {
+            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/disks/${encodeURIComponent(this.resourceId)}`, {
+                method: 'PUT',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    schema_version: this.schema.version || 1,
+                    values: values,
+                    target_host: this.host,
+                    resource_id: this.resourceId
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to update disk';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('Disk update error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to update disk: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// NIC Create Overlay
+class NicCreateOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.vmId = data.vm_id || '';
+        this.vmName = data.vm_name || '';
+        this.host = data.host || '';
+        this.schema = null;
+        this.rootEl = null;
+        this.formEl = null;
+        this.messagesEl = null;
+    }
+
+    getTitle() {
+        return `Add Network Adapter to ${this.vmName || 'VM'}`;
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="nic-create-root">
+                <div class="form-loading">Loading schema...</div>
+            </div>
+        `;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('nic-create-root');
+        if (!this.rootEl) {
+            console.error('NIC create root element missing');
+            return;
+        }
+
+        try {
+            this.schema = await this.fetchSchema();
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load NIC schema:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load network adapter creation form. Please try again later.</div>
+            `;
+        }
+    }
+
+    async fetchSchema() {
+        const response = await fetch('/api/v1/schema/nic-create', { credentials: 'same-origin' });
+        if (!response.ok) {
+            throw new Error(`Schema request failed: ${response.status}`);
+        }
+        return await response.json();
+    }
+
+    renderForm() {
+        if (!this.schema) return;
+
+        const fieldsHtml = this.schema.fields
+            .filter(field => field.id !== 'vm_id')
+            .map(field => this.renderField(field))
+            .join('');
+
+        this.rootEl.innerHTML = `
+            <form id="nic-create-form" class="schema-form-body">
+                <div id="nic-create-messages" class="form-messages" role="alert"></div>
+                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="nic-create-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="nic-create-submit">Create Network Adapter</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('nic-create-form');
+        this.messagesEl = document.getElementById('nic-create-messages');
+        const cancelBtn = document.getElementById('nic-create-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    renderField(field) {
+        const fieldId = `schema-${field.id}`;
+        const requiredPill = field.required ? '<span class="field-required-pill">Required</span>' : '';
+        const labelText = this.escapeHtml(field.label || field.id);
+        const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
+        const inputControl = this.renderInputControl(field, fieldId);
+
+        return `
+            <div class="schema-field" data-field-id="${field.id}">
+                <div class="field-header">
+                    <div class="field-title">
+                        <label for="${fieldId}" class="field-label">${labelText}</label>
+                        ${requiredPill}
+                    </div>
+                </div>
+                <div class="field-control">${inputControl}</div>
+                ${description}
+            </div>
+        `;
+    }
+
+    renderInputControl(field, fieldId) {
+        const type = (field.type || 'string').toLowerCase();
+        const defaultValue = field.default ?? '';
+        const validations = field.validations || {};
+        const requiredAttr = field.required ? 'required' : '';
+        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
+
+        if (type === 'boolean') {
+            const checked = defaultValue === true ? 'checked' : '';
+            return `
+                <label class="checkbox-field">
+                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
+                    <span>Enable</span>
+                </label>
+            `;
+        }
+
+        if (type === 'integer') {
+            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
+            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
+            const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+        }
+
+        if (type === 'multiline') {
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
+        }
+
+        const inputType = type === 'secret' ? 'password' : 'text';
+        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
+        const pattern = patternValue ? `pattern="${patternValue}"` : '';
+        const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = { vm_id: this.vmId };
+
+        for (const [key, value] of formData.entries()) {
+            const field = this.schema.fields.find(f => f.id === key);
+            if (!field) continue;
+
+            if (field.type === 'integer') {
+                values[key] = parseInt(value, 10);
+            } else if (field.type === 'boolean') {
+                values[key] = formData.has(key);
+            } else {
+                values[key] = value;
+            }
+        }
+
+        try {
+            const response = await fetch('/api/v1/resources/nics', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    schema_version: this.schema.version || 1,
+                    values: values,
+                    target_host: this.host
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to create network adapter';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('NIC creation error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to create network adapter: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// NIC Edit Overlay
+class NicEditOverlay extends NicCreateOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.resourceId = data.resource_id || '';
+    }
+
+    getTitle() {
+        return `Edit Network Adapter on ${this.vmName || 'VM'}`;
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = { vm_id: this.vmId };
+
+        for (const [key, value] of formData.entries()) {
+            const field = this.schema.fields.find(f => f.id === key);
+            if (!field) continue;
+
+            if (field.type === 'integer') {
+                values[key] = parseInt(value, 10);
+            } else if (field.type === 'boolean') {
+                values[key] = formData.has(key);
+            } else {
+                values[key] = value;
+            }
+        }
+
+        try {
+            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/nics/${encodeURIComponent(this.resourceId)}`, {
+                method: 'PUT',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    schema_version: this.schema.version || 1,
+                    values: values,
+                    target_host: this.host,
+                    resource_id: this.resourceId
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to update network adapter';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('NIC update error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to update network adapter: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// VM Edit Overlay
+class VMEditOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.vmId = data.vm_id || '';
+        this.vmName = data.vm_name || '';
+        this.host = data.host || '';
+        this.schema = null;
+        this.rootEl = null;
+        this.formEl = null;
+        this.messagesEl = null;
+    }
+
+    getTitle() {
+        return `Edit ${this.vmName || 'VM'}`;
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="vm-edit-root">
+                <div class="form-loading">Loading schema...</div>
+            </div>
+        `;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('vm-edit-root');
+        if (!this.rootEl) {
+            console.error('VM edit root element missing');
+            return;
+        }
+
+        try {
+            this.schema = await this.fetchSchema();
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load VM schema:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load VM edit form. Please try again later.</div>
+            `;
+        }
+    }
+
+    async fetchSchema() {
+        const response = await fetch('/api/v1/schema/vm-create', { credentials: 'same-origin' });
+        if (!response.ok) {
+            throw new Error(`Schema request failed: ${response.status}`);
+        }
+        return await response.json();
+    }
+
+    renderForm() {
+        if (!this.schema) return;
+
+        // Filter out guest_config fields for VM edit (only hardware fields)
+        const fieldsHtml = this.schema.fields
+            .filter(field => !field.guest_config && field.id !== 'vm_name')
+            .map(field => this.renderField(field))
+            .join('');
+
+        this.rootEl.innerHTML = `
+            <form id="vm-edit-form" class="schema-form-body">
+                <div id="vm-edit-messages" class="form-messages" role="alert"></div>
+                <p class="field-note">Note: You can only modify hardware properties. Guest configuration (hostname, domain join, etc.) is set during initial provisioning.</p>
+                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="vm-edit-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="vm-edit-submit">Update VM</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('vm-edit-form');
+        this.messagesEl = document.getElementById('vm-edit-messages');
+        const cancelBtn = document.getElementById('vm-edit-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    renderField(field) {
+        const fieldId = `schema-${field.id}`;
+        const requiredPill = field.required ? '<span class="field-required-pill">Required</span>' : '';
+        const labelText = this.escapeHtml(field.label || field.id);
+        const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
+        const inputControl = this.renderInputControl(field, fieldId);
+
+        return `
+            <div class="schema-field" data-field-id="${field.id}">
+                <div class="field-header">
+                    <div class="field-title">
+                        <label for="${fieldId}" class="field-label">${labelText}</label>
+                        ${requiredPill}
+                    </div>
+                </div>
+                <div class="field-control">${inputControl}</div>
+                ${description}
+            </div>
+        `;
+    }
+
+    renderInputControl(field, fieldId) {
+        const type = (field.type || 'string').toLowerCase();
+        const defaultValue = field.default ?? '';
+        const validations = field.validations || {};
+        const requiredAttr = field.required ? 'required' : '';
+        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
+
+        if (type === 'boolean') {
+            const checked = defaultValue === true ? 'checked' : '';
+            return `
+                <label class="checkbox-field">
+                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
+                    <span>Enable</span>
+                </label>
+            `;
+        }
+
+        if (type === 'integer') {
+            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
+            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
+            const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+        }
+
+        if (type === 'multiline') {
+            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
+        }
+
+        const inputType = type === 'secret' ? 'password' : 'text';
+        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
+        const pattern = patternValue ? `pattern="${patternValue}"` : '';
+        const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
+        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = {};
+
+        for (const [key, value] of formData.entries()) {
+            const field = this.schema.fields.find(f => f.id === key);
+            if (!field) continue;
+
+            if (field.type === 'integer') {
+                values[key] = parseInt(value, 10);
+            } else if (field.type === 'boolean') {
+                values[key] = formData.has(key);
+            } else {
+                values[key] = value;
+            }
+        }
+
+        try {
+            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}`, {
+                method: 'PUT',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    schema_version: this.schema.version || 1,
+                    values: values,
+                    target_host: this.host
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to update VM';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('VM update error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to update VM: ${this.escapeHtml(error.message)}</div>`;
+        }
     }
 }
 
