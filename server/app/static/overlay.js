@@ -2199,8 +2199,21 @@ class DiskEditOverlay extends DiskCreateOverlay {
         const requiredAttr = field.required ? 'required' : '';
         const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
         
-        // Get current value from resource data, fallback to default
-        let currentValue = this.resourceData[field.id] ?? field.default ?? '';
+        // Map schema field IDs to VM disk object properties
+        let currentValue;
+        if (field.id === 'disk_size_gb') {
+            // Schema uses disk_size_gb but VM disk objects expose size_gb
+            currentValue = this.resourceData.size_gb ?? field.default ?? '';
+        } else if (field.id === 'disk_type') {
+            // Schema uses disk_type but VM disk objects expose type
+            currentValue = this.resourceData.type ?? field.default ?? '';
+        } else if (field.id === 'controller_type') {
+            // Controller type might be exposed differently
+            currentValue = this.resourceData.controller_type ?? this.resourceData.controller ?? field.default ?? '';
+        } else {
+            // Get current value from resource data, fallback to default
+            currentValue = this.resourceData[field.id] ?? field.default ?? '';
+        }
 
         if (type === 'boolean') {
             const checked = (this.resourceData[field.id] !== undefined ? this.resourceData[field.id] : field.default) === true ? 'checked' : '';
@@ -2806,6 +2819,9 @@ class VMEditOverlay extends BaseOverlay {
         let currentValue;
         if (field.id === 'cpu_cores') {
             currentValue = this.vmData.cpu_cores ?? field.default ?? '';
+        } else if (field.id === 'gb_ram') {
+            // Schema uses gb_ram but VM data exposes memory_gb
+            currentValue = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? field.default ?? '';
         } else if (field.id === 'memory_gb') {
             currentValue = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? field.default ?? '';
         } else if (field.id === 'memory_startup_gb') {
