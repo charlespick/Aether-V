@@ -369,41 +369,61 @@ write_hyperv_kvp() {
 
     local record_size=$((512 + 2048))
     local temp_pool
-    temp_pool=$(mktemp "$(dirname "$guest_pool")/kvp_pool_tmp.XXXX")
+    temp_pool=$(mktemp "$(dirname "$guest_pool")/kvp_pool_tmp.XXXX") || return 1
 
     # Build the 2560-byte record directly: 512 bytes key + 2048 bytes value
+    local status=0
+
     {
-        flock -x 9
+        flock -x 9 || status=1
 
         # Copy existing entries except the one we are about to replace
-        if [[ -f "$guest_pool" ]]; then
+        if [[ $status -eq 0 && -f "$guest_pool" ]]; then
             local nb nkv offset existing_key
             nb=$(wc -c < "$guest_pool")
             nkv=$(( nb / record_size ))
 
             for n in $(seq 0 $(( nkv - 1 )) ); do
+                [[ $status -ne 0 ]] && break
+
                 offset=$(( n * record_size ))
                 existing_key=$(dd if="$guest_pool" bs=1 count=512 skip=$offset status=none | sed 's/\x0.*//g')
 
                 if [[ "$existing_key" != "$key" ]]; then
-                    dd if="$guest_pool" bs=1 count=$record_size skip=$offset status=none >> "$temp_pool"
+                    if ! dd if="$guest_pool" bs=1 count=$record_size skip=$offset status=none >> "$temp_pool"; then
+                        status=1
+                    fi
                 fi
             done
         fi
 
-        {
-            printf '%s' "$key"
-            dd if=/dev/zero bs=1 count=$((511 - ${#key})) 2>/dev/null
-            printf '\0'
-            printf '%s' "$value"
-            dd if=/dev/zero bs=1 count=$((2047 - ${#value})) 2>/dev/null
-            printf '\0'
-        } >> "$temp_pool"
+        if [[ $status -eq 0 ]]; then
+            if ! {
+                printf '%s' "$key" &&
+                dd if=/dev/zero bs=1 count=$((511 - ${#key})) status=none &&
+                printf '\0' &&
+                printf '%s' "$value" &&
+                dd if=/dev/zero bs=1 count=$((2047 - ${#value})) status=none &&
+                printf '\0'
+            } >> "$temp_pool"; then
+                status=1
+            fi
+        fi
 
-        mv "$temp_pool" "$guest_pool"
-        chmod 600 "$guest_pool"
+        if [[ $status -eq 0 ]]; then
+            if ! mv "$temp_pool" "$guest_pool"; then
+                status=1
+            elif ! chmod 600 "$guest_pool"; then
+                status=1
+            fi
+        else
+            rm -f "$temp_pool"
+        fi
+
         flock -u 9
     } 9>"$lock_file"
+
+    return $status
 }
 
 # File to track service phase
