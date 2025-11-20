@@ -12,12 +12,6 @@ fields:
     validations:
       min_length: 1
       max_length: 64
-  - id: image_name
-    label: "Image"
-    description: "Identifier of the golden image to clone."
-    hint: "Windows Server 2022"
-    type: string
-    required: true
   - id: gb_ram
     label: "Memory (GB)"
     description: "Amount of memory to assign to the VM in gigabytes."

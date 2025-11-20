@@ -2021,7 +2021,7 @@ class DiskCreateOverlay extends BaseOverlay {
         if (!this.schema) return;
 
         const fieldsHtml = this.schema.fields
-            .filter(field => field.id !== 'vm_id')
+            .filter(field => field.id !== 'vm_id' && field.id !== 'image_name')  // Exclude vm_id and image_name when adding disk to existing VM
             .map(field => this.renderField(field))
             .join('');
 

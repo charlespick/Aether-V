@@ -12,11 +12,17 @@ fields:
     validations:
       min_length: 36
       max_length: 36
+  - id: image_name
+    label: "Base Image"
+    description: "Optional: Name of a golden image to clone. If omitted, creates a blank disk."
+    hint: "Windows Server 2022"
+    type: string
+    required: false
   - id: disk_size_gb
     label: "Disk size (GB)"
-    description: "Size of the virtual disk in gigabytes."
+    description: "Size of the virtual disk in gigabytes. Required only when creating blank disks (image_name not provided)."
     type: integer
-    required: true
+    required: false
     default: 100
     validations:
       minimum: 1

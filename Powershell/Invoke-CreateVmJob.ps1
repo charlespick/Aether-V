@@ -47,13 +47,13 @@ end {
                 }
                 elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
                     $result[$key] = @($value | ForEach-Object { 
-                        if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
-                            ConvertTo-Hashtable -InputObject $_
-                        }
-                        else {
-                            $_
-                        }
-                    })
+                            if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                                ConvertTo-Hashtable -InputObject $_
+                            }
+                            else {
+                                $_
+                            }
+                        })
                 }
                 else {
                     $result[$key] = $value
@@ -71,13 +71,13 @@ end {
                 }
                 elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
                     $result[$property.Name] = @($value | ForEach-Object { 
-                        if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
-                            ConvertTo-Hashtable -InputObject $_
-                        }
-                        else {
-                            $_
-                        }
-                    })
+                            if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                                ConvertTo-Hashtable -InputObject $_
+                            }
+                            else {
+                                $_
+                            }
+                        })
                 }
                 else {
                     $result[$property.Name] = $value
@@ -176,7 +176,7 @@ end {
         $values = ConvertTo-Hashtable $rawFields
 
         # Validate required fields
-        foreach ($required in @('vm_name', 'image_name', 'gb_ram', 'cpu_cores', 'guest_la_uid', 'guest_la_pw')) {
+        foreach ($required in @('vm_name', 'gb_ram', 'cpu_cores', 'guest_la_uid', 'guest_la_pw')) {
             if (-not ($values.ContainsKey($required) -and $values[$required])) {
                 throw "Job definition missing required field '$required'."
             }
@@ -194,12 +194,6 @@ end {
         $osFamily = 'windows'
         if ($values.ContainsKey('os_family') -and $values['os_family']) {
             $osFamily = $values['os_family'].ToString().ToLowerInvariant()
-        }
-        else {
-            $imageName = $values['image_name'].ToString().ToLowerInvariant()
-            if ($imageName.StartsWith('ubuntu') -or $imageName.StartsWith('rhel') -or $imageName.StartsWith('centos') -or $imageName.StartsWith('rocky') -or $imageName.StartsWith('debian')) {
-                $osFamily = 'linux'
-            }
         }
 
         # Load host resources configuration
@@ -258,32 +252,28 @@ end {
         }
 
         $vmName = [string]$values['vm_name']
-        $imageName = [string]$values['image_name']
         $gbRam = [int]$values['gb_ram']
         $cpuCores = [int]$values['cpu_cores']
 
         $currentHost = $env:COMPUTERNAME
         Write-Host "Creating VM '$vmName' on host '$currentHost' (OS: $osFamily)."
 
-        # Copy image - this creates the VM config folder and initial disk
-        $copyResult = Invoke-ProvisioningCopyImage -VMName $vmName -ImageName $imageName -StoragePath $storagePath -VMBasePath $vmBasePath
-        $vmDataFolder = $copyResult.VMConfigPath
-        $vhdxPath = $copyResult.VhdxPath
-        
-        Write-Host "Image copied to $vhdxPath" -ForegroundColor Green
-        Write-Host "VM config directory: $vmDataFolder" -ForegroundColor Green
+        # Resolve VM configuration path
+        $vmDataFolder = Join-Path -Path $vmBasePath -ChildPath $vmName
 
         # Create provisioning ISO for guest configuration
         $isoPath = Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -StoragePath $storagePath -VMName $vmName
 
-        # Register VM with Hyper-V (without network adapter - that will be added separately)
+        # Register VM with Hyper-V (without disk or network adapter - those will be added separately)
+        # Note: In the split component model, the VM is created without any disk
+        # The boot disk will be attached in a separate disk creation job
         $registerParams = @{
             VMName       = $vmName
             OSFamily     = $osFamily
             GBRam        = $gbRam
             CPUcores     = $cpuCores
             VMDataFolder = $vmDataFolder
-            VhdxPath     = $vhdxPath
+            VhdxPath     = $null  # No disk attached during VM creation
             IsoPath      = $isoPath
         }
 
@@ -293,70 +283,15 @@ end {
         $vm = Get-VM -Name $vmName -ErrorAction Stop
         $vmId = $vm.Id.ToString()
 
-        # Wait for provisioning key (VM starts automatically during registration)
-        Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName | Out-Null
-
-        # Publish provisioning data
-        $env:GuestLaPw = [string]$values['guest_la_pw']
-        if ($values.ContainsKey('guest_domain_joinpw') -and $values['guest_domain_joinpw']) {
-            $env:GuestDomainJoinPw = [string]$values['guest_domain_joinpw']
-        }
-        else {
-            Remove-Item Env:GuestDomainJoinPw -ErrorAction SilentlyContinue
-        }
-
-        $publishParams = @{
-            GuestLaUid    = [string]$values['guest_la_uid']
-            GuestHostName = $vmName
-        }
-
-        if ($osFamily -eq 'windows' -and $values.ContainsKey('guest_domain_jointarget') -and $values['guest_domain_jointarget']) {
-            $publishParams.GuestDomainJoinTarget = [string]$values['guest_domain_jointarget']
-            $publishParams.GuestDomainJoinUid = [string]$values['guest_domain_joinuid']
-            if ($values.ContainsKey('guest_domain_joinou') -and $values['guest_domain_joinou']) {
-                $publishParams.GuestDomainJoinOU = [string]$values['guest_domain_joinou']
-            }
-        }
-
-        if ($osFamily -eq 'linux' -and $values.ContainsKey('cnf_ansible_ssh_user') -and $values['cnf_ansible_ssh_user']) {
-            $publishParams.AnsibleSshUser = [string]$values['cnf_ansible_ssh_user']
-            if ($values.ContainsKey('cnf_ansible_ssh_key') -and $values['cnf_ansible_ssh_key']) {
-                $publishParams.AnsibleSshKey = [string]$values['cnf_ansible_ssh_key']
-            }
-        }
-
-        Invoke-ProvisioningPublishProvisioningData @publishParams
-
-        # Wait for provisioning to complete
-        Invoke-ProvisioningWaitForProvisioningCompletion -VMName $vmName | Out-Null
-
-        # Cleanup ISO
-        Invoke-ProvisioningCleanupIso -VMName $vmName -IsoPath $isoPath
-
-        # Add to cluster if requested
-        if ($vmClustered) {
-            try {
-                Import-Module FailoverClusters -ErrorAction Stop | Out-Null
-                $existing = Get-ClusterGroup -Name $vmName -ErrorAction SilentlyContinue
-                if (-not $existing) {
-                    Write-Host "Adding VM '$vmName' to the Failover Cluster..."
-                    Add-ClusterVirtualMachineRole -VMName $vmName -ErrorAction Stop | Out-Null
-                    Write-Host "VM '$vmName' added to cluster." -ForegroundColor Green
-                }
-            }
-            catch {
-                Write-Warning "Failed to add VM '$vmName' to cluster: $_"
-            }
-        }
-
         Write-Host "VM creation completed successfully." -ForegroundColor Green
         Write-Host "VM ID: $vmId" -ForegroundColor Cyan
+        Write-Host "Note: VM is created but not started. Disk, NIC, and initialization will be applied in subsequent steps." -ForegroundColor Yellow
         
         # Output the VM ID as JSON for the control plane
         $result = @{
-            vm_id = $vmId
+            vm_id   = $vmId
             vm_name = $vmName
-            status = "created"
+            status  = "created"
         }
         $result | ConvertTo-Json -Depth 2
     }
@@ -373,9 +308,5 @@ end {
     catch {
         Write-Error ("VM creation job failed: " + $_.Exception.Message)
         exit 1
-    }
-    finally {
-        Remove-Item Env:GuestLaPw -ErrorAction SilentlyContinue
-        Remove-Item Env:GuestDomainJoinPw -ErrorAction SilentlyContinue
     }
 }

@@ -122,12 +122,17 @@ end {
             throw "Job definition missing required field 'vm_id'."
         }
 
-        if (-not ($values.ContainsKey('disk_size_gb') -and $values['disk_size_gb'])) {
-            throw "Job definition missing required field 'disk_size_gb'."
+        # Either image_name or disk_size_gb is required
+        $hasImageName = $values.ContainsKey('image_name') -and $values['image_name']
+        $hasDiskSize = $values.ContainsKey('disk_size_gb') -and $values['disk_size_gb']
+        
+        if (-not $hasImageName -and -not $hasDiskSize) {
+            throw "Job definition must provide either 'image_name' (to clone from golden image) or 'disk_size_gb' (to create blank disk)."
         }
 
         $vmId = [string]$values['vm_id']
-        $diskSizeGb = [int]$values['disk_size_gb']
+        $imageName = if ($hasImageName) { [string]$values['image_name'] } else { $null }
+        $diskSizeGb = if ($hasDiskSize) { [int]$values['disk_size_gb'] } else { 0 }
         
         $diskType = 'Dynamic'
         if ($values.ContainsKey('disk_type') -and $values['disk_type']) {
@@ -213,21 +218,89 @@ end {
 
         # Create VHD path
         $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-        $vhdxFileName = "${vmName}-disk-${timestamp}.vhdx"
-        $vhdxPath = Join-Path -Path $storagePath -ChildPath $vhdxFileName
-
-        Write-Host "Creating new VHDX at $vhdxPath"
         
-        # Create the virtual hard disk
-        $diskSizeBytes = $diskSizeGb * 1GB
-        if ($diskType -eq 'Fixed') {
-            New-VHD -Path $vhdxPath -SizeBytes $diskSizeBytes -Fixed -ErrorAction Stop | Out-Null
+        # Determine VHDX path and size based on whether we're cloning or creating blank
+        if ($imageName) {
+            # Cloning from golden image
+            Write-Host "Creating disk from golden image '$imageName' for VM '$vmName' (ID: $vmId)."
+            
+            # Find the golden image in DiskImages directory
+            $staticImagesPath = Get-ChildItem -Path "C:\ClusterStorage" -Directory |
+            ForEach-Object {
+                $diskImagesPath = Join-Path $_.FullName "DiskImages"
+                if (Test-Path $diskImagesPath) {
+                    return $diskImagesPath
+                }
+            } |
+            Select-Object -First 1
+
+            if (-not $staticImagesPath) {
+                throw "Unable to locate a DiskImages directory on any cluster shared volume."
+            }
+
+            $imageFilename = "$imageName.vhdx"
+            $imagePath = Join-Path -Path $staticImagesPath -ChildPath $imageFilename
+            
+            if (-not (Test-Path -LiteralPath $imagePath -PathType Leaf)) {
+                throw "Golden image '$imageName' was not found at $imagePath."
+            }
+            
+            # Generate unique ID for the VHDX to avoid collisions
+            $uniqueId = [System.Guid]::NewGuid().ToString("N").Substring(0, 8)
+            $uniqueVhdxName = "${imageName}-${uniqueId}.vhdx"
+            $vhdxPath = Join-Path -Path $storagePath -ChildPath $uniqueVhdxName
+            
+            $imageSize = (Get-Item -LiteralPath $imagePath).Length
+            
+            # Check if storage path has enough space
+            $storageDrive = Split-Path -Path $storagePath -Qualifier
+            if ($storageDrive) {
+                try {
+                    $drive = Get-PSDrive -Name $storageDrive.TrimEnd(':') -ErrorAction Stop
+                    if ($drive.Free -lt $imageSize) {
+                        throw "Insufficient free space on $storageDrive to clone image '$imageName'."
+                    }
+                }
+                catch {
+                    Write-Warning "Unable to verify free space on $storageDrive : $_"
+                }
+            }
+            
+            # Ensure storage path exists
+            if (-not (Test-Path -LiteralPath $storagePath)) {
+                New-Item -ItemType Directory -Path $storagePath -Force | Out-Null
+            }
+            
+            Write-Host "Copying golden image to $vhdxPath"
+            try {
+                Copy-Item -Path $imagePath -Destination $vhdxPath -Force -ErrorAction Stop
+            }
+            catch {
+                throw "Failed to copy golden image '$imageName' to ${vhdxPath}: $_"
+            }
+            
+            Write-Host "Image copied successfully" -ForegroundColor Green
         }
         else {
-            New-VHD -Path $vhdxPath -SizeBytes $diskSizeBytes -Dynamic -ErrorAction Stop | Out-Null
+            # Creating blank disk
+            Write-Host "Creating blank ${diskSizeGb}GB disk for VM '$vmName' (ID: $vmId)."
+            
+            $vhdxFileName = "${vmName}-disk-${timestamp}.vhdx"
+            $vhdxPath = Join-Path -Path $storagePath -ChildPath $vhdxFileName
+            
+            Write-Host "Creating new VHDX at $vhdxPath"
+            
+            # Create the virtual hard disk
+            $diskSizeBytes = $diskSizeGb * 1GB
+            if ($diskType -eq 'Fixed') {
+                New-VHD -Path $vhdxPath -SizeBytes $diskSizeBytes -Fixed -ErrorAction Stop | Out-Null
+            }
+            else {
+                New-VHD -Path $vhdxPath -SizeBytes $diskSizeBytes -Dynamic -ErrorAction Stop | Out-Null
+            }
+            
+            Write-Host "VHDX created successfully" -ForegroundColor Green
         }
-
-        Write-Host "VHDX created successfully" -ForegroundColor Green
 
         # Attach disk to VM
         if ($controllerType -eq 'SCSI') {
@@ -264,12 +337,13 @@ end {
         
         # Output the disk ID as JSON for the control plane
         $result = @{
-            disk_id = $diskId
-            disk_path = $vhdxPath
-            vm_id = $vmId
-            vm_name = $vmName
-            size_gb = $diskSizeGb
-            status = "created"
+            disk_id    = $diskId
+            disk_path  = $vhdxPath
+            vm_id      = $vmId
+            vm_name    = $vmName
+            size_gb    = if ($imageName) { "from_image" } else { $diskSizeGb }
+            image_name = $imageName
+            status     = "created"
         }
         $result | ConvertTo-Json -Depth 2
     }

@@ -16,7 +16,8 @@ function Invoke-ProvisioningRegisterVm {
         [Parameter(Mandatory = $true)]
         [string]$VMDataFolder,
 
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
         [string]$VhdxPath,
 
         [Parameter(Mandatory = $true)]
@@ -59,15 +60,18 @@ function Invoke-ProvisioningRegisterVm {
         throw "Failed to configure CPU cores for VM '$vmName': $_"
     }
 
-    if (-not (Test-Path -LiteralPath $VhdxPath -PathType Leaf)) {
-        throw "VHDX not found at '$VhdxPath' for VM '$vmName'."
-    }
+    # Attach boot disk if provided (in split component model, disk is attached separately)
+    if (-not [string]::IsNullOrWhiteSpace($VhdxPath)) {
+        if (-not (Test-Path -LiteralPath $VhdxPath -PathType Leaf)) {
+            throw "VHDX not found at '$VhdxPath' for VM '$vmName'."
+        }
 
-    try {
-        Add-VMHardDiskDrive -VM $vm -Path $VhdxPath
-    }
-    catch {
-        throw "Failed to attach VHDX '$VhdxPath' to VM '$vmName': $_"
+        try {
+            Add-VMHardDiskDrive -VM $vm -Path $VhdxPath
+        }
+        catch {
+            throw "Failed to attach VHDX '$VhdxPath' to VM '$vmName': $_"
+        }
     }
 
     # Use specified virtual switch or fallback to first available
@@ -119,19 +123,21 @@ function Invoke-ProvisioningRegisterVm {
         throw "Failed to mount provisioning ISO '$IsoPath' to VM '$vmName': $_"
     }
 
-    try {
-        Set-VMFirmware -VM $vm -FirstBootDevice (Get-VMHardDiskDrive -VM $vm | Select-Object -First 1)
-    }
-    catch {
-        throw "Failed to set boot order for VM '$vmName': $_"
+    # Set boot order to boot from the first hard disk (if one is attached)
+    # In split component model, disk may be attached later, so this is optional
+    $bootDisk = Get-VMHardDiskDrive -VM $vm | Select-Object -First 1
+    if ($bootDisk) {
+        try {
+            Set-VMFirmware -VM $vm -FirstBootDevice $bootDisk
+        }
+        catch {
+            throw "Failed to set boot order for VM '$vmName': $_"
+        }
     }
 
-    try {
-        Start-VM -VM $vm | Out-Null
-    }
-    catch {
-        throw "Failed to start VM '$vmName': $_"
-    }
+    # Note: In split component model, VM is created but NOT started
+    # The initialization job will start the VM after disk and NIC are attached
+    Write-Host "VM '$vmName' created successfully (not started - will be started during initialization)" -ForegroundColor Green
 
     return $vm
 }

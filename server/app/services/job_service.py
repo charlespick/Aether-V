@@ -51,7 +51,8 @@ class _PowerShellStreamDecoder:
             return []
 
         sanitized = (
-            chunk.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
+            chunk.replace("\ufeff", "").replace(
+                "\r\n", "\n").replace("\r", "\n")
         )
         if not sanitized:
             return []
@@ -144,7 +145,7 @@ class _PowerShellStreamDecoder:
             if newline_index == -1:
                 break
             line = self._plain_buffer[:newline_index]
-            self._plain_buffer = self._plain_buffer[newline_index + 1 :]
+            self._plain_buffer = self._plain_buffer[newline_index + 1:]
             if line.strip():
                 lines.append(line)
 
@@ -167,7 +168,8 @@ class JobService:
         self._queue: Optional[asyncio.Queue[Optional[str]]] = None
         self._worker_tasks: List[asyncio.Task[None]] = []
         self._started = False
-        self._stream_decoders: Dict[Tuple[str, str], _PowerShellStreamDecoder] = {}
+        self._stream_decoders: Dict[Tuple[str, str],
+                                    _PowerShellStreamDecoder] = {}
         self._host_running: Dict[str, str] = {}
         self._host_waiters: Dict[str, Deque[Tuple[str, asyncio.Event]]] = {}
 
@@ -202,7 +204,8 @@ class JobService:
         try:
             job_copy.parameters = redact_job_parameters(job_copy.parameters)
         except Exception:  # pragma: no cover - defensive logging
-            logger.exception("Failed to redact job parameters for %s", job.job_id)
+            logger.exception(
+                "Failed to redact job parameters for %s", job.job_id)
             job_copy.parameters = {}
         return job_copy
 
@@ -231,13 +234,14 @@ class JobService:
         assert self._queue is not None
         for _ in range(len(self._worker_tasks) or 1):
             await self._queue.put(None)
-        
+
         # Wait for workers with timeout to prevent infinite hangs
         for task in self._worker_tasks:
             try:
                 await asyncio.wait_for(task, timeout=5.0)
             except asyncio.TimeoutError:  # pragma: no cover - defensive handling
-                logger.warning("Job worker task did not complete within timeout, cancelling")
+                logger.warning(
+                    "Job worker task did not complete within timeout, cancelling")
                 task.cancel()
                 try:
                     await task
@@ -286,13 +290,13 @@ class JobService:
         parent_job_id: Optional[str] = None,
     ) -> Job:
         """Submit a resource creation/update/delete job."""
-        
+
         if not self._started or self._queue is None:
             raise RuntimeError("Job service is not running")
-        
+
         if not target_host:
             raise RuntimeError(f"{job_type} job requires a target host")
-        
+
         job_id = str(uuid.uuid4())
         job = Job(
             job_id=job_id,
@@ -306,13 +310,13 @@ class JobService:
                 **({"parent_job_id": parent_job_id} if parent_job_id else {}),
             },
         )
-        
+
         async with self._lock:
             self.jobs[job_id] = job
-        
+
         await self._sync_job_notification(job)
         await self._broadcast_job_status(job)
-        
+
         await self._queue.put(job_id)
         logger.info(
             "Queued %s job %s for host %s",
@@ -346,7 +350,8 @@ class JobService:
             try:
                 await self._process_job(job_id)
             except Exception:  # pragma: no cover - defensive logging
-                logger.exception("Unhandled exception while processing job %s", job_id)
+                logger.exception(
+                    "Unhandled exception while processing job %s", job_id)
             finally:
                 self._queue.task_done()
 
@@ -511,7 +516,8 @@ class JobService:
 
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for deletion")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for deletion")
 
         json_payload = await asyncio.to_thread(
             json.dumps,
@@ -573,7 +579,8 @@ class JobService:
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for VM creation")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for VM creation")
 
         json_payload = await asyncio.to_thread(
             json.dumps,
@@ -587,7 +594,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"VM creation script exited with code {exit_code}")
+            raise RuntimeError(
+                f"VM creation script exited with code {exit_code}")
 
     async def _execute_create_disk_job(self, job: Job) -> None:
         """Execute a disk creation and attachment job."""
@@ -605,7 +613,8 @@ class JobService:
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for disk creation")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for disk creation")
 
         json_payload = await asyncio.to_thread(
             json.dumps,
@@ -619,7 +628,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"Disk creation script exited with code {exit_code}")
+            raise RuntimeError(
+                f"Disk creation script exited with code {exit_code}")
 
     async def _execute_create_nic_job(self, job: Job) -> None:
         """Execute a NIC creation and attachment job."""
@@ -637,7 +647,8 @@ class JobService:
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for NIC creation")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for NIC creation")
 
         json_payload = await asyncio.to_thread(
             json.dumps,
@@ -651,7 +662,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"NIC creation script exited with code {exit_code}")
+            raise RuntimeError(
+                f"NIC creation script exited with code {exit_code}")
 
     async def _execute_update_vm_job(self, job: Job) -> None:
         """Execute a VM update job."""
@@ -669,7 +681,8 @@ class JobService:
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for VM update")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for VM update")
 
         json_payload = await asyncio.to_thread(
             json.dumps, definition, ensure_ascii=False, separators=(",", ":")
@@ -680,7 +693,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"VM update script exited with code {exit_code}")
+            raise RuntimeError(
+                f"VM update script exited with code {exit_code}")
 
     async def _execute_update_disk_job(self, job: Job) -> None:
         """Execute a disk update job."""
@@ -698,7 +712,8 @@ class JobService:
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for disk update")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for disk update")
 
         json_payload = await asyncio.to_thread(
             json.dumps, definition, ensure_ascii=False, separators=(",", ":")
@@ -709,7 +724,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"Disk update script exited with code {exit_code}")
+            raise RuntimeError(
+                f"Disk update script exited with code {exit_code}")
 
     async def _execute_update_nic_job(self, job: Job) -> None:
         """Execute a NIC update job."""
@@ -727,7 +743,8 @@ class JobService:
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for NIC update")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for NIC update")
 
         json_payload = await asyncio.to_thread(
             json.dumps, definition, ensure_ascii=False, separators=(",", ":")
@@ -738,7 +755,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"NIC update script exited with code {exit_code}")
+            raise RuntimeError(
+                f"NIC update script exited with code {exit_code}")
 
     async def _execute_delete_disk_job(self, job: Job) -> None:
         """Execute a disk deletion job."""
@@ -756,7 +774,8 @@ class JobService:
 
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for disk deletion")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for disk deletion")
 
         json_payload = await asyncio.to_thread(
             json.dumps, fields, ensure_ascii=False, separators=(",", ":")
@@ -767,7 +786,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"Disk deletion script exited with code {exit_code}")
+            raise RuntimeError(
+                f"Disk deletion script exited with code {exit_code}")
 
     async def _execute_delete_nic_job(self, job: Job) -> None:
         """Execute a NIC deletion job."""
@@ -785,7 +805,8 @@ class JobService:
 
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for NIC deletion")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for NIC deletion")
 
         json_payload = await asyncio.to_thread(
             json.dumps, fields, ensure_ascii=False, separators=(",", ":")
@@ -796,7 +817,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"NIC deletion script exited with code {exit_code}")
+            raise RuntimeError(
+                f"NIC deletion script exited with code {exit_code}")
 
     async def _execute_initialize_vm_job(self, job: Job) -> None:
         """Execute a VM initialization job that applies guest configuration."""
@@ -804,7 +826,8 @@ class JobService:
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
         if not target_host:
-            raise RuntimeError("VM initialization job is missing a target host")
+            raise RuntimeError(
+                "VM initialization job is missing a target host")
 
         fields = definition.get("fields", {})
         vm_id = fields.get("vm_id")
@@ -813,7 +836,8 @@ class JobService:
 
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for initialization")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for initialization")
 
         json_payload = await asyncio.to_thread(
             json.dumps, fields, ensure_ascii=False, separators=(",", ":")
@@ -824,7 +848,8 @@ class JobService:
 
         exit_code = await self._execute_agent_command(job, target_host, command)
         if exit_code != 0:
-            raise RuntimeError(f"VM initialization script exited with code {exit_code}")
+            raise RuntimeError(
+                f"VM initialization script exited with code {exit_code}")
 
     async def _execute_managed_deployment_job(self, job: Job) -> None:
         """Execute a managed deployment via component sub-jobs instead of direct scripts."""
@@ -834,15 +859,18 @@ class JobService:
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
         if not target_host:
-            raise RuntimeError("Managed deployment job is missing a target host")
+            raise RuntimeError(
+                "Managed deployment job is missing a target host")
 
         fields = definition.get("fields", {})
         schema_info = definition.get("schema", {})
         schema_version = schema_info.get("version", 1)
         component_versions = schema_info.get("components", {})
         vm_schema_version = component_versions.get("vm-create", schema_version)
-        disk_schema_version = component_versions.get("disk-create", schema_version)
-        nic_schema_version = component_versions.get("nic-create", schema_version)
+        disk_schema_version = component_versions.get(
+            "disk-create", schema_version)
+        nic_schema_version = component_versions.get(
+            "nic-create", schema_version)
 
         await self._append_job_output(
             job.job_id,
@@ -852,7 +880,8 @@ class JobService:
         await self._validate_job_against_host_config(definition, target_host)
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
-            raise RuntimeError(f"Failed to prepare host {target_host} for deployment")
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for deployment")
 
         vm_schema = load_schema_by_id("vm-create")
         disk_schema = load_schema_by_id("disk-create")
@@ -912,7 +941,10 @@ class JobService:
             if field_id in fields:
                 disk_fields[field_id] = fields[field_id]
 
-        if disk_fields.get("disk_size_gb") is not None:
+        # Create disk if either image_name or disk_size_gb is provided
+        has_image = bool(disk_fields.get("image_name"))
+        has_size = disk_fields.get("disk_size_gb") is not None
+        if has_image or has_size:
             disk_fields["vm_id"] = vm_id
 
             disk_definition = {
@@ -956,7 +988,8 @@ class JobService:
                     f"NIC creation job {nic_job.job_id} failed: {nic_job_result.error or 'unknown error'}"
                 )
 
-        all_guest_config_fields = {**vm_guest_config_fields, **nic_guest_config_fields}
+        all_guest_config_fields = {
+            **vm_guest_config_fields, **nic_guest_config_fields}
         if all_guest_config_fields:
             init_fields = {
                 "vm_id": vm_id,
@@ -1039,20 +1072,23 @@ class JobService:
         async with self._lock:
             parent_job = self.jobs.get(parent_job_id)
             child_job = self.jobs.get(child_job_id)
-            existing_children = list(parent_job.child_jobs) if parent_job else []
+            existing_children = list(
+                parent_job.child_jobs) if parent_job else []
 
         if not parent_job or not child_job:
             return
 
         summary = self._build_child_job_summary(child_job)
-        updated_children = self._merge_child_job_list(existing_children, summary)
+        updated_children = self._merge_child_job_list(
+            existing_children, summary)
         await self._update_job(parent_job_id, child_jobs=updated_children)
 
     def _build_child_job_summary(self, child_job: Job) -> Dict[str, Any]:
         """Build a lightweight summary for UI consumption."""
 
         status_value = (
-            child_job.status.value if isinstance(child_job.status, JobStatus) else child_job.status
+            child_job.status.value if isinstance(
+                child_job.status, JobStatus) else child_job.status
         )
         return {
             "job_id": child_job.job_id,
@@ -1089,7 +1125,7 @@ class JobService:
         for line in lines:
             parsed: Optional[Dict[str, Any]] = None
             try:
-                candidate = line[line.index("{") : line.rindex("}") + 1]
+                candidate = line[line.index("{"): line.rindex("}") + 1]
                 parsed = json.loads(candidate)
             except (ValueError, json.JSONDecodeError):
                 try:
@@ -1110,7 +1146,8 @@ class JobService:
                         if isinstance(value, str) and value.strip():
                             return value.strip()
 
-            id_match = re.search(r"vm[_\s-]?id\s*[:=]\s*([^\s]+)", line, flags=re.IGNORECASE)
+            id_match = re.search(
+                r"vm[_\s-]?id\s*[:=]\s*([^\s]+)", line, flags=re.IGNORECASE)
             if id_match:
                 return id_match.group(1).strip()
 
@@ -1207,7 +1244,8 @@ class JobService:
         job_id: str,
         line_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
-        pending_keys = [key for key in self._stream_decoders if key[0] == job_id]
+        pending_keys = [
+            key for key in self._stream_decoders if key[0] == job_id]
         for key in pending_keys:
             decoder = self._stream_decoders.pop(key)
             trailing = decoder.finalize()
@@ -1219,7 +1257,8 @@ class JobService:
                     try:
                         line_callback(line)
                     except Exception:  # pragma: no cover - defensive logging
-                        logger.exception("line_callback failed for job %s", job_id)
+                        logger.exception(
+                            "line_callback failed for job %s", job_id)
 
                 if key[1] == "stderr":
                     line = f"STDERR: {line}"
@@ -1237,7 +1276,7 @@ class JobService:
 
         trimmed = payload.lstrip()
         if trimmed.startswith(self._CLIXML_PREFIX):
-            trimmed = trimmed[len(self._CLIXML_PREFIX) :].lstrip()
+            trimmed = trimmed[len(self._CLIXML_PREFIX):].lstrip()
 
         xml_start = trimmed.find("<Objs")
         if xml_start == -1:
@@ -1380,7 +1419,8 @@ class JobService:
     async def _broadcast_job_event(
         self, job_id: str, action: str, data: Dict[str, Any]
     ) -> None:
-        message = {"type": "job", "action": action, "job_id": job_id, "data": data}
+        message = {"type": "job", "action": action,
+                   "job_id": job_id, "data": data}
         try:
             await websocket_manager.broadcast(message, topic=f"jobs:{job_id}")
         except Exception:  # pragma: no cover - defensive logging
@@ -1389,7 +1429,8 @@ class JobService:
         try:
             await websocket_manager.broadcast(message, topic="jobs")
         except Exception:  # pragma: no cover - defensive logging
-            logger.exception("Failed to broadcast aggregate job event for %s", job_id)
+            logger.exception(
+                "Failed to broadcast aggregate job event for %s", job_id)
 
     def _job_type_label(self, job: Job) -> str:
         if job.job_type == "delete_vm":
@@ -1524,11 +1565,11 @@ class JobService:
         target_host: str,
     ) -> None:
         """Validate job payload against host resources configuration.
-        
+
         Args:
             payload: Job payload containing field definitions
             target_host: Target host FQDN or hostname
-            
+
         Raises:
             ValueError: If validation fails
         """
@@ -1549,7 +1590,8 @@ class JobService:
         network_name = fields.get("network")
         if network_name:
             if not host_resources_service.validate_network_name(network_name, host_config):
-                available = host_resources_service.get_available_networks(host_config)
+                available = host_resources_service.get_available_networks(
+                    host_config)
                 raise ValueError(
                     f"Network '{network_name}' not found on host {target_host}. "
                     f"Available networks: {', '.join(available) if available else 'none'}"
@@ -1559,7 +1601,8 @@ class JobService:
         storage_class = fields.get("storage_class")
         if storage_class:
             if not host_resources_service.validate_storage_class(storage_class, host_config):
-                available = host_resources_service.get_available_storage_classes(host_config)
+                available = host_resources_service.get_available_storage_classes(
+                    host_config)
                 raise ValueError(
                     f"Storage class '{storage_class}' not found on host {target_host}. "
                     f"Available storage classes: {', '.join(available) if available else 'none'}"
