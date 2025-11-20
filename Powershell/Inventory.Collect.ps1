@@ -171,6 +171,7 @@ try {
                     }
 
                     $networks += @{
+                        Id            = $adapter.Id
                         Name          = $adapter.Name
                         AdapterName   = $adapter.Name
                         Network       = $adapter.SwitchName
@@ -194,6 +195,7 @@ try {
                 $vmDisks = Get-VMHardDiskDrive -VM $vm -ErrorAction Stop
                 foreach ($disk in $vmDisks) {
                     $diskInfo = @{
+                        Id       = $disk.Id
                         Name     = if ($disk.Path) { Split-Path -Path $disk.Path -Leaf } else { $disk.ControllerLocation }
                         Path     = $disk.Path
                         Location = $disk.Path
