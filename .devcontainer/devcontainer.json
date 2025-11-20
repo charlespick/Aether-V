@@ -89,8 +89,6 @@
 	
 	// Use 'postCreateCommand' to run commands after the container is created
 	"postCreateCommand": {
-		"build-isos": "cd /workspaces/Aether-V && pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs || echo 'ISO build failed - continuing without ISOs'",
-		"build-docker-image": "cd /workspaces/Aether-V && docker build -f server/Dockerfile -t aetherv .",
 		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V",
 		"create-env": "cd /workspaces/Aether-V/server && [ ! -f .env ] && cp .env.example .env || echo '.env already exists'"
 	},
