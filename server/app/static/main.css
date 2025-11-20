@@ -3865,9 +3865,5 @@ tbody tr:last-child td {
 /* VM tab actions */
 .vm-tab-actions {
     padding: 16px 24px 24px;
-    border-top: 1px solid var(--border);
-}
-
-[data-theme="dark"] .vm-tab-actions {
-    border-top-color: var(--dark-border);
+    border-top: 1px solid var(--border-color);
 }
