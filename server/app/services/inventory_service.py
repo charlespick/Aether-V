@@ -1625,6 +1625,7 @@ class InventoryService:
 
             adapters.append(
                 VMNetworkAdapter(
+                    id=self._coerce_str(adapter_data.get("Id")),
                     name=adapter_data.get("Name"),
                     adapter_name=adapter_data.get("AdapterName") or adapter_data.get("Name"),
                     network=adapter_data.get("Network"),
@@ -1653,6 +1654,7 @@ class InventoryService:
 
             disks.append(
                 VMDisk(
+                    id=self._coerce_str(disk_data.get("Id")),
                     name=disk_data.get("Name"),
                     path=disk_data.get("Path"),
                     location=disk_data.get("Location") or disk_data.get("Path"),

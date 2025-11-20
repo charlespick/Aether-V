@@ -966,11 +966,20 @@ class VMView extends BaseView {
                     <td>${this.escapeHtml(disk.type || '—')}</td>
                     <td>${this.escapeHtml(this.formatDiskCapacity(disk))}</td>
                     <td>${this.escapeHtml(disk.path || disk.location || '—')}</td>
+                    <td class="vm-resource-actions">
+                        <button type="button" class="resource-menu-btn" 
+                            data-resource-type="disk" 
+                            data-resource-id="${this.escapeHtml(disk.id || '')}"
+                            aria-label="Disk actions"
+                            title="Actions">
+                            ${icon('more_vert', { size: 20 })}
+                        </button>
+                    </td>
                 </tr>
             `).join('')
             : `
                 <tr class="vm-empty-row">
-                    <td colspan="4">Disk information not available yet.</td>
+                    <td colspan="5">Disk information not available yet.</td>
                 </tr>
             `;
 
@@ -993,12 +1002,21 @@ class VMView extends BaseView {
                     <td>${this.escapeHtml(adapter.adapter_name || adapter.name || 'Adapter')}</td>
                     <td>${this.escapeHtml(this.extractAdapterAddresses(adapter))}</td>
                     <td>${this.escapeHtml(networkDisplay)}</td>
+                    <td class="vm-resource-actions">
+                        <button type="button" class="resource-menu-btn" 
+                            data-resource-type="nic" 
+                            data-resource-id="${this.escapeHtml(adapter.id || '')}"
+                            aria-label="Network adapter actions"
+                            title="Actions">
+                            ${icon('more_vert', { size: 20 })}
+                        </button>
+                    </td>
                 </tr>
                 `;
             }).join('')
             : `
                 <tr class="vm-empty-row">
-                    <td colspan="3">Network details not available yet.</td>
+                    <td colspan="4">Network details not available yet.</td>
                 </tr>
             `;
 
@@ -1071,12 +1089,19 @@ class VMView extends BaseView {
                                         <th scope="col">Type</th>
                                         <th scope="col">Capacity</th>
                                         <th scope="col">Location</th>
+                                        <th scope="col" class="vm-resource-actions-header">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${diskRows}
                                 </tbody>
                             </table>
+                        </div>
+                        <div class="vm-tab-actions">
+                            <button class="action-btn" data-action="add-disk" onclick="overlayManager.open('disk-create', { vm_id: '${this.escapeHtml(vm.id)}', vm_name: '${this.escapeHtml(vm.name)}', host: '${this.escapeHtml(vm.host)}' })">
+                                ${icon('add_circle', { className: 'action-icon', size: 24 })}
+                                <span>Add Disk</span>
+                            </button>
                         </div>
                     </div>
                     <div class="vm-tab-panel vm-tab-panel--table" data-tab="networks" role="tabpanel" aria-labelledby="vm-tab-networks" hidden>
@@ -1087,12 +1112,19 @@ class VMView extends BaseView {
                                         <th scope="col">Adapter</th>
                                         <th scope="col">IP Address</th>
                                         <th scope="col">Network</th>
+                                        <th scope="col" class="vm-resource-actions-header">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${networkRows}
                                 </tbody>
                             </table>
+                        </div>
+                        <div class="vm-tab-actions">
+                            <button class="action-btn" data-action="add-nic" onclick="overlayManager.open('nic-create', { vm_id: '${this.escapeHtml(vm.id)}', vm_name: '${this.escapeHtml(vm.name)}', host: '${this.escapeHtml(vm.host)}' })">
+                                ${icon('add_circle', { className: 'action-icon', size: 24 })}
+                                <span>Add Network Adapter</span>
+                            </button>
                         </div>
                     </div>
                     <div class="vm-tab-panel vm-tab-panel--notes" data-tab="notes" role="tabpanel" aria-labelledby="vm-tab-notes" hidden>
@@ -1108,11 +1140,13 @@ class VMView extends BaseView {
     init() {
         this.setupTabs();
         this.setupActions();
+        this.setupResourceMenus();
     }
 
     cleanup() {
         this.destroyActionConfirmation(true);
         this.hideActionToast(true);
+        this.cleanupResourceMenus();
     }
 
     setupTabs() {
@@ -1188,6 +1222,17 @@ class VMView extends BaseView {
         }
 
         const action = button.dataset.action;
+        
+        // Handle edit action - open VM edit overlay
+        if (action === 'edit') {
+            overlayManager.open('vm-edit', { 
+                vm_id: this.vmData.id,
+                vm_name: this.vmData.name, 
+                host: this.vmData.host,
+                vm_data: this.vmData  // Pass actual VM data for pre-filling
+            });
+            return;
+        }
 
         if (this.requiresConfirmation(action)) {
             if (this.activeConfirmButton === button && this.activeConfirmAction === action) {
@@ -1463,6 +1508,7 @@ class VMView extends BaseView {
     buildVmActionButtons(vm) {
         const availability = this.getActionAvailability(vm && vm.state);
         const actions = [
+            { action: 'edit', iconName: 'edit', tooltip: 'Edit VM', aria: 'Edit virtual machine' },
             { action: 'start', iconName: 'play_circle', tooltip: 'Start', aria: 'Start virtual machine' },
             { action: 'shutdown', iconName: 'power_settings_new', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
             { action: 'stop', iconName: 'stop_circle', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
@@ -1488,6 +1534,7 @@ class VMView extends BaseView {
     getActionAvailability(state) {
         const normalized = typeof state === 'string' ? state.toLowerCase() : String(state || '').toLowerCase();
         const availability = {
+            edit: true,  // Edit is always available
             start: false,
             shutdown: false,
             stop: false,
@@ -1496,6 +1543,7 @@ class VMView extends BaseView {
         };
 
         if (this.actionInProgress) {
+            availability.edit = false;  // Disable edit during actions
             return availability;
         }
 
@@ -2141,6 +2189,261 @@ class VMView extends BaseView {
             console.error('Error fetching VM by ID:', error);
         }
         return null;
+    }
+
+    setupResourceMenus() {
+        this.resourceMenus = [];
+        this.activeResourceMenu = null;
+        this.boundResourceMenuClickHandler = null;
+        this.boundResourceMenuOutsideHandler = null;
+
+        const menuButtons = document.querySelectorAll('.resource-menu-btn');
+        menuButtons.forEach(button => {
+            button.addEventListener('click', (event) => this.handleResourceMenuClick(event));
+        });
+    }
+
+    cleanupResourceMenus() {
+        if (this.activeResourceMenu) {
+            this.closeResourceMenu();
+        }
+        this.resourceMenus = [];
+    }
+
+    handleResourceMenuClick(event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const button = event.currentTarget;
+        const resourceType = button.dataset.resourceType;
+        const resourceId = button.dataset.resourceId;
+
+        if (!resourceType || !resourceId) {
+            return;
+        }
+
+        // Close any existing menu
+        if (this.activeResourceMenu) {
+            this.closeResourceMenu();
+        }
+
+        this.showResourceMenu(button, resourceType, resourceId);
+    }
+
+    showResourceMenu(button, resourceType, resourceId) {
+        const menu = document.createElement('div');
+        menu.className = 'resource-menu';
+        menu.setAttribute('role', 'menu');
+        
+        const editLabel = resourceType === 'disk' ? 'Edit Disk' : 'Edit Network Adapter';
+        const deleteLabel = resourceType === 'disk' ? 'Delete Disk' : 'Delete Network Adapter';
+        
+        menu.innerHTML = `
+            <button type="button" class="resource-menu-item" data-action="edit" role="menuitem">
+                ${icon('edit', { size: 18 })}
+                <span>${editLabel}</span>
+            </button>
+            <button type="button" class="resource-menu-item resource-menu-item--danger" data-action="delete" role="menuitem">
+                ${icon('delete', { size: 18 })}
+                <span>${deleteLabel}</span>
+            </button>
+        `;
+
+        document.body.appendChild(menu);
+        this.activeResourceMenu = { menu, button, resourceType, resourceId };
+
+        // Position the menu
+        const buttonRect = button.getBoundingClientRect();
+        const scrollY = window.scrollY || document.documentElement.scrollTop;
+        const scrollX = window.scrollX || document.documentElement.scrollLeft;
+        
+        menu.style.position = 'absolute';
+        menu.style.top = `${scrollY + buttonRect.bottom + 4}px`;
+        menu.style.left = `${scrollX + buttonRect.left}px`;
+
+        // Add event listeners
+        menu.querySelectorAll('.resource-menu-item').forEach(item => {
+            item.addEventListener('click', (event) => {
+                const action = event.currentTarget.dataset.action;
+                this.handleResourceAction(action, resourceType, resourceId);
+                this.closeResourceMenu();
+            });
+        });
+
+        // Close menu when clicking outside
+        this.boundResourceMenuOutsideHandler = (event) => {
+            if (!this.activeResourceMenu) return;
+            if (!menu.contains(event.target) && !button.contains(event.target)) {
+                this.closeResourceMenu();
+            }
+        };
+        
+        setTimeout(() => {
+            document.addEventListener('click', this.boundResourceMenuOutsideHandler, true);
+        }, 0);
+
+        // Show menu
+        requestAnimationFrame(() => {
+            menu.classList.add('visible');
+        });
+    }
+
+    closeResourceMenu() {
+        if (!this.activeResourceMenu) return;
+
+        const { menu } = this.activeResourceMenu;
+        menu.classList.remove('visible');
+        
+        if (this.boundResourceMenuOutsideHandler) {
+            document.removeEventListener('click', this.boundResourceMenuOutsideHandler, true);
+            this.boundResourceMenuOutsideHandler = null;
+        }
+
+        setTimeout(() => {
+            if (menu && menu.parentNode) {
+                menu.parentNode.removeChild(menu);
+            }
+        }, 200);
+
+        this.activeResourceMenu = null;
+    }
+
+    handleResourceAction(action, resourceType, resourceId) {
+        if (action === 'edit') {
+            // Find the actual resource data to pass to the overlay
+            let resourceData = null;
+            if (resourceType === 'disk') {
+                resourceData = this.vmData.disks.find(d => d.id === resourceId);
+            } else if (resourceType === 'nic') {
+                resourceData = this.vmData.networks.find(n => n.id === resourceId);
+            }
+            
+            const overlayName = resourceType === 'disk' ? 'disk-edit' : 'nic-edit';
+            overlayManager.open(overlayName, {
+                vm_id: this.vmData.id,
+                vm_name: this.vmData.name,
+                host: this.vmData.host,
+                resource_id: resourceId,
+                resource_type: resourceType,
+                resource_data: resourceData  // Pass actual resource data
+            });
+        } else if (action === 'delete') {
+            this.confirmResourceDelete(resourceType, resourceId);
+        }
+    }
+
+    confirmResourceDelete(resourceType, resourceId) {
+        const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
+        const title = `Confirm ${resourceName} deletion`;
+        const message = `Delete this ${resourceName}? This action cannot be undone.`;
+        
+        // Create confirmation dialog
+        const overlay = document.createElement('div');
+        overlay.className = 'resource-delete-confirm';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        
+        overlay.innerHTML = `
+            <div class="resource-delete-backdrop"></div>
+            <div class="resource-delete-dialog">
+                <div class="resource-delete-header">
+                    <h3>${this.escapeHtml(title)}</h3>
+                </div>
+                <div class="resource-delete-body">
+                    <p>${this.escapeHtml(message)}</p>
+                </div>
+                <div class="resource-delete-actions">
+                    <button type="button" class="btn btn-secondary" data-action="cancel">Cancel</button>
+                    <button type="button" class="btn btn-danger" data-action="confirm">Delete</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(overlay);
+        document.body.style.overflow = 'hidden';
+        
+        const confirmBtn = overlay.querySelector('[data-action="confirm"]');
+        const cancelBtn = overlay.querySelector('[data-action="cancel"]');
+        const backdrop = overlay.querySelector('.resource-delete-backdrop');
+        
+        const close = () => {
+            overlay.classList.remove('visible');
+            document.body.style.overflow = '';
+            setTimeout(() => {
+                if (overlay.parentNode) {
+                    overlay.parentNode.removeChild(overlay);
+                }
+            }, 200);
+        };
+        
+        confirmBtn.addEventListener('click', async () => {
+            close();
+            await this.executeResourceDelete(resourceType, resourceId);
+        });
+        
+        cancelBtn.addEventListener('click', close);
+        backdrop.addEventListener('click', close);
+        
+        requestAnimationFrame(() => {
+            overlay.classList.add('visible');
+            confirmBtn.focus();
+        });
+    }
+
+    async executeResourceDelete(resourceType, resourceId) {
+        const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
+        const endpoint = resourceType === 'disk' 
+            ? `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/disks/${encodeURIComponent(resourceId)}`
+            : `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/nics/${encodeURIComponent(resourceId)}`;
+
+        this.setActionFeedback(`Deleting ${resourceName}...`, 'info', {
+            title: 'Deleting resource',
+            persist: true,
+            icon: '⏳',
+        });
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'DELETE',
+                credentials: 'same-origin',
+            });
+
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (err) {
+                payload = null;
+            }
+
+            if (response.ok) {
+                const message = payload && payload.message 
+                    ? payload.message 
+                    : `${resourceName.charAt(0).toUpperCase() + resourceName.slice(1)} deletion queued.`;
+                this.setActionFeedback(message, 'success', {
+                    title: 'Resource deletion queued',
+                });
+
+                // Refresh the view after a short delay
+                setTimeout(() => {
+                    viewManager.switchView('vm', { 
+                        id: this.vmData.id,
+                        name: this.vmData.name, 
+                        host: this.vmData.host 
+                    }, { skipHistory: true });
+                }, 400);
+            } else {
+                const detail = (payload && payload.detail) || response.statusText || 'Request failed';
+                const errorMsg = typeof detail === 'string' ? detail : (detail.message || JSON.stringify(detail));
+                this.setActionFeedback(`Failed to delete ${resourceName}: ${errorMsg}`, 'error', {
+                    title: 'Deletion failed',
+                });
+            }
+        } catch (error) {
+            console.error('Resource delete error:', error);
+            this.setActionFeedback(`Failed to delete ${resourceName}: ${error.message}`, 'error', {
+                title: 'Deletion failed',
+            });
+        }
     }
 }
 
