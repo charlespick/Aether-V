@@ -1431,22 +1431,23 @@ class VMView extends BaseView {
             const viewportHeight = window.innerHeight;
             const scrollY = window.scrollY || document.documentElement.scrollTop;
             const scrollX = window.scrollX || document.documentElement.scrollLeft;
+            const edgeMargin = 20;
 
             let top = scrollY + buttonRect.bottom + 8;
             let alignAbove = false;
 
-            if (top + currentRect.height > scrollY + viewportHeight - 8) {
+            if (top + currentRect.height > scrollY + viewportHeight - edgeMargin) {
                 top = scrollY + buttonRect.top - currentRect.height - 8;
                 alignAbove = true;
             }
 
-            if (top < scrollY + 8) {
-                top = scrollY + 8;
+            if (top < scrollY + edgeMargin) {
+                top = scrollY + edgeMargin;
             }
 
             let left = scrollX + buttonRect.left + (buttonRect.width / 2) - (currentRect.width / 2);
-            const minLeft = scrollX + 8;
-            const maxLeft = scrollX + viewportWidth - currentRect.width - 8;
+            const minLeft = scrollX + edgeMargin;
+            const maxLeft = scrollX + viewportWidth - currentRect.width - edgeMargin;
             if (left < minLeft) {
                 left = minLeft;
             } else if (left > maxLeft) {
@@ -2196,6 +2197,7 @@ class VMView extends BaseView {
         this.activeResourceMenu = null;
         this.boundResourceMenuClickHandler = null;
         this.boundResourceMenuOutsideHandler = null;
+        this.boundResourceMenuRepositionHandler = null;
 
         const menuButtons = document.querySelectorAll('.resource-menu-btn');
         menuButtons.forEach(button => {
@@ -2252,14 +2254,10 @@ class VMView extends BaseView {
         document.body.appendChild(menu);
         this.activeResourceMenu = { menu, button, resourceType, resourceId };
 
-        // Position the menu
-        const buttonRect = button.getBoundingClientRect();
-        const scrollY = window.scrollY || document.documentElement.scrollTop;
-        const scrollX = window.scrollX || document.documentElement.scrollLeft;
-        
+        // Position the menu with viewport boundary detection
         menu.style.position = 'absolute';
-        menu.style.top = `${scrollY + buttonRect.bottom + 4}px`;
-        menu.style.left = `${scrollX + buttonRect.left}px`;
+        menu.style.visibility = 'hidden';
+        menu.style.opacity = '0';
 
         // Add event listeners
         menu.querySelectorAll('.resource-menu-item').forEach(item => {
@@ -2282,8 +2280,21 @@ class VMView extends BaseView {
             document.addEventListener('click', this.boundResourceMenuOutsideHandler, true);
         }, 0);
 
-        // Show menu
+        // Reposition menu on scroll/resize
+        this.boundResourceMenuRepositionHandler = () => {
+            if (this.activeResourceMenu && this.activeResourceMenu.menu === menu) {
+                this.positionResourceMenu(menu, button);
+            }
+        };
+        
+        window.addEventListener('scroll', this.boundResourceMenuRepositionHandler, true);
+        window.addEventListener('resize', this.boundResourceMenuRepositionHandler, true);
+
+        // Position and show menu after measuring
         requestAnimationFrame(() => {
+            this.positionResourceMenu(menu, button);
+            menu.style.visibility = 'visible';
+            menu.style.opacity = '';
             menu.classList.add('visible');
         });
     }
@@ -2299,6 +2310,12 @@ class VMView extends BaseView {
             this.boundResourceMenuOutsideHandler = null;
         }
 
+        if (this.boundResourceMenuRepositionHandler) {
+            window.removeEventListener('scroll', this.boundResourceMenuRepositionHandler, true);
+            window.removeEventListener('resize', this.boundResourceMenuRepositionHandler, true);
+            this.boundResourceMenuRepositionHandler = null;
+        }
+
         setTimeout(() => {
             if (menu && menu.parentNode) {
                 menu.parentNode.removeChild(menu);
@@ -2306,6 +2323,46 @@ class VMView extends BaseView {
         }, 200);
 
         this.activeResourceMenu = null;
+    }
+
+    positionResourceMenu(menu, button) {
+        const buttonRect = button.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        const scrollY = window.scrollY || document.documentElement.scrollTop;
+        const scrollX = window.scrollX || document.documentElement.scrollLeft;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const edgeMargin = 20;
+        
+        // Default positioning: below the button, aligned to the left
+        let top = scrollY + buttonRect.bottom + 4;
+        let left = scrollX + buttonRect.left;
+        
+        // Check if menu would extend past right edge of viewport
+        if (left + menuRect.width > viewportWidth - edgeMargin) {
+            // Align to the right edge of the button instead
+            left = scrollX + buttonRect.right - menuRect.width;
+        }
+        
+        // Ensure menu doesn't go past left edge
+        if (left < edgeMargin) {
+            left = edgeMargin;
+        }
+        
+        // Check if menu would extend past bottom edge of viewport
+        if (buttonRect.bottom + menuRect.height > viewportHeight - edgeMargin) {
+            // Position above the button instead
+            top = scrollY + buttonRect.top - menuRect.height - 4;
+        }
+        
+        // Ensure menu doesn't go past top edge
+        if (top < scrollY + edgeMargin) {
+            top = scrollY + edgeMargin;
+        }
+        
+        // Apply final position
+        menu.style.top = `${Math.round(top)}px`;
+        menu.style.left = `${Math.round(left)}px`;
     }
 
     handleResourceAction(action, resourceType, resourceId) {

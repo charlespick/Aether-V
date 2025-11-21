@@ -3770,6 +3770,7 @@ tbody tr:last-child td {
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 20px;
     opacity: 0;
     transition: opacity 0.2s ease;
 }
@@ -3792,7 +3793,9 @@ tbody tr:last-child td {
     border-radius: 12px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
     max-width: 450px;
+    max-height: 100%;
     width: 90%;
+    overflow-y: auto;
     transform: scale(0.95);
     transition: transform 0.2s ease;
 }
