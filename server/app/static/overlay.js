@@ -1835,7 +1835,7 @@ class JobDetailsOverlay extends BaseOverlay {
         }
         const labels = {
             managed_deployment: 'Managed Deployment',
-            provision_vm: 'Create VM',
+            create_vm: 'Create VM',
             create_vm: 'Create VM',
             delete_vm: 'Delete VM',
             create_disk: 'Create Disk',

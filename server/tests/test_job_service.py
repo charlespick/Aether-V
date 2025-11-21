@@ -67,7 +67,7 @@ class StubWebSocketManager:
 
 class StubHostResourcesService:
     """Stub for host resources service that returns valid configuration."""
-    
+
     async def get_host_configuration(self, host: str):
         """Return a mock host configuration."""
         return {
@@ -137,12 +137,12 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_sync_job_notification_tracks_metadata(self):
         job = Job(
             job_id="job-sync-1",
-            job_type="provision_vm",
+            job_type="create_vm",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
             parameters={
                 "definition": {
-                    "schema": {"id": "vm-provisioning", "version": 1},
+                    "schema": {"id": "vm-create", "version": 1},
                     "fields": {"vm_name": "demo-vm"},
                 }
             },
@@ -166,10 +166,11 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_handle_stream_chunk_appends_output_and_broadcasts(self):
         job = Job(
             job_id="job-stream-1",
-            job_type="provision_vm",
+            job_type="create_vm",
             status=JobStatus.RUNNING,
             created_at=datetime.utcnow(),
-            parameters={"definition": {"schema": {"id": "vm-provisioning", "version": 1}}},
+            parameters={"definition": {"schema": {
+                "id": "vm-create", "version": 1}}},
             output=[],
         )
 
@@ -181,7 +182,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         async def fake_broadcast(job_id, lines):
             captured.append((job_id, list(lines)))
 
-        self.job_service._broadcast_job_output = fake_broadcast  # type: ignore[assignment]
+        # type: ignore[assignment]
+        self.job_service._broadcast_job_output = fake_broadcast
 
         await self.job_service._handle_stream_chunk(job.job_id, "stdout", "line1\r\nline2\n")
         await self.job_service._handle_stream_chunk(job.job_id, "stderr", "error-line\r")
@@ -205,7 +207,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_stream_decoder_handles_split_clixml_payloads(self):
         job = Job(
             job_id="job-stream-xml",
-            job_type="provision_vm",
+            job_type="create_vm",
             status=JobStatus.RUNNING,
             created_at=datetime.utcnow(),
             parameters={"definition": {}},
@@ -220,7 +222,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         async def fake_broadcast(job_id, lines):
             captured.append((job_id, list(lines)))
 
-        self.job_service._broadcast_job_output = fake_broadcast  # type: ignore[assignment]
+        # type: ignore[assignment]
+        self.job_service._broadcast_job_output = fake_broadcast
 
         chunk1 = "#< CLIXML\r\n"
         chunk2 = (
@@ -248,10 +251,11 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_stream_decoder_handles_split_sentinel_across_chunks(self):
         job = Job(
             job_id="job-stream-split",
-            job_type="provision_vm",
+            job_type="create_vm",
             status=JobStatus.RUNNING,
             created_at=datetime.utcnow(),
-            parameters={"definition": {"schema": {"id": "vm-provisioning", "version": 1}}},
+            parameters={"definition": {"schema": {
+                "id": "vm-create", "version": 1}}},
             output=[],
         )
 
@@ -263,7 +267,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         async def fake_broadcast(job_id, lines):
             captured.append((job_id, list(lines)))
 
-        self.job_service._broadcast_job_output = fake_broadcast  # type: ignore[assignment]
+        # type: ignore[assignment]
+        self.job_service._broadcast_job_output = fake_broadcast
 
         chunk1 = "#< CLI"
         chunk2 = (
@@ -284,12 +289,12 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_get_job_redacts_sensitive_parameters(self):
         job = Job(
             job_id="job-secret-1",
-            job_type="provision_vm",
+            job_type="create_vm",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
             parameters={
                 "definition": {
-                    "schema": {"id": "vm-provisioning", "version": 1},
+                    "schema": {"id": "vm-create", "version": 1},
                     "fields": {
                         "vm_name": "demo-vm",
                         "guest_la_pw": "super-secret",
@@ -334,12 +339,12 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_prepare_job_response_clears_parameters_on_redaction_failure(self):
         job = Job(
             job_id="job-secret-fail",
-            job_type="provision_vm",
+            job_type="create_vm",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
             parameters={
                 "definition": {
-                    "schema": {"id": "vm-provisioning", "version": 1},
+                    "schema": {"id": "vm-create", "version": 1},
                     "fields": {"guest_la_pw": "super-secret"},
                 }
             },
@@ -367,9 +372,11 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         async def fake_process(job_id: str) -> None:
             processed.append(job_id)
 
-        self.job_service._process_job = fake_process  # type: ignore[assignment]
+        # type: ignore[assignment]
+        self.job_service._process_job = fake_process
 
-        request = VMDeleteRequest(vm_name="vm-to-remove", hyperv_host="hyperv01", force=False)
+        request = VMDeleteRequest(
+            vm_name="vm-to-remove", hyperv_host="hyperv01", force=False)
         try:
             job = await self.job_service.submit_delete_job(request)
             await asyncio.wait_for(asyncio.sleep(0), timeout=1)
@@ -401,14 +408,16 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             status=JobStatus.RUNNING,
             started_at=datetime.utcnow(),
         )
-        self.assertIn((job.job_id, "app-server", "hyperv01"), self.inventory_stub.deleting)
+        self.assertIn((job.job_id, "app-server", "hyperv01"),
+                      self.inventory_stub.deleting)
 
         await self.job_service._update_job(
             job.job_id,
             status=JobStatus.COMPLETED,
             completed_at=datetime.utcnow(),
         )
-        self.assertIn((job.job_id, "app-server", "hyperv01", True), self.inventory_stub.finalised)
+        self.assertIn((job.job_id, "app-server", "hyperv01",
+                      True), self.inventory_stub.finalised)
 
     async def test_after_job_update_restores_inventory_on_failed_delete(self):
         job = Job(
@@ -436,7 +445,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             completed_at=datetime.utcnow(),
         )
 
-        self.assertIn((job.job_id, "db-server", "hyperv02", False), self.inventory_stub.finalised)
+        self.assertIn((job.job_id, "db-server", "hyperv02",
+                      False), self.inventory_stub.finalised)
 
     async def test_only_one_provisioning_job_runs_per_host(self):
         await self.job_service.start()
@@ -457,7 +467,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             else:
                 second_job_started.set()
 
-        self.job_service._execute_managed_deployment_job = fake_execute  # type: ignore[assignment]
+        # type: ignore[assignment]
+        self.job_service._execute_managed_deployment_job = fake_execute
 
         payload = {
             "schema": {"id": "vm-create", "version": 1},
@@ -509,10 +520,13 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             else:
                 second_job_started.set()
 
-        self.job_service._execute_delete_job = fake_execute  # type: ignore[assignment]
+        # type: ignore[assignment]
+        self.job_service._execute_delete_job = fake_execute
 
-        request1 = VMDeleteRequest(vm_name="vm-alpha", hyperv_host="hyperv01", force=False)
-        request2 = VMDeleteRequest(vm_name="vm-beta", hyperv_host="HYPERV01", force=False)
+        request1 = VMDeleteRequest(
+            vm_name="vm-alpha", hyperv_host="hyperv01", force=False)
+        request2 = VMDeleteRequest(
+            vm_name="vm-beta", hyperv_host="HYPERV01", force=False)
 
         try:
             job1 = await self.job_service.submit_delete_job(request1)
@@ -530,4 +544,3 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             self.assertEqual(start_order, [job1.job_id, job2.job_id])
         finally:
             self.job_service._execute_delete_job = original_execute
-

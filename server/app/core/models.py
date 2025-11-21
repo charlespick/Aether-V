@@ -175,8 +175,10 @@ class ResourceUpdateRequest(ResourceCreateRequest):
 
 class ResourceDeleteRequest(BaseModel):
     """Request to delete a resource by ID."""
-    resource_id: str = Field(..., description="Hyper-V ID of the resource to delete")
-    hyperv_host: str = Field(..., description="Host where the resource is located")
+    resource_id: str = Field(...,
+                             description="Hyper-V ID of the resource to delete")
+    hyperv_host: str = Field(...,
+                             description="Host where the resource is located")
 
 
 class VMInitializationRequest(BaseModel):
@@ -204,7 +206,7 @@ class JobResult(BaseModel):
 class Job(BaseModel):
     """Job execution tracking."""
     job_id: str
-    job_type: str  # "provision_vm", "delete_vm", etc.
+    job_type: str  # "create_vm", "delete_vm", "managed_deployment", etc.
     status: JobStatus
     created_at: datetime
     started_at: Optional[datetime] = None
@@ -269,7 +271,8 @@ class NotificationsResponse(BaseModel):
 class JobSubmission(BaseModel):
     """Schema-driven job submission payload."""
 
-    schema_version: int = Field(..., description="Version of the job schema used")
+    schema_version: int = Field(...,
+                                description="Version of the job schema used")
     values: Dict[str, Any] = Field(
         default_factory=dict,
         description="Field values keyed by schema field id",

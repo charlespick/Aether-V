@@ -1352,36 +1352,114 @@ class JobService:
         await self._broadcast_job_status(job)
 
     async def _sync_job_notification(self, job: Job) -> None:
-        vm_name = self._extract_vm_name(job)
-        job_label = self._job_type_label(job)
-        target_label = f'"{vm_name}"' if vm_name else job.job_id
-        host_phrase = (
-            f"host {job.target_host}" if job.target_host else "an unspecified host"
+        # Determine resource type and extract resource name
+        vm_jobs = (
+            "create_vm", "update_vm", "delete_vm",
+            "managed_deployment", "initialize_vm"
         )
+        nic_jobs = ("create_nic", "update_nic", "delete_nic")
+        disk_jobs = ("create_disk", "update_disk", "delete_disk")
 
+        is_vm_job = job.job_type in vm_jobs
+        is_nic_job = job.job_type in nic_jobs
+        is_disk_job = job.job_type in disk_jobs
+
+        # Extract appropriate resource name
+        resource_name = None
+        vm_name = None
+
+        if is_vm_job:
+            resource_name = self._extract_vm_name(job)
+            resource_type = "VM"
+        elif is_nic_job:
+            resource_name = self._extract_nic_name(job)
+            resource_type = "Network Adapter"
+            vm_name = self._extract_vm_name(job)  # Get parent VM name
+        elif is_disk_job:
+            resource_name = self._extract_disk_name(job)
+            resource_type = "Disk"
+            vm_name = self._extract_vm_name(job)  # Get parent VM name
+        else:
+            # Fallback for other job types - try to extract VM name
+            resource_name = self._extract_vm_name(job)
+            resource_type = "Resource"
+            # Treat unknown types with VM name as VM jobs
+            if resource_name:
+                is_vm_job = True
+                resource_type = "VM"
+
+        # Determine action verb
+        is_create = (
+            job.job_type.startswith("create_") or
+            job.job_type == "managed_deployment"
+        )
+        if is_create:
+            action = "Create"
+        elif job.job_type.startswith("update_"):
+            action = "Update"
+        elif job.job_type.startswith("delete_"):
+            action = "Delete"
+        elif job.job_type == "initialize_vm":
+            action = "Initialize"
+        else:
+            action = job.job_type.replace("_", " ").title()
+
+        # Format resource name for display
+        resource_label = resource_name if resource_name else job.job_id[:8]
+
+        # Determine location phrase (host for VMs, VM name for NICs/Disks)
+        if is_vm_job:
+            if job.target_host:
+                location_phrase = f"host {job.target_host}"
+            else:
+                location_phrase = "unknown host"
+        else:
+            # For NICs and Disks, show the parent VM name
+            if vm_name:
+                location_phrase = f"VM '{vm_name}'"
+            else:
+                location_phrase = "unknown VM"
+
+        # Build status-specific messages
         if job.status == JobStatus.PENDING:
-            title = f"{job_label} queued"
+            title = f"{action} {resource_type} queued"
             message = (
-                f"{job_label} request for {target_label} queued for {host_phrase}."
+                f"{action} {resource_type} '{resource_label}' "
+                f"queued for {location_phrase}."
             )
             level = NotificationLevel.INFO
         elif job.status == JobStatus.RUNNING:
-            title = f"{job_label} running"
-            message = f"{job_label} for {target_label} is running on {host_phrase}."
+            title = f"{action} {resource_type} running"
+            message = (
+                f"{action} {resource_type} '{resource_label}' "
+                f"running on {location_phrase}."
+            )
             level = NotificationLevel.INFO
         elif job.status == JobStatus.COMPLETED:
-            title = f"{job_label} completed"
-            message = f"{job_label} for {target_label} completed successfully on {host_phrase}."
+            title = f"{action} {resource_type} completed"
+            message = (
+                f"{action} {resource_type} '{resource_label}' "
+                f"completed successfully on {location_phrase}."
+            )
             level = NotificationLevel.SUCCESS
         elif job.status == JobStatus.FAILED:
-            title = f"{job_label} failed"
-            detail = f" Details: {job.error}" if job.error else ""
-            message = f"{job_label} for {target_label} failed on {host_phrase}.{detail}"
+            title = f"{action} {resource_type} failed"
+            detail = f" Error: {job.error}" if job.error else ""
+            message = (
+                f"{action} {resource_type} '{resource_label}' "
+                f"failed on {location_phrase}.{detail}"
+            )
             level = NotificationLevel.ERROR
         else:
-            title = f"{job_label} update"
-            message = f"{job_label} for {target_label} updated."
+            title = f"{action} {resource_type} update"
+            message = (
+                f"{action} {resource_type} '{resource_label}' updated."
+            )
             level = NotificationLevel.INFO
+
+        # For metadata, use the VM name from the resource name for VM jobs,
+        # or the parent VM name for NIC/Disk jobs
+        metadata_vm_name = resource_name if is_vm_job else vm_name
 
         notification = notification_service.upsert_job_notification(
             job.job_id,
@@ -1393,7 +1471,7 @@ class JobService:
                 "job_id": job.job_id,
                 "status": job.status.value,
                 "job_type": job.job_type,
-                "vm_name": vm_name,
+                "vm_name": metadata_vm_name,
                 "target_host": job.target_host,
             },
         )
@@ -1472,6 +1550,55 @@ class JobService:
             value = value.strip()
             if value:
                 return value
+        return None
+
+    def _extract_nic_name(self, job: Job) -> Optional[str]:
+        """Extract NIC/adapter name from job parameters."""
+        definition = job.parameters.get("definition") or {}
+        fields = definition.get("fields") or {}
+
+        # Try adapter_name first (from create schema)
+        value = fields.get("adapter_name")
+        if isinstance(value, str):
+            value = value.strip()
+            if value:
+                return value
+
+        # For update/delete, try resource_id as fallback
+        resource_id = fields.get("resource_id")
+        if isinstance(resource_id, str):
+            resource_id = resource_id.strip()
+            if resource_id:
+                # Return a shortened version of the UUID for readability
+                return f"NIC {resource_id[:8]}"
+
+        return None
+
+    def _extract_disk_name(self, job: Job) -> Optional[str]:
+        """Extract disk/VHD name from job parameters."""
+        definition = job.parameters.get("definition") or {}
+        fields = definition.get("fields") or {}
+
+        # Try image_name first (for create jobs from image)
+        image_name = fields.get("image_name")
+        if isinstance(image_name, str):
+            image_name = image_name.strip()
+            if image_name:
+                return f"Disk from '{image_name}'"
+
+        # Try disk_size_gb for blank disk creation
+        disk_size = fields.get("disk_size_gb")
+        if disk_size:
+            return f"{disk_size}GB Disk"
+
+        # For update/delete, try resource_id as fallback
+        resource_id = fields.get("resource_id")
+        if isinstance(resource_id, str):
+            resource_id = resource_id.strip()
+            if resource_id:
+                # Return a shortened version of the UUID for readability
+                return f"Disk {resource_id[:8]}"
+
         return None
 
     def _build_agent_invocation_command(self, script_name: str, payload: str) -> str:
