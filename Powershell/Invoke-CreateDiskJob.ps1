@@ -234,17 +234,66 @@ end {
             }
         }
 
-        # Determine next available SCSI location
-        $existingDisks = Get-VMHardDiskDrive -VM $vm
+        # Determine next available SCSI controller and location
+        $controllerNumber = 0
         $nextLocation = 0
+        
         if ($controllerType -eq 'SCSI') {
-            $scsiDisks = $existingDisks | Where-Object { $_.ControllerType -eq 'SCSI' }
-            if ($scsiDisks) {
-                $usedLocations = $scsiDisks | ForEach-Object { $_.ControllerLocation }
-                $nextLocation = 0
-                while ($nextLocation -in $usedLocations) {
-                    $nextLocation++
+            $scsiControllers = Get-VMScsiController -VM $vm
+            $scsiCtrlCount = if ($scsiControllers) { @($scsiControllers).Count } else { 0 }
+            Write-Host "VM has $scsiCtrlCount SCSI controller(s)" -ForegroundColor Cyan
+            
+            if ($scsiControllers) {
+                # Display all drives on all SCSI controllers
+                $allDrives = $scsiControllers | ForEach-Object { $_.Drives }
+                $totalDrives = if ($allDrives) { @($allDrives).Count } else { 0 }
+                Write-Host "Total SCSI drives attached: $totalDrives" -ForegroundColor Cyan
+                
+                foreach ($ctrl in $scsiControllers) {
+                    $drives = $ctrl.Drives
+                    $driveCount = if ($drives) { @($drives).Count } else { 0 }
+                    Write-Host "  Controller $($ctrl.ControllerNumber): $driveCount drive(s)" -ForegroundColor Gray
+                    
+                    foreach ($drive in $drives) {
+                        $drivePath = if ($drive.Path) { $drive.Path } else { "(empty)" }
+                        $driveType = $drive.GetType().Name
+                        Write-Host "    Location $($drive.ControllerLocation): $driveType - $drivePath" -ForegroundColor Gray
+                    }
                 }
+                
+                # Find first available slot
+                $foundSlot = $false
+                foreach ($ctrl in $scsiControllers | Sort-Object ControllerNumber) {
+                    $ctrlNum = $ctrl.ControllerNumber
+                    $usedLocations = if ($ctrl.Drives) { @($ctrl.Drives | ForEach-Object { $_.ControllerLocation }) } else { @() }
+                    
+                    # Find first free location on this controller (max 64 locations per SCSI controller)
+                    for ($loc = 0; $loc -lt 64; $loc++) {
+                        if ($loc -notin $usedLocations) {
+                            $controllerNumber = $ctrlNum
+                            $nextLocation = $loc
+                            $foundSlot = $true
+                            Write-Host "Found available slot on controller $controllerNumber at location $nextLocation" -ForegroundColor Green
+                            break
+                        }
+                    }
+                    if ($foundSlot) { break }
+                }
+                
+                # If no free slot found on existing controllers, use next controller
+                if (-not $foundSlot) {
+                    $maxController = ($scsiControllers | ForEach-Object { $_.ControllerNumber } | Measure-Object -Maximum).Maximum
+                    $controllerNumber = $maxController + 1
+                    $nextLocation = 0
+                    Write-Host "No free slots on existing controllers. Will use new controller $controllerNumber at location $nextLocation" -ForegroundColor Yellow
+                    
+                    if ($controllerNumber -gt 3) {
+                        throw "All SCSI controllers are full (max 4 controllers with 64 locations each)"
+                    }
+                }
+            }
+            else {
+                Write-Host "No existing SCSI controllers. Will use controller 0, location 0" -ForegroundColor Cyan
             }
         }
 
@@ -335,25 +384,138 @@ end {
         }
 
         # Attach disk to VM
+        Write-Host "Attempting to attach disk to VM..." -ForegroundColor Cyan
+        Write-Host "  Controller Type: $controllerType" -ForegroundColor Gray
+        
         if ($controllerType -eq 'SCSI') {
-            Add-VMHardDiskDrive -VM $vm -Path $vhdxPath -ControllerType SCSI -ControllerLocation $nextLocation -ErrorAction Stop
-            Write-Host "Disk attached to SCSI controller at location $nextLocation" -ForegroundColor Green
+            Write-Host "  Controller Number: $controllerNumber" -ForegroundColor Gray
+            Write-Host "  Controller Location: $nextLocation" -ForegroundColor Gray
+            Write-Host "  Disk Path: $vhdxPath" -ForegroundColor Gray
+            
+            try {
+                Add-VMHardDiskDrive -VM $vm -Path $vhdxPath -ControllerType SCSI -ControllerNumber $controllerNumber -ControllerLocation $nextLocation -ErrorAction Stop
+                Write-Host "Disk attached to SCSI controller $controllerNumber at location $nextLocation" -ForegroundColor Green
+            }
+            catch {
+                Write-Host "Failed to attach disk. Error details:" -ForegroundColor Red
+                Write-Host "  Exception: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host "  Exception Type: $($_.Exception.GetType().FullName)" -ForegroundColor Red
+                if ($_.Exception.InnerException) {
+                    Write-Host "  Inner Exception: $($_.Exception.InnerException.Message)" -ForegroundColor Red
+                }
+                
+                # Try to get more controller information
+                Write-Host "`nVM Controller Information:" -ForegroundColor Yellow
+                $scsiControllers = Get-VMScsiController -VM $vm
+                $scsiCtrlCount = if ($scsiControllers) { @($scsiControllers).Count } else { 0 }
+                Write-Host "  SCSI Controllers available: $scsiCtrlCount" -ForegroundColor Gray
+                foreach ($ctrl in $scsiControllers) {
+                    $drives = $ctrl.Drives
+                    $driveCount = if ($drives) { @($drives).Count } else { 0 }
+                    Write-Host "    Controller $($ctrl.ControllerNumber): $driveCount drives attached" -ForegroundColor Gray
+                    foreach ($drive in $drives) {
+                        Write-Host "      Location $($drive.ControllerLocation): $($drive.GetType().Name)" -ForegroundColor DarkGray
+                    }
+                }
+                
+                throw
+            }
         }
         else {
-            # For IDE, find next available location
-            $ideDisks = $existingDisks | Where-Object { $_.ControllerType -eq 'IDE' }
+            # For IDE, find next available controller and location
+            Write-Host "Finding available IDE controller slot..." -ForegroundColor Cyan
+            
+            $ideControllers = Get-VMIdeController -VM $vm
+            $ideCtrlCount = if ($ideControllers) { @($ideControllers).Count } else { 0 }
+            Write-Host "VM has $ideCtrlCount IDE controller(s)" -ForegroundColor Cyan
+            
+            $ideControllerNumber = 0
             $ideLocation = 0
-            if ($ideDisks) {
-                $usedIdeLocations = $ideDisks | ForEach-Object { $_.ControllerLocation }
-                while ($ideLocation -in $usedIdeLocations -and $ideLocation -lt 4) {
-                    $ideLocation++
+            
+            if ($ideControllers) {
+                # Display all drives on all IDE controllers
+                $allDrives = $ideControllers | ForEach-Object { $_.Drives }
+                $totalDrives = if ($allDrives) { @($allDrives).Count } else { 0 }
+                Write-Host "Total IDE drives attached: $totalDrives" -ForegroundColor Cyan
+                
+                foreach ($ctrl in $ideControllers) {
+                    $drives = $ctrl.Drives
+                    $driveCount = if ($drives) { @($drives).Count } else { 0 }
+                    Write-Host "  Controller $($ctrl.ControllerNumber): $driveCount drive(s)" -ForegroundColor Gray
+                    
+                    foreach ($drive in $drives) {
+                        $drivePath = if ($drive.Path) { $drive.Path } else { "(empty)" }
+                        $driveType = $drive.GetType().Name
+                        Write-Host "    Location $($drive.ControllerLocation): $driveType - $drivePath" -ForegroundColor Gray
+                    }
                 }
-                if ($ideLocation -ge 4) {
-                    throw "No available IDE controller locations"
+                
+                # IDE has max 2 controllers (0,1) with 2 locations each (0,1)
+                $foundSlot = $false
+                foreach ($ctrl in $ideControllers | Sort-Object ControllerNumber) {
+                    $ctrlNum = $ctrl.ControllerNumber
+                    $usedLocations = if ($ctrl.Drives) { @($ctrl.Drives | ForEach-Object { $_.ControllerLocation }) } else { @() }
+                    
+                    for ($loc = 0; $loc -lt 2; $loc++) {
+                        if ($loc -notin $usedLocations) {
+                            $ideControllerNumber = $ctrlNum
+                            $ideLocation = $loc
+                            $foundSlot = $true
+                            Write-Host "Found available slot on controller $ideControllerNumber at location $ideLocation" -ForegroundColor Green
+                            break
+                        }
+                    }
+                    if ($foundSlot) { break }
+                }
+                
+                if (-not $foundSlot) {
+                    # Try next controller
+                    $maxController = ($ideControllers | ForEach-Object { $_.ControllerNumber } | Measure-Object -Maximum).Maximum
+                    $ideControllerNumber = $maxController + 1
+                    $ideLocation = 0
+                    Write-Host "No free slots on existing controllers. Will use new controller $ideControllerNumber at location $ideLocation" -ForegroundColor Yellow
+                    
+                    if ($ideControllerNumber -gt 1) {
+                        throw "No available IDE controller locations (max 2 controllers with 2 locations each)"
+                    }
                 }
             }
-            Add-VMHardDiskDrive -VM $vm -Path $vhdxPath -ControllerType IDE -ControllerLocation $ideLocation -ErrorAction Stop
-            Write-Host "Disk attached to IDE controller at location $ideLocation" -ForegroundColor Green
+            else {
+                Write-Host "No existing IDE controllers. Will use controller 0, location 0" -ForegroundColor Cyan
+            }
+            
+            Write-Host "  Controller Number: $ideControllerNumber" -ForegroundColor Gray
+            Write-Host "  Controller Location: $ideLocation" -ForegroundColor Gray
+            Write-Host "  Disk Path: $vhdxPath" -ForegroundColor Gray
+            
+            try {
+                Add-VMHardDiskDrive -VM $vm -Path $vhdxPath -ControllerType IDE -ControllerNumber $ideControllerNumber -ControllerLocation $ideLocation -ErrorAction Stop
+                Write-Host "Disk attached to IDE controller $ideControllerNumber at location $ideLocation" -ForegroundColor Green
+            }
+            catch {
+                Write-Host "Failed to attach disk. Error details:" -ForegroundColor Red
+                Write-Host "  Exception: $($_.Exception.Message)" -ForegroundColor Red
+                Write-Host "  Exception Type: $($_.Exception.GetType().FullName)" -ForegroundColor Red
+                if ($_.Exception.InnerException) {
+                    Write-Host "  Inner Exception: $($_.Exception.InnerException.Message)" -ForegroundColor Red
+                }
+                
+                # Try to get more controller information
+                Write-Host "`nVM Controller Information:" -ForegroundColor Yellow
+                $ideControllers = Get-VMIdeController -VM $vm
+                $ideCtrlCount = if ($ideControllers) { @($ideControllers).Count } else { 0 }
+                Write-Host "  IDE Controllers available: $ideCtrlCount" -ForegroundColor Gray
+                foreach ($ctrl in $ideControllers) {
+                    $drives = $ctrl.Drives
+                    $driveCount = if ($drives) { @($drives).Count } else { 0 }
+                    Write-Host "    Controller $($ctrl.ControllerNumber): $driveCount drives attached" -ForegroundColor Gray
+                    foreach ($drive in $drives) {
+                        Write-Host "      Location $($drive.ControllerLocation): $($drive.GetType().Name)" -ForegroundColor DarkGray
+                    }
+                }
+                
+                throw
+            }
         }
 
         # Get the disk ID
