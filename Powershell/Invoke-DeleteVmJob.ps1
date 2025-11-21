@@ -28,10 +28,30 @@ end {
             [object]$InputObject
         )
 
+        if ($null -eq $InputObject) {
+            return $null
+        }
+
         if ($InputObject -is [System.Collections.IDictionary]) {
             $result = @{}
             foreach ($key in $InputObject.Keys) {
-                $result[$key] = $InputObject[$key]
+                $value = $InputObject[$key]
+                if ($value -is [System.Management.Automation.PSObject] -or $value -is [System.Collections.IDictionary]) {
+                    $result[$key] = ConvertTo-Hashtable -InputObject $value
+                }
+                elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    $result[$key] = @($value | ForEach-Object { 
+                            if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                                ConvertTo-Hashtable -InputObject $_
+                            }
+                            else {
+                                $_
+                            }
+                        })
+                }
+                else {
+                    $result[$key] = $value
+                }
             }
             return $result
         }
@@ -39,7 +59,23 @@ end {
         if ($InputObject -is [System.Management.Automation.PSObject]) {
             $result = @{}
             foreach ($property in $InputObject.PSObject.Properties) {
-                $result[$property.Name] = $property.Value
+                $value = $property.Value
+                if ($value -is [System.Management.Automation.PSObject] -or $value -is [System.Collections.IDictionary]) {
+                    $result[$property.Name] = ConvertTo-Hashtable -InputObject $value
+                }
+                elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    $result[$property.Name] = @($value | ForEach-Object { 
+                            if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                                ConvertTo-Hashtable -InputObject $_
+                            }
+                            else {
+                                $_
+                            }
+                        })
+                }
+                else {
+                    $result[$property.Name] = $value
+                }
             }
             return $result
         }
@@ -409,11 +445,11 @@ end {
         }
 
         return [pscustomobject]@{
-            HomeFolder = $vmHomeFolder
-            HypervRoot = $hypervRootFolder
+            HomeFolder            = $vmHomeFolder
+            HypervRoot            = $hypervRootFolder
             VirtualMachinesFolder = $virtualMachinesFolder
-            Targets = $orderedTargets
-            IsoTargets = $isoCleanupTargets.ToArray()
+            Targets               = $orderedTargets
+            IsoTargets            = $isoCleanupTargets.ToArray()
         }
     }
 
@@ -535,9 +571,9 @@ end {
         $patterns = @('WindowsProvisioning*.iso', 'LinuxProvisioning*.iso', '*Provisioning*.iso')
         foreach ($pattern in $patterns) {
             Get-ChildItem -LiteralPath $Folder -Filter $pattern -File -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                    Remove-FileWithVerification -Path $_.FullName -Description 'provisioning ISO'
-                }
+            ForEach-Object {
+                Remove-FileWithVerification -Path $_.FullName -Description 'provisioning ISO'
+            }
         }
     }
 
@@ -584,7 +620,7 @@ end {
             Remove-VMHardDiskDrive -VMHardDiskDrive $disk -Confirm:$false -ErrorAction Stop
             Start-Sleep -Milliseconds 500
             $stillAttached = Get-VMHardDiskDrive -VMName $VMName -ErrorAction SilentlyContinue |
-                Where-Object { $_.Path -eq $disk.Path }
+            Where-Object { $_.Path -eq $disk.Path }
             if ($stillAttached) {
                 throw "Failed to detach VHD '$($disk.Path)' from VM '$VMName'."
             }
@@ -623,7 +659,7 @@ end {
             Remove-VMDvdDrive -VMDvdDrive $drive -ErrorAction Stop
             Start-Sleep -Milliseconds 300
             $stillAttached = Get-VMDvdDrive -VMName $VMName -ErrorAction SilentlyContinue |
-                Where-Object { $_.Id -eq $drive.Id }
+            Where-Object { $_.Id -eq $drive.Id }
             if ($stillAttached) {
                 throw "Failed to remove DVD drive from VM '$VMName'."
             }

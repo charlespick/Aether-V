@@ -35,7 +35,23 @@ end {
         if ($InputObject -is [System.Collections.IDictionary]) {
             $result = @{}
             foreach ($key in $InputObject.Keys) {
-                $result[$key] = $InputObject[$key]
+                $value = $InputObject[$key]
+                if ($value -is [System.Management.Automation.PSObject] -or $value -is [System.Collections.IDictionary]) {
+                    $result[$key] = ConvertTo-Hashtable -InputObject $value
+                }
+                elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    $result[$key] = @($value | ForEach-Object { 
+                            if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                                ConvertTo-Hashtable -InputObject $_
+                            }
+                            else {
+                                $_
+                            }
+                        })
+                }
+                else {
+                    $result[$key] = $value
+                }
             }
             return $result
         }
@@ -43,7 +59,23 @@ end {
         if ($InputObject -is [System.Management.Automation.PSObject]) {
             $result = @{}
             foreach ($property in $InputObject.PSObject.Properties) {
-                $result[$property.Name] = $property.Value
+                $value = $property.Value
+                if ($value -is [System.Management.Automation.PSObject] -or $value -is [System.Collections.IDictionary]) {
+                    $result[$property.Name] = ConvertTo-Hashtable -InputObject $value
+                }
+                elseif ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                    $result[$property.Name] = @($value | ForEach-Object { 
+                            if ($_ -is [System.Management.Automation.PSObject] -or $_ -is [System.Collections.IDictionary]) {
+                                ConvertTo-Hashtable -InputObject $_
+                            }
+                            else {
+                                $_
+                            }
+                        })
+                }
+                else {
+                    $result[$property.Name] = $value
+                }
             }
             return $result
         }
@@ -232,16 +264,16 @@ end {
 
         # Output the adapter ID as JSON for the control plane
         $result = @{
-            nic_id = $adapterId
-            adapter_name = $adapterName
-            vm_id = $vmId
-            vm_name = $vmName
-            network = $networkName
-            virtual_switch = $virtualSwitch
-            vlan_id = $vlanId
-            mac_address = $newAdapter.MacAddress
+            nic_id              = $adapterId
+            adapter_name        = $adapterName
+            vm_id               = $vmId
+            vm_name             = $vmName
+            network             = $networkName
+            virtual_switch      = $virtualSwitch
+            vlan_id             = $vlanId
+            mac_address         = $newAdapter.MacAddress
             static_ip_requested = $staticIpConfigured
-            status = "created"
+            status              = "created"
         }
         $result | ConvertTo-Json -Depth 2
     }
