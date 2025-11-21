@@ -362,6 +362,9 @@ class JobService:
             logger.warning("Received unknown job id %s", job_id)
             return
 
+        # Enrich job with resource metadata before execution
+        await self._enrich_job_metadata(job)
+
         host_key = self._normalise_host(job.target_host)
         acquired_host = False
 
@@ -433,6 +436,100 @@ class JobService:
         if not value:
             return ""
         return value.strip().lower()
+
+    async def _enrich_job_metadata(self, job: Job) -> None:
+        """Collect and store resource metadata in job parameters for logging/notifications.
+
+        This runs before job execution to capture current state from inventory.
+        Metadata is stored in job.parameters['_metadata'] for use in notifications.
+        """
+        metadata = {}
+
+        definition = job.parameters.get("definition", {})
+        fields = definition.get("fields", {})
+
+        # Extract resource information based on job type
+        vm_jobs = (
+            "create_vm", "update_vm", "delete_vm",
+            "managed_deployment", "initialize_vm"
+        )
+        nic_jobs = ("create_nic", "update_nic", "delete_nic")
+        disk_jobs = ("create_disk", "update_disk", "delete_disk")
+
+        if job.job_type in vm_jobs:
+            # For VM jobs, get VM name from parameters
+            if job.job_type == "delete_vm":
+                vm_name = job.parameters.get("vm_name")
+            else:
+                vm_name = fields.get("vm_name")
+
+            if vm_name:
+                metadata["resource_type"] = "VM"
+                metadata["resource_name"] = vm_name
+                metadata["vm_name"] = vm_name
+
+        elif job.job_type in nic_jobs or job.job_type in disk_jobs:
+            # For NIC/Disk jobs, look up parent VM and resource names
+            vm_id = fields.get("vm_id")
+            resource_id = fields.get("resource_id")
+
+            if vm_id:
+                vm = inventory_service.get_vm_by_id(vm_id)
+                if vm:
+                    metadata["vm_name"] = vm.name
+                    metadata["vm_id"] = vm.id
+
+                    if job.job_type in nic_jobs:
+                        metadata["resource_type"] = "Network Adapter"
+                        # Try to find NIC name
+                        if resource_id and vm.networks:
+                            for nic in vm.networks:
+                                if nic.id and nic.id.lower() == resource_id.lower():
+                                    metadata["resource_name"] = nic.name or f"NIC {resource_id[:8]}"
+                                    metadata["resource_id"] = resource_id
+                                    break
+                        # For create, use adapter_name from fields
+                        if not metadata.get("resource_name"):
+                            adapter_name = fields.get("adapter_name")
+                            if adapter_name:
+                                metadata["resource_name"] = adapter_name
+                            elif resource_id:
+                                metadata["resource_name"] = f"NIC {resource_id[:8]}"
+                            else:
+                                metadata["resource_name"] = "Network Adapter"
+
+                    elif job.job_type in disk_jobs:
+                        metadata["resource_type"] = "Disk"
+                        # Try to find disk name
+                        if resource_id and vm.disks:
+                            for disk in vm.disks:
+                                if disk.id and disk.id.lower() == resource_id.lower():
+                                    # Use the actual disk filename
+                                    if disk.name:
+                                        metadata["resource_name"] = disk.name
+                                    elif disk.path:
+                                        import os
+                                        metadata["resource_name"] = os.path.basename(
+                                            disk.path)
+                                    else:
+                                        metadata["resource_name"] = "Disk"
+                                    metadata["resource_id"] = resource_id
+                                    break
+                        # For create, use image_name or disk_size_gb
+                        if not metadata.get("resource_name"):
+                            image_name = fields.get("image_name")
+                            disk_size_gb = fields.get("disk_size_gb")
+                            if image_name:
+                                metadata["resource_name"] = f"Disk from '{image_name}'"
+                            elif disk_size_gb:
+                                metadata["resource_name"] = f"{disk_size_gb}GB Disk"
+                            else:
+                                metadata["resource_name"] = "Disk"
+
+        # Store metadata in job parameters
+        if metadata:
+            async with self._lock:
+                job.parameters["_metadata"] = metadata
 
     async def _acquire_host_slot(self, host: str, job_id: str) -> None:
         """Serialise provisioning jobs so only one runs per host."""
@@ -1333,7 +1430,18 @@ class JobService:
             await self._sync_job_notification(job)
 
             if job.job_type == "delete_vm":
-                vm_name = self._extract_vm_name(job)
+                # Get vm_name from enriched metadata, or fallback to parameters
+                metadata = job.parameters.get("_metadata", {})
+                vm_name = metadata.get(
+                    "vm_name") or metadata.get("resource_name")
+
+                if not vm_name:
+                    # Fallback for tests or when enrichment hasn't run
+                    definition = job.parameters.get("definition") or {}
+                    fields = definition.get("fields") or {}
+                    vm_name = fields.get(
+                        "vm_name") or job.parameters.get("vm_name")
+
                 target_host = (job.target_host or "").strip()
                 if vm_name and target_host:
                     if job.status == JobStatus.RUNNING:
@@ -1352,41 +1460,28 @@ class JobService:
         await self._broadcast_job_status(job)
 
     async def _sync_job_notification(self, job: Job) -> None:
-        # Determine resource type and extract resource name
-        vm_jobs = (
-            "create_vm", "update_vm", "delete_vm",
-            "managed_deployment", "initialize_vm"
-        )
-        nic_jobs = ("create_nic", "update_nic", "delete_nic")
-        disk_jobs = ("create_disk", "update_disk", "delete_disk")
+        """Create or update job notification using pre-enriched metadata."""
 
-        is_vm_job = job.job_type in vm_jobs
-        is_nic_job = job.job_type in nic_jobs
-        is_disk_job = job.job_type in disk_jobs
+        # Get enriched metadata (populated in _enrich_job_metadata)
+        # If not enriched yet (e.g., in tests), extract basic info from parameters
+        metadata = job.parameters.get("_metadata", {})
 
-        # Extract appropriate resource name
-        resource_name = None
-        vm_name = None
+        if not metadata:
+            # Fallback: extract vm_name from parameters for notification metadata
+            definition = job.parameters.get("definition") or {}
+            fields = definition.get("fields") or {}
+            vm_name = fields.get("vm_name") or job.parameters.get("vm_name")
 
-        if is_vm_job:
-            resource_name = self._extract_vm_name(job)
-            resource_type = "VM"
-        elif is_nic_job:
-            resource_name = self._extract_nic_name(job)
-            resource_type = "Network Adapter"
-            vm_name = self._extract_vm_name(job)  # Get parent VM name
-        elif is_disk_job:
-            resource_name = self._extract_disk_name(job)
-            resource_type = "Disk"
-            vm_name = self._extract_vm_name(job)  # Get parent VM name
-        else:
-            # Fallback for other job types - try to extract VM name
-            resource_name = self._extract_vm_name(job)
-            resource_type = "Resource"
-            # Treat unknown types with VM name as VM jobs
-            if resource_name:
-                is_vm_job = True
-                resource_type = "VM"
+            # Set minimal metadata for notification purposes
+            metadata = {
+                "resource_type": "VM" if "vm" in job.job_type else "Resource",
+                "resource_name": vm_name,
+                "vm_name": vm_name,
+            }
+
+        resource_type = metadata.get("resource_type", "Resource")
+        resource_name = metadata.get("resource_name")
+        vm_name = metadata.get("vm_name")
 
         # Determine action verb
         is_create = (
@@ -1407,7 +1502,8 @@ class JobService:
         # Format resource name for display
         resource_label = resource_name if resource_name else job.job_id[:8]
 
-        # Determine location phrase (host for VMs, VM name for NICs/Disks)
+        # Determine location phrase
+        is_vm_job = resource_type == "VM"
         if is_vm_job:
             if job.target_host:
                 location_phrase = f"host {job.target_host}"
@@ -1457,9 +1553,14 @@ class JobService:
             )
             level = NotificationLevel.INFO
 
-        # For metadata, use the VM name from the resource name for VM jobs,
-        # or the parent VM name for NIC/Disk jobs
-        metadata_vm_name = resource_name if is_vm_job else vm_name
+        # For notification metadata, use vm_name from enriched data
+        notification_metadata = {
+            "job_id": job.job_id,
+            "status": job.status.value,
+            "job_type": job.job_type,
+            "vm_name": vm_name,
+            "target_host": job.target_host,
+        }
 
         notification = notification_service.upsert_job_notification(
             job.job_id,
@@ -1467,13 +1568,7 @@ class JobService:
             message=message,
             level=level,
             status=job.status,
-            metadata={
-                "job_id": job.job_id,
-                "status": job.status.value,
-                "job_type": job.job_type,
-                "vm_name": metadata_vm_name,
-                "target_host": job.target_host,
-            },
+            metadata=notification_metadata,
         )
 
         if notification:
@@ -1534,72 +1629,6 @@ class JobService:
         if job.job_type == "initialize_vm":
             return "Initialize VM"
         return job.job_type.replace("_", " ").title()
-
-    def _extract_vm_name(self, job: Job) -> Optional[str]:
-        if job.job_type == "delete_vm":
-            value = job.parameters.get("vm_name")
-            if isinstance(value, str):
-                value = value.strip()
-                if value:
-                    return value
-
-        definition = job.parameters.get("definition") or {}
-        fields = definition.get("fields") or {}
-        value = fields.get("vm_name")
-        if isinstance(value, str):
-            value = value.strip()
-            if value:
-                return value
-        return None
-
-    def _extract_nic_name(self, job: Job) -> Optional[str]:
-        """Extract NIC/adapter name from job parameters."""
-        definition = job.parameters.get("definition") or {}
-        fields = definition.get("fields") or {}
-
-        # Try adapter_name first (from create schema)
-        value = fields.get("adapter_name")
-        if isinstance(value, str):
-            value = value.strip()
-            if value:
-                return value
-
-        # For update/delete, try resource_id as fallback
-        resource_id = fields.get("resource_id")
-        if isinstance(resource_id, str):
-            resource_id = resource_id.strip()
-            if resource_id:
-                # Return a shortened version of the UUID for readability
-                return f"NIC {resource_id[:8]}"
-
-        return None
-
-    def _extract_disk_name(self, job: Job) -> Optional[str]:
-        """Extract disk/VHD name from job parameters."""
-        definition = job.parameters.get("definition") or {}
-        fields = definition.get("fields") or {}
-
-        # Try image_name first (for create jobs from image)
-        image_name = fields.get("image_name")
-        if isinstance(image_name, str):
-            image_name = image_name.strip()
-            if image_name:
-                return f"Disk from '{image_name}'"
-
-        # Try disk_size_gb for blank disk creation
-        disk_size = fields.get("disk_size_gb")
-        if disk_size:
-            return f"{disk_size}GB Disk"
-
-        # For update/delete, try resource_id as fallback
-        resource_id = fields.get("resource_id")
-        if isinstance(resource_id, str):
-            resource_id = resource_id.strip()
-            if resource_id:
-                # Return a shortened version of the UUID for readability
-                return f"Disk {resource_id[:8]}"
-
-        return None
 
     def _build_agent_invocation_command(self, script_name: str, payload: str) -> str:
         payload_bytes = payload.encode("utf-8")
