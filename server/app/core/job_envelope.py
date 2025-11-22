@@ -193,3 +193,163 @@ def create_job_request_from_nic_spec(
         correlation_id=correlation_id,
         metadata=metadata,
     )
+
+
+def create_vm_update_request(
+    vm_id: str,
+    updates: Dict[str, Any],
+    correlation_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobRequest:
+    """Create a vm.update JobRequest.
+    
+    Args:
+        vm_id: VM identifier
+        updates: Dictionary of fields to update
+        correlation_id: Optional correlation ID
+        metadata: Optional metadata dict
+    
+    Returns:
+        JobRequest envelope for vm.update operation
+    """
+    resource_spec = {"vm_id": vm_id, **updates}
+    return create_job_request(
+        operation="vm.update",
+        resource_spec=resource_spec,
+        correlation_id=correlation_id,
+        metadata=metadata,
+    )
+
+
+def create_vm_delete_request(
+    vm_id: str,
+    vm_name: str,
+    correlation_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobRequest:
+    """Create a vm.delete JobRequest.
+    
+    Args:
+        vm_id: VM identifier
+        vm_name: VM name
+        correlation_id: Optional correlation ID
+        metadata: Optional metadata dict
+    
+    Returns:
+        JobRequest envelope for vm.delete operation
+    """
+    resource_spec = {"vm_id": vm_id, "vm_name": vm_name}
+    return create_job_request(
+        operation="vm.delete",
+        resource_spec=resource_spec,
+        correlation_id=correlation_id,
+        metadata=metadata,
+    )
+
+
+def create_disk_update_request(
+    vm_id: str,
+    resource_id: str,
+    updates: Dict[str, Any],
+    correlation_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobRequest:
+    """Create a disk.update JobRequest.
+    
+    Args:
+        vm_id: VM identifier
+        resource_id: Disk identifier
+        updates: Dictionary of fields to update
+        correlation_id: Optional correlation ID
+        metadata: Optional metadata dict
+    
+    Returns:
+        JobRequest envelope for disk.update operation
+    """
+    resource_spec = {"vm_id": vm_id, "resource_id": resource_id, **updates}
+    return create_job_request(
+        operation="disk.update",
+        resource_spec=resource_spec,
+        correlation_id=correlation_id,
+        metadata=metadata,
+    )
+
+
+def create_disk_delete_request(
+    vm_id: str,
+    resource_id: str,
+    correlation_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobRequest:
+    """Create a disk.delete JobRequest.
+    
+    Args:
+        vm_id: VM identifier
+        resource_id: Disk identifier
+        correlation_id: Optional correlation ID
+        metadata: Optional metadata dict
+    
+    Returns:
+        JobRequest envelope for disk.delete operation
+    """
+    resource_spec = {"vm_id": vm_id, "resource_id": resource_id}
+    return create_job_request(
+        operation="disk.delete",
+        resource_spec=resource_spec,
+        correlation_id=correlation_id,
+        metadata=metadata,
+    )
+
+
+def create_nic_update_request(
+    vm_id: str,
+    resource_id: str,
+    updates: Dict[str, Any],
+    correlation_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobRequest:
+    """Create a nic.update JobRequest.
+    
+    Args:
+        vm_id: VM identifier
+        resource_id: NIC identifier
+        updates: Dictionary of fields to update
+        correlation_id: Optional correlation ID
+        metadata: Optional metadata dict
+    
+    Returns:
+        JobRequest envelope for nic.update operation
+    """
+    resource_spec = {"vm_id": vm_id, "resource_id": resource_id, **updates}
+    return create_job_request(
+        operation="nic.update",
+        resource_spec=resource_spec,
+        correlation_id=correlation_id,
+        metadata=metadata,
+    )
+
+
+def create_nic_delete_request(
+    vm_id: str,
+    resource_id: str,
+    correlation_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobRequest:
+    """Create a nic.delete JobRequest.
+    
+    Args:
+        vm_id: VM identifier
+        resource_id: NIC identifier
+        correlation_id: Optional correlation ID
+        metadata: Optional metadata dict
+    
+    Returns:
+        JobRequest envelope for nic.delete operation
+    """
+    resource_spec = {"vm_id": vm_id, "resource_id": resource_id}
+    return create_job_request(
+        operation="nic.delete",
+        resource_spec=resource_spec,
+        correlation_id=correlation_id,
+        metadata=metadata,
+    )
