@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import IsolatedAsyncioTestCase, TestCase, skipIf
 from unittest import mock
 
+# Kerberos is disabled via environment variables in conftest.py
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover - test path guard

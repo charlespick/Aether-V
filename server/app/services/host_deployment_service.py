@@ -4,6 +4,7 @@ import asyncio
 import logging
 import textwrap
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar, Literal
@@ -987,6 +988,27 @@ class HostDeploymentService:
             self._startup_progress.status == "running"
             and not self._startup_progress.provisioning_available
         )
+
+    async def stop(self) -> None:
+        """Cancel any in-flight startup deployments.
+
+        The startup deployment runs in the background and can outlive the
+        FastAPI lifespan shutdown if it is not explicitly cancelled. On
+        shutdown we cancel the task, set the completion event, and leave the
+        progress snapshot in its last known state so waiters unblock.
+        """
+
+        async with self._startup_lock:
+            task = self._startup_task
+            self._startup_task = None
+
+        if task:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+        if self._startup_event and not self._startup_event.is_set():
+            self._startup_event.set()
 
     def is_provisioning_available(self) -> bool:
         if not self._deployment_enabled:

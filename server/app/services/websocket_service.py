@@ -1,10 +1,9 @@
 """WebSocket service for real-time updates."""
 import logging
-import json
 import asyncio
 from typing import Dict, Set, Optional
 from datetime import datetime
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 

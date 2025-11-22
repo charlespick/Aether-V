@@ -6,7 +6,10 @@ function Invoke-ProvisioningCopyProvisioningIso {
         [string]$OSFamily,
 
         [Parameter(Mandatory = $true)]
-        [string]$VMDataFolder
+        [string]$StoragePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$VMName
     )
 
     function Invoke-ValidateFolder {
@@ -19,21 +22,37 @@ function Invoke-ProvisioningCopyProvisioningIso {
     function Invoke-CopyIso {
         param(
             [string]$SourcePath,
-            [string]$DestinationFolder
+            [string]$DestinationFolder,
+            [string]$UniqueFileName
         )
 
         try {
-            $destinationPath = Join-Path -Path $DestinationFolder -ChildPath (Split-Path -Path $SourcePath -Leaf)
+            $destinationPath = Join-Path -Path $DestinationFolder -ChildPath $UniqueFileName
             Copy-Item -LiteralPath $SourcePath -Destination $destinationPath -Force -ErrorAction Stop
             Write-Host "Copied provisioning ISO to $destinationPath" -ForegroundColor Green
+            return $destinationPath
         }
         catch {
             throw "Failed to copy provisioning ISO from $SourcePath to ${DestinationFolder}: $_"
         }
     }
 
-    Invoke-ValidateFolder -Path $VMDataFolder
+    # Ensure storage path exists (create it if it does not)
+    if (-not (Test-Path -LiteralPath $StoragePath -PathType Container)) {
+        try {
+            New-Item -ItemType Directory -Path $StoragePath -Force | Out-Null
+        }
+        catch {
+            throw "Failed to create storage path '$StoragePath': $_"
+        }
+    }
+    else {
+        Invoke-ValidateFolder -Path $StoragePath
+    }
 
+    # Generate unique ID for the ISO to avoid collisions
+    $uniqueId = [System.Guid]::NewGuid().ToString("N").Substring(0, 8)
+    
     $scriptDirectory = $PSScriptRoot
     $linuxIsoPath = Join-Path -Path $scriptDirectory -ChildPath "LinuxProvisioning.iso"
     $windowsIsoPath = Join-Path -Path $scriptDirectory -ChildPath "WindowsProvisioning.iso"
@@ -43,13 +62,17 @@ function Invoke-ProvisioningCopyProvisioningIso {
             if (-not (Test-Path -LiteralPath $linuxIsoPath -PathType Leaf)) {
                 throw "The Linux provisioning ISO file does not exist at '$linuxIsoPath'."
             }
-            Invoke-CopyIso -SourcePath $linuxIsoPath -DestinationFolder $VMDataFolder
+            $uniqueIsoName = "LinuxProvisioning-${VMName}-${uniqueId}.iso"
+            $isoPath = Invoke-CopyIso -SourcePath $linuxIsoPath -DestinationFolder $StoragePath -UniqueFileName $uniqueIsoName
+            return $isoPath
         }
         "windows" {
             if (-not (Test-Path -LiteralPath $windowsIsoPath -PathType Leaf)) {
                 throw "The Windows provisioning ISO file does not exist at '$windowsIsoPath'."
             }
-            Invoke-CopyIso -SourcePath $windowsIsoPath -DestinationFolder $VMDataFolder
+            $uniqueIsoName = "WindowsProvisioning-${VMName}-${uniqueId}.iso"
+            $isoPath = Invoke-CopyIso -SourcePath $windowsIsoPath -DestinationFolder $StoragePath -UniqueFileName $uniqueIsoName
+            return $isoPath
         }
         default {
             throw "Unsupported OS family '$OSFamily' provided to Invoke-ProvisioningCopyProvisioningIso."

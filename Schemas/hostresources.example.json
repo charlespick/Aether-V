@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "schema_name": "hostresources",
+  "storage_classes": [
+    {
+      "name": "fast-ssd",
+      "path": "C:\\ClusterStorage\\Volume1\\Storage"
+    },
+    {
+      "name": "bulk-storage",
+      "path": "C:\\ClusterStorage\\Volume2\\Storage"
+    }
+  ],
+  "networks": [
+    {
+      "name": "Production",
+      "model": "vlan",
+      "configuration": {
+        "virtual_switch": "External-Switch",
+        "vlan_id": 100
+      }
+    },
+    {
+      "name": "Development",
+      "model": "vlan",
+      "configuration": {
+        "virtual_switch": "External-Switch",
+        "vlan_id": 200
+      }
+    },
+    {
+      "name": "Management",
+      "model": "vlan",
+      "configuration": {
+        "virtual_switch": "External-Switch",
+        "vlan_id": 10
+      }
+    }
+  ],
+  "virtual_machines_path": "C:\\ClusterStorage\\Volume1\\VirtualMachines"
+}

@@ -1564,6 +1564,70 @@ tbody tr:last-child td {
     margin-bottom: 12px;
 }
 
+.job-child-section .job-sub-jobs {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.job-child-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--card-bg);
+}
+
+.job-child-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.job-child-title {
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.job-child-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: var(--muted-ink);
+    font-size: 13px;
+}
+
+.job-child-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.job-child-view {
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--ink);
+    padding: 6px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.job-child-view:hover {
+    background: var(--muted);
+}
+
+.job-child-id {
+    font-family: monospace;
+}
+
+.job-child-empty {
+    color: var(--muted-ink);
+    font-size: 14px;
+}
+
 .job-output {
     background: #1e1e1e;
     color: #d4d4d4;
@@ -3576,4 +3640,233 @@ tbody tr:last-child td {
 
 .vm-action-toast--error .connection-status-icon {
     color: #b91c1c;
+}
+
+/* Resource menu buttons */
+.vm-resource-actions {
+    text-align: center;
+    width: 60px;
+}
+
+.vm-resource-actions-header {
+    text-align: center;
+    width: 60px;
+}
+
+.resource-menu-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 6px;
+    cursor: pointer;
+    color: var(--muted-ink);
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.resource-menu-btn:hover {
+    background: var(--surface-hover);
+    color: var(--ink);
+    border-color: var(--border-hover);
+}
+
+.resource-menu-btn:active {
+    transform: scale(0.95);
+}
+
+[data-theme="dark"] .resource-menu-btn {
+    border-color: var(--dark-border);
+    color: var(--dark-muted-ink);
+}
+
+[data-theme="dark"] .resource-menu-btn:hover {
+    background: var(--dark-surface-hover);
+    color: var(--dark-ink);
+    border-color: var(--dark-border-hover);
+}
+
+/* Resource menu */
+.resource-menu {
+    position: absolute;
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    min-width: 180px;
+    padding: 6px;
+    opacity: 0;
+    transform: translateY(-8px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 10000;
+}
+
+.resource-menu.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+[data-theme="dark"] .resource-menu {
+    background: #2a2a2a;
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.resource-menu-item {
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+    color: var(--ink);
+    font-size: 14px;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.15s ease;
+    text-align: left;
+}
+
+.resource-menu-item:hover {
+    background: var(--surface-hover);
+}
+
+.resource-menu-item:active {
+    transform: scale(0.98);
+}
+
+.resource-menu-item--danger {
+    color: #b91c1c;
+}
+
+.resource-menu-item--danger:hover {
+    background: rgba(220, 38, 38, 0.08);
+}
+
+[data-theme="dark"] .resource-menu-item {
+    color: var(--dark-ink);
+}
+
+[data-theme="dark"] .resource-menu-item:hover {
+    background: var(--dark-surface-hover);
+}
+
+[data-theme="dark"] .resource-menu-item--danger {
+    color: #ef4444;
+}
+
+[data-theme="dark"] .resource-menu-item--danger:hover {
+    background: rgba(239, 68, 68, 0.12);
+}
+
+/* Resource delete confirmation dialog */
+.resource-delete-confirm {
+    position: fixed;
+    inset: 0;
+    z-index: 20000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.resource-delete-confirm.visible {
+    opacity: 1;
+}
+
+.resource-delete-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(2px);
+}
+
+.resource-delete-dialog {
+    position: relative;
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+    max-width: 450px;
+    max-height: 100%;
+    width: 90%;
+    overflow-y: auto;
+    transform: scale(0.95);
+    transition: transform 0.2s ease;
+}
+
+.resource-delete-confirm.visible .resource-delete-dialog {
+    transform: scale(1);
+}
+
+[data-theme="dark"] .resource-delete-dialog {
+    background: #2a2a2a;
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.resource-delete-header {
+    padding: 20px 24px 12px;
+}
+
+.resource-delete-header h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--ink);
+}
+
+[data-theme="dark"] .resource-delete-header h3 {
+    color: var(--dark-ink);
+}
+
+.resource-delete-body {
+    padding: 0 24px 20px;
+}
+
+.resource-delete-body p {
+    margin: 0;
+    color: var(--muted-ink);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+[data-theme="dark"] .resource-delete-body p {
+    color: var(--dark-muted-ink);
+}
+
+.resource-delete-actions {
+    display: flex;
+    gap: 12px;
+    padding: 16px 24px 20px;
+    border-top: 1px solid var(--border);
+    justify-content: flex-end;
+}
+
+[data-theme="dark"] .resource-delete-actions {
+    border-top-color: var(--dark-border);
+}
+
+.btn-danger {
+    background: #dc2626;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #b91c1c;
+}
+
+.btn-danger:active {
+    background: #991b1b;
+}
+
+/* VM tab actions */
+.vm-tab-actions {
+    padding: 16px 24px 24px;
+    border-top: 1px solid var(--border-color);
 }

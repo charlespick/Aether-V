@@ -19,7 +19,9 @@ from ..core.models import (
     NotificationLevel,
     OSFamily,
     VM,
+    VMNetworkAdapter,
     VMState,
+    VMDisk,
 )
 from .host_deployment_service import host_deployment_service, InventoryReadiness
 from .notification_service import notification_service
@@ -80,6 +82,7 @@ class InventoryService:
         self.clusters: Dict[str, Cluster] = {}
         self.hosts: Dict[str, Host] = {}
         self.vms: Dict[str, VM] = {}  # Key is "hostname:vmname"
+        self.vms_by_id: Dict[str, VM] = {}  # Key is VM id (lowercase)
         self.last_refresh: Optional[datetime] = None
         self._refresh_task: Optional[asyncio.Task] = None
         self._initial_refresh_task: Optional[asyncio.Task] = None
@@ -245,6 +248,17 @@ class InventoryService:
             )
         self._slow_hosts.clear()
 
+    async def wait_for_initial_refresh(self) -> bool:
+        """
+        Wait for the initial inventory refresh to complete.
+
+        Returns:
+            True if the initial refresh succeeded, False otherwise
+        """
+        await self._initial_refresh_event.wait()
+        return self._initial_refresh_succeeded
+
+
     async def _initialize_dummy_data(self):
         """Initialize with dummy data for development."""
         logger.info("Initializing dummy data for development")
@@ -276,6 +290,8 @@ class InventoryService:
             connected=True,
             last_seen=now,
             error=None,
+            total_cpu_cores=32,
+            total_memory_gb=256.0,
         )
 
         self.hosts["hyperv02.lab.local"] = Host(
@@ -284,6 +300,8 @@ class InventoryService:
             connected=True,
             last_seen=now,
             error=None,
+            total_cpu_cores=24,
+            total_memory_gb=192.0,
         )
 
         # Development cluster host
@@ -293,6 +311,8 @@ class InventoryService:
             connected=True,
             last_seen=now,
             error=None,
+            total_cpu_cores=16,
+            total_memory_gb=128.0,
         )
 
         # Add a few disconnected hosts
@@ -302,6 +322,8 @@ class InventoryService:
             connected=False,
             last_seen=now - timedelta(hours=2),
             error="Connection timeout",
+            total_cpu_cores=16,
+            total_memory_gb=64.0,
         )
 
         self.hosts["hyperv-backup01.lab.local"] = Host(
@@ -310,6 +332,8 @@ class InventoryService:
             connected=False,
             last_seen=now - timedelta(minutes=30),
             error="WinRM authentication failed",
+            total_cpu_cores=12,
+            total_memory_gb=96.0,
         )
 
         # Create dummy VMs
@@ -322,6 +346,9 @@ class InventoryService:
                 cpu_cores=4,
                 memory_gb=8.0,
                 os_family=OSFamily.LINUX,
+                os_name="Ubuntu Server 22.04",
+                ip_addresses=["10.0.0.21"],
+                notes="Primary web node",
                 created_at=now - timedelta(days=5),
             ),
             VM(
@@ -331,6 +358,9 @@ class InventoryService:
                 cpu_cores=8,
                 memory_gb=16.0,
                 os_family=OSFamily.LINUX,
+                os_name="Ubuntu Server 22.04",
+                ip_addresses=["10.0.0.22"],
+                notes="Database cluster member",
                 created_at=now - timedelta(days=10),
             ),
             VM(
@@ -340,6 +370,9 @@ class InventoryService:
                 cpu_cores=2,
                 memory_gb=4.0,
                 os_family=OSFamily.WINDOWS,
+                os_name="Windows Server 2022",
+                ip_addresses=["10.0.0.23"],
+                notes="Legacy application host",
                 created_at=now - timedelta(days=2),
             ),
             # VMs on hyperv02
@@ -350,6 +383,8 @@ class InventoryService:
                 cpu_cores=2,
                 memory_gb=4.0,
                 os_family=OSFamily.LINUX,
+                os_name="Alpine Linux",
+                ip_addresses=["10.0.1.10"],
                 created_at=now - timedelta(days=7),
             ),
             VM(
@@ -359,6 +394,8 @@ class InventoryService:
                 cpu_cores=4,
                 memory_gb=8.0,
                 os_family=OSFamily.LINUX,
+                os_name="Debian 12",
+                ip_addresses=["10.0.1.11"],
                 created_at=now - timedelta(days=3),
             ),
             VM(
@@ -368,6 +405,8 @@ class InventoryService:
                 cpu_cores=1,
                 memory_gb=2.0,
                 os_family=OSFamily.WINDOWS,
+                os_name="Windows Server 2019",
+                ip_addresses=["10.0.1.12"],
                 created_at=now - timedelta(days=15),
             ),
             # VMs on dev host
@@ -378,6 +417,8 @@ class InventoryService:
                 cpu_cores=2,
                 memory_gb=4.0,
                 os_family=OSFamily.LINUX,
+                os_name="Ubuntu Desktop 22.04",
+                ip_addresses=["10.0.2.50"],
                 created_at=now - timedelta(days=1),
             ),
             VM(
@@ -387,6 +428,8 @@ class InventoryService:
                 cpu_cores=4,
                 memory_gb=8.0,
                 os_family=OSFamily.WINDOWS,
+                os_name="Windows 11",
+                notes="Suspended while not in use",
                 created_at=now - timedelta(hours=8),
             ),
         ]
@@ -394,7 +437,7 @@ class InventoryService:
         # Add VMs to inventory
         for vm in dummy_vms:
             key = f"{vm.host}:{vm.name}"
-            self.vms[key] = vm
+            self._set_vm(key, vm)
 
         self.last_refresh = now
         logger.info("Dummy data initialized successfully")
@@ -655,6 +698,7 @@ class InventoryService:
                 self.clusters.clear()
                 self.hosts.clear()
                 self.vms.clear()
+                self.vms_by_id.clear()
                 self._host_last_refresh.clear()
                 self._host_last_applied_sequence.clear()
                 self.last_refresh = datetime.utcnow()
@@ -773,7 +817,7 @@ class InventoryService:
         for vm in snapshot.vms:
             key = f"{snapshot.hostname}:{vm.name}"
             self._detach_placeholder_key(key)
-            self.vms[key] = vm
+            self._set_vm(key, vm)
 
         if snapshot.expected_vm_keys is not None:
             active_placeholder_keys = self._active_placeholder_keys()
@@ -785,7 +829,7 @@ class InventoryService:
                 and key not in active_placeholder_keys
             ]
             for key in keys_to_remove:
-                del self.vms[key]
+                self._remove_vm(key)
 
         if snapshot.host_last_refresh is not None:
             self._host_last_refresh[snapshot.hostname] = snapshot.host_last_refresh
@@ -857,7 +901,7 @@ class InventoryService:
             attempt_started = True
             start_time = time.perf_counter()
             payload = await self._collect_with_recovery(hostname)
-            cluster_name, vms = self._parse_inventory_snapshot(hostname, payload)
+            host_data, vms = self._parse_inventory_snapshot(hostname, payload)
 
             now = datetime.utcnow()
             expected_keys = {f"{hostname}:{vm.name}" for vm in vms}
@@ -868,10 +912,12 @@ class InventoryService:
                 sequence=sequence,
                 host=Host(
                     hostname=hostname,
-                    cluster=cluster_name,
+                    cluster=host_data.get("cluster"),
                     connected=True,
                     last_seen=now,
                     error=None,
+                    total_cpu_cores=host_data.get("total_cpu_cores", 0),
+                    total_memory_gb=host_data.get("total_memory_gb", 0.0),
                 ),
                 vms=vms,
                 expected_vm_keys=expected_keys,
@@ -897,6 +943,8 @@ class InventoryService:
                     connected=False,
                     last_seen=last_seen,
                     error=str(exc),
+                    total_cpu_cores=previous_host.total_cpu_cores if previous_host else 0,
+                    total_memory_gb=previous_host.total_memory_gb if previous_host else 0.0,
                 ),
                 error=str(exc),
                 clear_preparing=True,
@@ -948,7 +996,7 @@ class InventoryService:
                 ]
                 for key in host_vm_keys:
                     self._detach_placeholder_key(key)
-                    self.vms.pop(key, None)
+                    self._remove_vm(key)
 
                 for job_id, keys in list(self._job_vm_placeholders.items()):
                     filtered_keys = {key for key in keys if not key.startswith(prefix)}
@@ -1247,7 +1295,7 @@ class InventoryService:
 
     def _parse_inventory_snapshot(
         self, hostname: str, payload: Dict[str, Any]
-    ) -> tuple[str, List[VM]]:
+    ) -> tuple[Dict[str, Any], List[VM]]:
         """Normalise the inventory payload from the host script."""
 
         host_section = payload.get("Host")
@@ -1267,10 +1315,20 @@ class InventoryService:
             raise RuntimeError(f"Inventory script reported an error: {error_message}")
 
         cluster_name = host_section.get("ClusterName") or "Default"
+        total_cpu_cores = self._coerce_int(host_section.get("TotalCpuCores"), default=0)
+        total_memory_gb = self._coerce_float(
+            host_section.get("TotalMemoryGB"), default=0.0
+        )
+
         vm_payload = payload.get("VirtualMachines")
 
         vms = self._deserialize_vms(hostname, vm_payload)
-        return cluster_name, vms
+        host_data = {
+            "cluster": cluster_name,
+            "total_cpu_cores": total_cpu_cores or 0,
+            "total_memory_gb": total_memory_gb or 0.0,
+        }
+        return host_data, vms
 
     def _deserialize_vms(self, hostname: str, data: Any) -> List[VM]:
         """Convert raw VM payloads into VM models."""
@@ -1305,17 +1363,61 @@ class InventoryService:
                 state = VMState.UNKNOWN
 
             memory_gb = self._coerce_float(vm_data.get("MemoryGB", 0.0), default=0.0)
+            memory_startup_gb = self._coerce_float(
+                vm_data.get("StartupMemoryGB"), default=None
+            )
+            memory_min_gb = self._coerce_float(
+                vm_data.get("MinimumMemoryGB"), default=None
+            )
+            memory_max_gb = self._coerce_float(
+                vm_data.get("MaximumMemoryGB"), default=None
+            )
+            dynamic_memory_enabled = self._coerce_bool(
+                vm_data.get("DynamicMemoryEnabled")
+            )
+
+            if (memory_gb is None or memory_gb == 0) and memory_startup_gb:
+                memory_gb = memory_startup_gb
+
             cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
-            os_family = self._infer_os_family(vm_data.get("OperatingSystem"))
+            vm_id = self._coerce_str(vm_data.get("Id"))
+            os_name = self._coerce_str(
+                vm_data.get("OperatingSystem") or vm_data.get("OsName")
+            )
+            os_family = self._infer_os_family(os_name)
+            generation = self._coerce_int(vm_data.get("Generation"), default=None)
+            version = self._coerce_str(vm_data.get("Version"))
+            notes = self._coerce_str(vm_data.get("Notes"))
+            networks = self._deserialize_networks(vm_data.get("Networks"))
+            disks = self._deserialize_disks(vm_data.get("Disks"))
+            ip_addresses = self._normalise_ip_list(vm_data.get("IPAddresses"))
+            if not ip_addresses:
+                ip_addresses = self._collect_ips_from_networks(networks)
+            primary_ip = self._coerce_str(vm_data.get("IPAddress"))
+            if not primary_ip and ip_addresses:
+                primary_ip = ip_addresses[0]
 
             vm = VM(
+                id=vm_id,
                 name=vm_data.get("Name", ""),
                 host=hostname,
                 state=state,
                 cpu_cores=cpu_cores,
                 memory_gb=memory_gb,
+                memory_startup_gb=memory_startup_gb,
+                memory_min_gb=memory_min_gb,
+                memory_max_gb=memory_max_gb,
+                dynamic_memory_enabled=dynamic_memory_enabled,
+                ip_address=primary_ip,
+                ip_addresses=ip_addresses,
+                notes=notes,
                 os_family=os_family,
+                os_name=os_name,
+                generation=generation,
+                version=version,
                 created_at=vm_data.get("CreationTime"),
+                disks=disks,
+                networks=networks,
             )
             vms.append(vm)
 
@@ -1371,6 +1473,21 @@ class InventoryService:
         for job_id in empty_jobs:
             self._job_vm_placeholders.pop(job_id, None)
 
+    def _set_vm(self, key: str, vm: VM) -> None:
+        existing = self.vms.get(key)
+        if existing and existing.id:
+            self.vms_by_id.pop(existing.id.lower(), None)
+
+        self.vms[key] = vm
+
+        if vm.id:
+            self.vms_by_id[vm.id.lower()] = vm
+
+    def _remove_vm(self, key: str) -> None:
+        vm = self.vms.pop(key, None)
+        if vm and vm.id:
+            self.vms_by_id.pop(vm.id.lower(), None)
+
     def _clear_host_vms(
         self, hostname: str, preserve_placeholders: bool = False
     ) -> None:
@@ -1383,9 +1500,9 @@ class InventoryService:
             if key.startswith(f"{hostname}:") and key not in active_placeholder_keys
         ]
         for key in keys_to_remove:
-            del self.vms[key]
+            self._remove_vm(key)
 
-    def _coerce_float(self, value: Any, default: float = 0.0) -> float:
+    def _coerce_float(self, value: Any, default: Optional[float] = 0.0) -> Optional[float]:
         try:
             if value is None or value == "":
                 return default
@@ -1396,7 +1513,7 @@ class InventoryService:
             )
             return default
 
-    def _coerce_int(self, value: Any, default: int = 0) -> int:
+    def _coerce_int(self, value: Any, default: Optional[int] = 0) -> Optional[int]:
         try:
             if value is None or value == "":
                 return default
@@ -1404,6 +1521,37 @@ class InventoryService:
         except (TypeError, ValueError):
             logger.debug("Unable to coerce %r to int; using default %s", value, default)
             return default
+
+    def _coerce_str(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        try:
+            text = str(value).strip()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Unable to coerce value of type %r to str", type(value).__name__)
+            return None
+
+        return text or None
+
+    def _coerce_bool(self, value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+
+        if value is None:
+            return None
+
+        try:
+            text = str(value).strip().lower()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Unable to coerce %r to bool", value)
+            return None
+
+        if text in {"true", "1", "yes", "y"}:
+            return True
+        if text in {"false", "0", "no", "n"}:
+            return False
+
+        return None
 
     def _infer_os_family(self, os_name: Any) -> Optional[OSFamily]:
         if not os_name or not isinstance(os_name, str):
@@ -1419,6 +1567,110 @@ class InventoryService:
             return OSFamily.LINUX
         return None
 
+    def _normalise_ip_list(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+
+        if isinstance(value, str):
+            candidates = [part.strip() for part in value.split(",")]
+        elif isinstance(value, list):
+            candidates = value
+        else:
+            logger.debug("Unexpected IP collection type: %s", type(value))
+            return []
+
+        ips = []
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                text = str(candidate).strip()
+            except Exception:  # pragma: no cover - defensive
+                continue
+            if not text:
+                continue
+            if text.lower().startswith("fe80:"):
+                continue
+            ips.append(text)
+
+        # Preserve order but remove duplicates
+        seen = set()
+        unique_ips = []
+        for ip in ips:
+            if ip not in seen:
+                seen.add(ip)
+                unique_ips.append(ip)
+        return unique_ips
+
+    def _collect_ips_from_networks(self, adapters: List[VMNetworkAdapter]) -> List[str]:
+        ips: List[str] = []
+        for adapter in adapters:
+            for ip in adapter.ip_addresses:
+                if ip not in ips:
+                    ips.append(ip)
+        return ips
+
+    def _deserialize_networks(self, data: Any) -> List[VMNetworkAdapter]:
+        if not isinstance(data, list):
+            return []
+
+        adapters: List[VMNetworkAdapter] = []
+        for adapter_data in data:
+            if not isinstance(adapter_data, dict):
+                continue
+
+            ip_addresses = self._normalise_ip_list(
+                adapter_data.get("IPAddresses") or adapter_data.get("ip_addresses")
+            )
+
+            adapters.append(
+                VMNetworkAdapter(
+                    id=self._coerce_str(adapter_data.get("Id")),
+                    name=adapter_data.get("Name"),
+                    adapter_name=adapter_data.get("AdapterName") or adapter_data.get("Name"),
+                    network=adapter_data.get("Network"),
+                    virtual_switch=adapter_data.get("VirtualSwitch")
+                    or adapter_data.get("virtual_switch")
+                    or adapter_data.get("SwitchName"),
+                    vlan=self._coerce_str(adapter_data.get("Vlan")),
+                    network_name=self._coerce_str(adapter_data.get("NetworkName")),
+                    ip_addresses=ip_addresses,
+                    mac_address=self._coerce_str(
+                        adapter_data.get("MacAddress") or adapter_data.get("MACAddress")
+                    ),
+                )
+            )
+
+        return adapters
+
+    def _deserialize_disks(self, data: Any) -> List[VMDisk]:
+        if not isinstance(data, list):
+            return []
+
+        disks: List[VMDisk] = []
+        for disk_data in data:
+            if not isinstance(disk_data, dict):
+                continue
+
+            disks.append(
+                VMDisk(
+                    id=self._coerce_str(disk_data.get("Id")),
+                    name=disk_data.get("Name"),
+                    path=disk_data.get("Path"),
+                    location=disk_data.get("Location") or disk_data.get("Path"),
+                    type=disk_data.get("DiskType") or disk_data.get("Type"),
+                    size_gb=self._coerce_float(
+                        disk_data.get("CapacityGB") or disk_data.get("SizeGB"),
+                        default=None,
+                    ),
+                    file_size_gb=self._coerce_float(
+                        disk_data.get("FileSizeGB"), default=None
+                    ),
+                )
+            )
+
+        return disks
+
     def track_job_vm(self, job_id: str, vm_name: str, host: str) -> None:
         """Track a VM being created by an in-progress job."""
         if not job_id or not vm_name or not host:
@@ -1428,7 +1680,7 @@ class InventoryService:
         placeholder = VM(
             name=vm_name, host=host, state=VMState.CREATING, cpu_cores=0, memory_gb=0.0
         )
-        self.vms[key] = placeholder
+        self._set_vm(key, placeholder)
         self._job_vm_placeholders.setdefault(job_id, set()).add(key)
         self._job_vm_originals.pop(job_id, None)
         logger.info(
@@ -1441,7 +1693,7 @@ class InventoryService:
         for key in keys:
             vm = self.vms.get(key)
             if vm and vm.state in {VMState.CREATING, VMState.DELETING}:
-                del self.vms[key]
+                self._remove_vm(key)
         self._job_vm_originals.pop(job_id, None)
         logger.info("Cleared in-progress VM placeholders for job %s", job_id)
 
@@ -1458,7 +1710,16 @@ class InventoryService:
             existing.state = VMState.DELETING
         else:
             self._job_vm_originals.setdefault(job_id, {})[key] = None
-            self.vms[key] = VM(name=vm_name, host=host, state=VMState.DELETING, cpu_cores=0, memory_gb=0.0)
+            self._set_vm(
+                key,
+                VM(
+                    name=vm_name,
+                    host=host,
+                    state=VMState.DELETING,
+                    cpu_cores=0,
+                    memory_gb=0.0,
+                ),
+            )
 
         self._job_vm_placeholders.setdefault(job_id, set()).add(key)
         logger.info(
@@ -1480,7 +1741,7 @@ class InventoryService:
 
         if success:
             if key in self.vms:
-                self.vms.pop(key, None)
+                self._remove_vm(key)
             logger.info(
                 "Removed VM %s on host %s from inventory after successful deletion job %s",
                 vm_name,
@@ -1489,7 +1750,7 @@ class InventoryService:
             )
         else:
             if original_vm is not None:
-                self.vms[key] = original_vm
+                self._set_vm(key, original_vm)
                 logger.info(
                     "Restored VM %s on host %s to state %s after failed deletion job %s",
                     vm_name,
@@ -1498,7 +1759,7 @@ class InventoryService:
                     job_id,
                 )
             else:
-                self.vms.pop(key, None)
+                self._remove_vm(key)
                 logger.info(
                     "Removed transient delete placeholder for VM %s on host %s after failed job %s",
                     vm_name,
@@ -1511,7 +1772,7 @@ class InventoryService:
                 continue
             vm = self.vms.get(placeholder_key)
             if vm and vm.state in {VMState.CREATING, VMState.DELETING}:
-                del self.vms[placeholder_key]
+                self._remove_vm(placeholder_key)
 
     def get_all_clusters(self) -> List[Cluster]:
         """Get all clusters."""
@@ -1541,6 +1802,22 @@ class InventoryService:
         """Get a specific VM."""
         key = f"{hostname}:{vm_name}"
         return self.vms.get(key)
+
+    def get_vm_by_id(self, vm_id: str) -> Optional[VM]:
+        """Get a specific VM by its ID."""
+        if not vm_id:
+            return None
+
+        vm = self.vms_by_id.get(vm_id.lower())
+        if vm:
+            return vm
+
+        for candidate in self.vms.values():
+            if candidate.id and candidate.id.lower() == vm_id.lower():
+                self.vms_by_id[vm_id.lower()] = candidate
+                return candidate
+
+        return None
 
     def has_completed_initial_refresh(self) -> bool:
         return self._initial_refresh_event.is_set()

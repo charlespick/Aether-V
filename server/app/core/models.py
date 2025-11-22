@@ -64,6 +64,8 @@ class Host(BaseModel):
     connected: bool = False
     last_seen: Optional[datetime] = None
     error: Optional[str] = None
+    total_cpu_cores: int = 0
+    total_memory_gb: float = 0.0
 
 
 class Notification(BaseModel):
@@ -81,13 +83,55 @@ class Notification(BaseModel):
 
 class VM(BaseModel):
     """Virtual machine information."""
+    id: Optional[str] = None
     name: str
     host: str
     state: VMState
     cpu_cores: int = 0
     memory_gb: float = 0.0
+    memory_startup_gb: Optional[float] = None
+    memory_min_gb: Optional[float] = None
+    memory_max_gb: Optional[float] = None
+    dynamic_memory_enabled: Optional[bool] = None
+    ip_address: Optional[str] = None
+    ip_addresses: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
     os_family: Optional[OSFamily] = None
+    os_name: Optional[str] = None
+    generation: Optional[int] = None
+    version: Optional[str] = None
     created_at: Optional[datetime] = None
+    disks: List["VMDisk"] = Field(default_factory=list)
+    networks: List["VMNetworkAdapter"] = Field(default_factory=list)
+
+
+class VMDisk(BaseModel):
+    """Virtual disk attached to a VM."""
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    path: Optional[str] = None
+    location: Optional[str] = None
+    type: Optional[str] = None
+    size_gb: Optional[float] = None
+    file_size_gb: Optional[float] = None
+
+
+class VMNetworkAdapter(BaseModel):
+    """Network adapter attached to a VM."""
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    adapter_name: Optional[str] = None
+    network: Optional[str] = None
+    virtual_switch: Optional[str] = None
+    vlan: Optional[str] = None
+    network_name: Optional[str] = None
+    ip_addresses: List[str] = Field(default_factory=list)
+    mac_address: Optional[str] = None
+
+
+VM.model_rebuild()
 
 
 class VMDeleteRequest(BaseModel):
@@ -98,10 +142,92 @@ class VMDeleteRequest(BaseModel):
         False, description="Force delete even if VM is running")
 
 
+class ResourceCreateRequest(BaseModel):
+    """Base class for resource creation requests."""
+    schema_version: int = Field(..., description="Version of the schema used")
+    values: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Field values keyed by schema field id",
+    )
+    target_host: str = Field(
+        ...,
+        description="Hostname of the connected Hyper-V host that will execute the job",
+    )
+
+
+class DiskCreateRequest(ResourceCreateRequest):
+    """Request to create a new disk."""
+    pass
+
+
+class NicCreateRequest(ResourceCreateRequest):
+    """Request to create a new network adapter."""
+    pass
+
+
+class ResourceUpdateRequest(ResourceCreateRequest):
+    """Request to update an existing resource."""
+
+    resource_id: str = Field(
+        ..., description="Hyper-V ID of the resource being updated"
+    )
+
+
+class ResourceDeleteRequest(BaseModel):
+    """Request to delete a resource by ID."""
+    resource_id: str = Field(...,
+                             description="Hyper-V ID of the resource to delete")
+    hyperv_host: str = Field(...,
+                             description="Host where the resource is located")
+
+
+class VMInitializationRequest(BaseModel):
+    """Request to initialize an existing VM with guest configuration."""
+
+    target_host: str = Field(
+        ..., description="Hostname of the connected Hyper-V host that will execute the job"
+    )
+    guest_configuration: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Pre-formed guest configuration values to apply to the VM. External callers "
+            "must persist and supply these values when triggering initialization."
+        ),
+    )
+
+
+class NoopTestRequest(BaseModel):
+    """Request to execute a noop-test job using the new protocol.
+    
+    Phase 3: This is the first operation to use the new JobRequest envelope.
+    It validates the round-trip communication without performing actual operations.
+    """
+    
+    target_host: str = Field(
+        ...,
+        description="Hostname of the connected Hyper-V host that will execute the test",
+    )
+    resource_spec: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Test data to echo back through the new protocol",
+    )
+    correlation_id: Optional[str] = Field(
+        None,
+        description="Optional correlation ID for tracking the request",
+    )
+
+
+class JobResult(BaseModel):
+    """Result of a job submission that returns immediately."""
+    job_id: str
+    status: str = "queued"
+    message: str
+
+
 class Job(BaseModel):
     """Job execution tracking."""
     job_id: str
-    job_type: str  # "provision_vm", "delete_vm", etc.
+    job_type: str  # "create_vm", "delete_vm", "managed_deployment", etc.
     status: JobStatus
     created_at: datetime
     started_at: Optional[datetime] = None
@@ -111,6 +237,7 @@ class Job(BaseModel):
     output: List[str] = Field(default_factory=list)
     error: Optional[str] = None
     notification_id: Optional[str] = None
+    child_jobs: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class InventoryResponse(BaseModel):
@@ -165,7 +292,8 @@ class NotificationsResponse(BaseModel):
 class JobSubmission(BaseModel):
     """Schema-driven job submission payload."""
 
-    schema_version: int = Field(..., description="Version of the job schema used")
+    schema_version: int = Field(...,
+                                description="Version of the job schema used")
     values: Dict[str, Any] = Field(
         default_factory=dict,
         description="Field values keyed by schema field id",
