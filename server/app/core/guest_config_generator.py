@@ -28,10 +28,12 @@ def generate_guest_config(
     dictionary that will be transmitted to the guest agent via KVP.
     
     Args:
-        vm_spec: VM hardware specification (required)
-        nic_spec: Network adapter specification (optional)
-        disk_spec: Disk specification (optional)
-        guest_config_spec: Guest configuration specification (optional)
+        vm_spec: VM hardware specification (required, used for logging context)
+        nic_spec: Network adapter specification (optional, reserved for future use)
+        disk_spec: Disk specification (optional, reserved for future use)
+        guest_config_spec: Guest configuration specification (optional, contains
+                          all guest-level configuration including credentials,
+                          domain join, static IP, and Ansible settings)
         
     Returns:
         Dictionary containing guest configuration keys. If no guest_config_spec
@@ -42,15 +44,16 @@ def generate_guest_config(
         - This function does NOT encrypt the output (handled by KVP transmission layer)
         - This function does NOT interact with the host agent
         - The returned dict contains only the keys that should be sent to the guest
+        - nic_spec and disk_spec are accepted but not currently used; they are
+          included for future extensibility and API consistency
     
     Example:
         >>> vm = VmSpec(vm_name="web-01", gb_ram=4, cpu_cores=2)
-        >>> nic = NicSpec(network="Production")
         >>> guest = GuestConfigSpec(
         ...     guest_la_uid="Administrator",
         ...     guest_la_pw="SecurePass123!",
         ... )
-        >>> config = generate_guest_config(vm, nic, None, guest)
+        >>> config = generate_guest_config(vm, guest_config_spec=guest)
         >>> assert "guest_la_uid" in config
         >>> assert "guest_la_pw" in config
     """
