@@ -206,6 +206,9 @@ end {
         # Read and parse the job envelope
         $envelope = Read-JobEnvelope -PipelinedInput $script:CollectedInput
 
+        # Extract correlation_id early for error handling
+        $correlationId = $envelope['correlation_id']
+        
         # Validate required fields
         if (-not $envelope.ContainsKey('operation')) {
             throw 'Job envelope missing required field: operation'
@@ -217,7 +220,6 @@ end {
 
         $operation = $envelope['operation']
         $resourceSpec = $envelope['resource_spec']
-        $correlationId = $envelope['correlation_id']
         
         $logs = @()
 
@@ -868,6 +870,7 @@ end {
             -Message "Operation error: $errorMessage" `
             -Data $errorData `
             -Code 'OPERATION_ERROR' `
+            -CorrelationId $correlationId `
             -Logs @($_.ScriptStackTrace)
     }
 }

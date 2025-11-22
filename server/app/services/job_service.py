@@ -746,6 +746,13 @@ class JobService:
         
         # Store result data in job parameters for later retrieval
         job.parameters["result_data"] = envelope.data
+        
+        # Append result data as JSON to job output for compatibility
+        if envelope.data:
+            await self._append_job_output(
+                job.job_id,
+                json.dumps(envelope.data),
+            )
 
     async def _execute_create_vm_job(self, job: Job) -> None:
         """Execute a VM-only creation job using new protocol.
@@ -839,6 +846,14 @@ class JobService:
         
         # Store result data in job parameters for later retrieval
         job.parameters["result_data"] = envelope.data
+        
+        # Append result data as JSON to job output for managed deployment compatibility
+        # Managed deployments use _extract_vm_id_from_output to parse the vm_id
+        if envelope.data:
+            await self._append_job_output(
+                job.job_id,
+                json.dumps(envelope.data),
+            )
 
     async def _execute_create_disk_job(self, job: Job) -> None:
         """Execute a disk creation and attachment job using new protocol.
@@ -936,6 +951,13 @@ class JobService:
         
         # Store result data in job parameters for later retrieval
         job.parameters["result_data"] = envelope.data
+        
+        # Append result data as JSON to job output for managed deployment compatibility
+        if envelope.data:
+            await self._append_job_output(
+                job.job_id,
+                json.dumps(envelope.data),
+            )
 
     async def _execute_create_nic_job(self, job: Job) -> None:
         """Execute a NIC creation and attachment job using new protocol.
@@ -1033,6 +1055,13 @@ class JobService:
         
         # Store result data in job parameters for later retrieval
         job.parameters["result_data"] = envelope.data
+        
+        # Append result data as JSON to job output for managed deployment compatibility
+        if envelope.data:
+            await self._append_job_output(
+                job.job_id,
+                json.dumps(envelope.data),
+            )
 
     async def _execute_new_protocol_operation(
         self,
@@ -1135,6 +1164,14 @@ class JobService:
         
         # Store result data in job parameters for later retrieval
         job.parameters["result_data"] = envelope.data
+        
+        # Append result data as JSON to job output for compatibility
+        # (e.g., managed deployments may parse output for resource IDs)
+        if envelope.data:
+            await self._append_job_output(
+                job.job_id,
+                json.dumps(envelope.data),
+            )
 
     async def _execute_update_vm_job(self, job: Job) -> None:
         """Execute a VM update job using new protocol.
