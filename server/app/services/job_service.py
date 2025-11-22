@@ -18,7 +18,12 @@ from ..core.config import settings
 from ..core.job_schema import redact_job_parameters
 from ..core.models import Job, JobStatus, VMDeleteRequest, NotificationLevel
 from ..core.job_envelope import create_job_request, parse_job_result
-from ..core.pydantic_models import ManagedDeploymentRequest
+from ..core.pydantic_models import (
+    ManagedDeploymentRequest,
+    JobRequest,
+    JobResultEnvelope,
+    JobResultStatus,
+)
 from ..core.guest_config_generator import generate_guest_config
 from .host_deployment_service import host_deployment_service
 from .host_resources_service import host_resources_service
@@ -29,6 +34,18 @@ from .winrm_service import winrm_service
 from .inventory_service import inventory_service
 
 logger = logging.getLogger(__name__)
+
+# Job type constants for categorization
+LONG_RUNNING_JOB_TYPES = {
+    "delete_vm", "create_vm", "managed_deployment", "managed_deployment_v2", "initialize_vm"
+}
+
+SERIALIZED_JOB_TYPES = {
+    "delete_vm", "create_vm", "create_disk",
+    "create_nic", "update_vm", "update_disk",
+    "update_nic", "delete_disk", "delete_nic", "initialize_vm",
+    "managed_deployment", "managed_deployment_v2"
+}
 
 
 class _PowerShellStreamDecoder:
@@ -182,7 +199,7 @@ class JobService:
         """Return the remote execution category and timeout for a job type."""
 
         # Long-running jobs that create/modify VMs
-        if job_type in {"delete_vm", "create_vm", "managed_deployment", "managed_deployment_v2", "initialize_vm"}:
+        if job_type in LONG_RUNNING_JOB_TYPES:
             return (
                 RemoteTaskCategory.JOB,
                 float(settings.job_long_timeout_seconds),
@@ -457,13 +474,7 @@ class JobService:
 
         try:
             # Acquire host slot for jobs that need serialization
-            job_types_needing_serialization = {
-                "delete_vm", "create_vm", "create_disk",
-                "create_nic", "update_vm", "update_disk",
-                "update_nic", "delete_disk", "delete_nic", "initialize_vm",
-                "managed_deployment", "managed_deployment_v2"
-            }
-            if job.job_type in job_types_needing_serialization and host_key:
+            if job.job_type in SERIALIZED_JOB_TYPES and host_key:
                 await self._acquire_host_slot(host_key, job.job_id)
                 acquired_host = True
 
@@ -1739,9 +1750,9 @@ class JobService:
         self,
         job: Job,
         target_host: str,
-        job_request: Any,  # JobRequest from pydantic_models
+        job_request: JobRequest,
         operation_description: str,
-    ) -> Any:  # JobResultEnvelope from pydantic_models
+    ) -> JobResultEnvelope:
         """Execute a single operation using the new JobRequest/JobResult protocol.
         
         This is a helper method for executing individual operations (VM, Disk, NIC)
@@ -1805,7 +1816,7 @@ class JobService:
             raise RuntimeError(f"{operation_description} result envelope is None")
         
         # Check the result status
-        if envelope.status == "error":
+        if envelope.status == JobResultStatus.ERROR:
             error_msg = envelope.message or "Unknown error"
             error_code = envelope.code or "UNKNOWN"
             raise RuntimeError(f"{operation_description} failed ({error_code}): {error_msg}")
