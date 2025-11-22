@@ -262,10 +262,16 @@ class TestNoopTestProtocolIsolation:
         assert envelope.data["operation_validated"] is True
     
     def test_other_operations_still_use_stub(self, script_path, pwsh_available):
-        """Verify non-noop-test operations still use Phase 2 stub."""
+        """Verify non-implemented operations return appropriate errors.
+        
+        Phase 4 update: vm.create is now fully implemented, so this test
+        has been updated to reflect that all resource operations are implemented.
+        Unsupported operations should return error status.
+        """
+        # Test an unsupported operation
         request = create_job_request(
-            operation="vm.create",
-            resource_spec={"vm_name": "test", "gb_ram": 4, "cpu_cores": 2},
+            operation="unsupported.operation",
+            resource_spec={"test": "data"},
         )
         
         json_input = request.model_dump_json()
@@ -278,14 +284,15 @@ class TestNoopTestProtocolIsolation:
             timeout=10,
         )
         
+        # Should return exit code 0 (PowerShell script ran)
+        # but with error status in the envelope
         assert result.returncode == 0
         envelope, error = parse_job_result(result.stdout)
         
         assert envelope is not None
-        # Verify this IS the stub response
-        assert "stub_operation" in envelope.data
-        assert envelope.data["stub_operation"] == "vm.create"
-        assert "operation_validated" not in envelope.data
+        # Verify this returns an error (not a stub)
+        assert envelope.status == "error"
+        assert "unsupported" in envelope.message.lower() or "operation error" in envelope.message.lower()
 
 
 class TestNoopTestEnvelopeValidation:
