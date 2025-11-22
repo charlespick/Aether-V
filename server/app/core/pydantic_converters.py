@@ -19,7 +19,6 @@ from .pydantic_models import (
     NicSpec,
     GuestConfigSpec,
     ManagedDeploymentRequest,
-    JobRequest,
     JobResultEnvelope,
 )
 

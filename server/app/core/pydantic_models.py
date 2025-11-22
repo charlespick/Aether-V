@@ -9,7 +9,7 @@ Models defined here:
 - Job envelope: JobRequest, JobResult (enhanced)
 """
 from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from pydantic import BaseModel, Field, model_validator, ConfigDict
 from enum import Enum
 
 
