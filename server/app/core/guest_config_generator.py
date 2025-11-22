@@ -128,7 +128,7 @@ def generate_guest_config_from_dicts(
     vm_dict: Dict[str, Any],
     nic_dict: Optional[Dict[str, Any]] = None,
     disk_dict: Optional[Dict[str, Any]] = None,
-    guest_dict: Optional[Dict[str, Any]] = None,
+    guest_config_dict: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Generate guest config from dictionary inputs.
     
@@ -140,7 +140,7 @@ def generate_guest_config_from_dicts(
         vm_dict: VM spec as dictionary
         nic_dict: NIC spec as dictionary (optional)
         disk_dict: Disk spec as dictionary (optional)
-        guest_dict: Guest config spec as dictionary (optional)
+        guest_config_dict: Guest config spec as dictionary (optional)
         
     Returns:
         Guest configuration dictionary
@@ -160,8 +160,8 @@ def generate_guest_config_from_dicts(
         disk_spec = DiskSpec(**disk_dict)
     
     guest_config_spec = None
-    if guest_dict:
-        guest_config_spec = GuestConfigSpec(**guest_dict)
+    if guest_config_dict:
+        guest_config_spec = GuestConfigSpec(**guest_config_dict)
     
     # Generate and return guest config
     return generate_guest_config(vm_spec, nic_spec, disk_spec, guest_config_spec)

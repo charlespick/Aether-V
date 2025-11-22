@@ -399,7 +399,7 @@ class TestGeneratorFromDicts:
             "guest_la_pw": "SecurePass123!",
         }
         
-        config = generate_guest_config_from_dicts(vm_dict, guest_dict=guest_dict)
+        config = generate_guest_config_from_dicts(vm_dict, guest_config_dict=guest_dict)
         
         assert config["guest_la_uid"] == "Administrator"
         assert config["guest_la_pw"] == "SecurePass123!"
@@ -420,7 +420,7 @@ class TestGeneratorFromDicts:
             "guest_domain_joinou": "OU=Servers,DC=corp,DC=example,DC=com",
         }
         
-        config = generate_guest_config_from_dicts(vm_dict, guest_dict=guest_dict)
+        config = generate_guest_config_from_dicts(vm_dict, guest_config_dict=guest_dict)
         
         assert config["guest_domain_jointarget"] == "corp.example.com"
     
@@ -446,7 +446,7 @@ class TestGeneratorFromDicts:
         config = generate_guest_config_from_dicts(
             vm_dict,
             nic_dict=nic_dict,
-            guest_dict=guest_dict,
+            guest_config_dict=guest_dict,
         )
         
         assert config["guest_v4_ipaddr"] == "192.168.1.100"
@@ -464,7 +464,7 @@ class TestGeneratorFromDicts:
         }
         
         with pytest.raises(ValidationError) as exc_info:
-            generate_guest_config_from_dicts(vm_dict, guest_dict=guest_dict)
+            generate_guest_config_from_dicts(vm_dict, guest_config_dict=guest_dict)
         
         # Should fail on VM name length
         errors = exc_info.value.errors()
