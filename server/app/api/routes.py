@@ -35,6 +35,7 @@ from ..core.models import (
     NicCreateRequest,
     ResourceUpdateRequest,
     VMInitializationRequest,
+    NoopTestRequest,
     JobResult,
 )
 from ..core.auth import (
@@ -1528,6 +1529,48 @@ async def create_managed_deployment(
         job_id=job.job_id,
         status="queued",
         message=f"Managed deployment queued for host {target_host}",
+    )
+
+
+@router.post("/api/v1/noop-test", response_model=JobResult, tags=["Testing"])
+async def submit_noop_test(
+    request: NoopTestRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Execute a noop-test operation using the new protocol.
+    
+    Phase 3: This is the first endpoint to use the new JobRequest/JobResult
+    envelope protocol. It validates the round-trip communication between
+    server and host agent without performing any actual operations.
+    
+    This endpoint demonstrates that the new protocol works end-to-end before
+    converting any production operations.
+    """
+    
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Noop-test is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+    
+    # Ensure the target host is connected
+    _ensure_connected_host(request.target_host)
+    
+    # Submit the noop-test job
+    job = await job_service.submit_noop_test_job(
+        target_host=request.target_host,
+        resource_spec=request.resource_spec,
+        correlation_id=request.correlation_id,
+    )
+    
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Noop-test job queued for host {request.target_host}",
     )
 
 
