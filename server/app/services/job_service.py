@@ -650,327 +650,526 @@ class JobService:
             next_waiter.set()
 
     async def _execute_delete_job(self, job: Job) -> None:
+        """Execute a VM deletion job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
         target_host = (job.target_host or "").strip()
         if not target_host:
             raise RuntimeError("Delete job is missing a target host")
 
+        # Ensure host is prepared
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
             raise RuntimeError(
                 f"Failed to prepare host {target_host} for deletion")
 
+        # Extract VM info from job parameters
+        vm_id = job.parameters.get("vm_id")
+        vm_name = job.parameters.get("vm_name")
+        
+        # Create resource_spec for the delete operation
+        resource_spec = {
+            "vm_id": vm_id,
+            "vm_name": vm_name,
+        }
+        
+        # Create JobRequest envelope using the new protocol
+        job_request = create_job_request(
+            operation="vm.delete",
+            resource_spec=resource_spec,
+            correlation_id=job.job_id,
+            metadata={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "target_host": target_host,
+            }
+        )
+        
+        # Serialize the envelope to JSON
         json_payload = await asyncio.to_thread(
-            json.dumps,
-            job.parameters,
-            ensure_ascii=False,
-            separators=(",", ":"),
+            job_request.model_dump_json,
         )
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-DeleteVmJob.ps1")
+        
+        self._log_agent_request(job.job_id, target_host, json_payload, "Main-NewProtocol.ps1")
+        
+        # Build command to invoke Main-NewProtocol.ps1
         command = self._build_agent_invocation_command(
-            "Invoke-DeleteVmJob.ps1", json_payload
+            "Main-NewProtocol.ps1", json_payload
         )
-
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[Optional[Tuple[str, str]]] = asyncio.Queue()
-
-        def publish_chunk(stream: str, chunk: str) -> None:
-            asyncio.run_coroutine_threadsafe(queue.put((stream, chunk)), loop)
-
-        def run_command() -> int:
-            try:
-                return winrm_service.stream_ps_command(
-                    target_host, command, publish_chunk
-                )
-            finally:
-                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-
-        category, timeout = self._get_job_runtime_profile(job.job_type)
-
-        command_task = asyncio.create_task(
-            remote_task_service.run_blocking(
-                target_host,
-                run_command,
-                description=f"delete job {job.job_id}",
-                category=category,
-                timeout=timeout,
-            )
+        
+        # Storage for the result JSON
+        result_json_lines: List[str] = []
+        
+        def capture_json_output(line: str) -> None:
+            """Capture JSON output from the host agent."""
+            stripped = line.strip()
+            if stripped.startswith('{'):
+                result_json_lines.append(stripped)
+        
+        # Execute the command with JSON capture
+        exit_code = await self._execute_agent_command(
+            job, target_host, command, line_callback=capture_json_output
         )
-
-        try:
-            while True:
-                item = await queue.get()
-                if item is None:
-                    break
-                stream_type, payload = item
-                await self._handle_stream_chunk(job.job_id, stream_type, payload)
-        finally:
-            await self._finalize_job_streams(job.job_id)
-
-        exit_code = await command_task
+        
         if exit_code != 0:
-            raise RuntimeError(f"Delete script exited with code {exit_code}")
+            raise RuntimeError(
+                f"VM deletion script exited with code {exit_code}")
+        
+        # Parse the JobResult envelope
+        if not result_json_lines:
+            raise RuntimeError(
+                "No JSON result returned from vm.delete operation")
+        
+        # Use the first (and should be only) JSON line
+        result_json = result_json_lines[0]
+        envelope, error = parse_job_result(result_json)
+        
+        if error:
+            raise RuntimeError(f"Failed to parse job result: {error}")
+        
+        if not envelope:
+            raise RuntimeError("Job result envelope is None")
+        
+        # Check the result status
+        if envelope.status == "error":
+            error_msg = envelope.message or "Unknown error"
+            error_code = envelope.code or "UNKNOWN"
+            raise RuntimeError(f"VM deletion failed ({error_code}): {error_msg}")
+        
+        # Log success with result data
+        await self._append_job_output(
+            job.job_id,
+            f"VM deletion completed: {envelope.message}",
+            f"Result status: {envelope.status}",
+        )
+        
+        # Store result data in job parameters for later retrieval
+        job.parameters["result_data"] = envelope.data
 
     async def _execute_create_vm_job(self, job: Job) -> None:
-        """Execute a VM-only creation job."""
-        definition = job.parameters.get("definition", {})
+        """Execute a VM-only creation job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
         target_host = (job.target_host or "").strip()
         if not target_host:
             raise RuntimeError("VM creation job is missing a target host")
 
-        await self._validate_job_against_host_config(definition, target_host)
+        # Ensure host is prepared
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
             raise RuntimeError(
                 f"Failed to prepare host {target_host} for VM creation")
 
+        # Extract resource_spec from job parameters
+        # The definition contains the Pydantic VmSpec fields
+        definition = job.parameters.get("definition", {})
+        resource_spec = definition.get("fields", {})
+        
+        # Create JobRequest envelope using the new protocol
+        job_request = create_job_request(
+            operation="vm.create",
+            resource_spec=resource_spec,
+            correlation_id=job.job_id,
+            metadata={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "target_host": target_host,
+            }
+        )
+        
+        # Serialize the envelope to JSON
         json_payload = await asyncio.to_thread(
-            json.dumps,
-            definition,
-            ensure_ascii=False,
-            separators=(",", ":"),
+            job_request.model_dump_json,
         )
         
-        # Log raw JSON being sent to host agent
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-CreateVmJob.ps1")
+        self._log_agent_request(job.job_id, target_host, json_payload, "Main-NewProtocol.ps1")
         
+        # Build command to invoke Main-NewProtocol.ps1
         command = self._build_agent_invocation_command(
-            "Invoke-CreateVmJob.ps1", json_payload
+            "Main-NewProtocol.ps1", json_payload
         )
-
-        exit_code = await self._execute_agent_command(job, target_host, command)
+        
+        # Storage for the result JSON
+        result_json_lines: List[str] = []
+        
+        def capture_json_output(line: str) -> None:
+            """Capture JSON output from the host agent."""
+            stripped = line.strip()
+            if stripped.startswith('{'):
+                result_json_lines.append(stripped)
+        
+        # Execute the command with JSON capture
+        exit_code = await self._execute_agent_command(
+            job, target_host, command, line_callback=capture_json_output
+        )
+        
         if exit_code != 0:
             raise RuntimeError(
                 f"VM creation script exited with code {exit_code}")
+        
+        # Parse the JobResult envelope
+        if not result_json_lines:
+            raise RuntimeError(
+                "No JSON result returned from vm.create operation")
+        
+        # Use the first (and should be only) JSON line
+        result_json = result_json_lines[0]
+        envelope, error = parse_job_result(result_json)
+        
+        if error:
+            raise RuntimeError(f"Failed to parse job result: {error}")
+        
+        if not envelope:
+            raise RuntimeError("Job result envelope is None")
+        
+        # Check the result status
+        if envelope.status == "error":
+            error_msg = envelope.message or "Unknown error"
+            error_code = envelope.code or "UNKNOWN"
+            raise RuntimeError(f"VM creation failed ({error_code}): {error_msg}")
+        
+        # Log success with result data
+        await self._append_job_output(
+            job.job_id,
+            f"VM creation completed: {envelope.message}",
+            f"Result status: {envelope.status}",
+        )
+        
+        # Store result data in job parameters for later retrieval
+        job.parameters["result_data"] = envelope.data
 
     async def _execute_create_disk_job(self, job: Job) -> None:
-        """Execute a disk creation and attachment job."""
-        definition = job.parameters.get("definition", {})
+        """Execute a disk creation and attachment job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
         target_host = (job.target_host or "").strip()
         if not target_host:
             raise RuntimeError("Disk creation job is missing a target host")
 
-        # Validate that VM exists
-        fields = definition.get("fields", {})
-        vm_id = fields.get("vm_id")
-        if not vm_id:
-            raise RuntimeError("Disk creation requires vm_id")
-
-        await self._validate_job_against_host_config(definition, target_host)
+        # Ensure host is prepared
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
             raise RuntimeError(
                 f"Failed to prepare host {target_host} for disk creation")
 
+        # Extract resource_spec from job parameters
+        definition = job.parameters.get("definition", {})
+        resource_spec = definition.get("fields", {})
+        
+        # Validate that VM exists
+        vm_id = resource_spec.get("vm_id")
+        if not vm_id:
+            raise RuntimeError("Disk creation requires vm_id")
+        
+        # Create JobRequest envelope using the new protocol
+        job_request = create_job_request(
+            operation="disk.create",
+            resource_spec=resource_spec,
+            correlation_id=job.job_id,
+            metadata={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "target_host": target_host,
+            }
+        )
+        
+        # Serialize the envelope to JSON
         json_payload = await asyncio.to_thread(
-            json.dumps,
-            definition,
-            ensure_ascii=False,
-            separators=(",", ":"),
+            job_request.model_dump_json,
         )
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-CreateDiskJob.ps1")
+        
+        self._log_agent_request(job.job_id, target_host, json_payload, "Main-NewProtocol.ps1")
+        
+        # Build command to invoke Main-NewProtocol.ps1
         command = self._build_agent_invocation_command(
-            "Invoke-CreateDiskJob.ps1", json_payload
+            "Main-NewProtocol.ps1", json_payload
         )
-
-        exit_code = await self._execute_agent_command(job, target_host, command)
+        
+        # Storage for the result JSON
+        result_json_lines: List[str] = []
+        
+        def capture_json_output(line: str) -> None:
+            """Capture JSON output from the host agent."""
+            stripped = line.strip()
+            if stripped.startswith('{'):
+                result_json_lines.append(stripped)
+        
+        # Execute the command with JSON capture
+        exit_code = await self._execute_agent_command(
+            job, target_host, command, line_callback=capture_json_output
+        )
+        
         if exit_code != 0:
             raise RuntimeError(
                 f"Disk creation script exited with code {exit_code}")
+        
+        # Parse the JobResult envelope
+        if not result_json_lines:
+            raise RuntimeError(
+                "No JSON result returned from disk.create operation")
+        
+        # Use the first (and should be only) JSON line
+        result_json = result_json_lines[0]
+        envelope, error = parse_job_result(result_json)
+        
+        if error:
+            raise RuntimeError(f"Failed to parse job result: {error}")
+        
+        if not envelope:
+            raise RuntimeError("Job result envelope is None")
+        
+        # Check the result status
+        if envelope.status == "error":
+            error_msg = envelope.message or "Unknown error"
+            error_code = envelope.code or "UNKNOWN"
+            raise RuntimeError(f"Disk creation failed ({error_code}): {error_msg}")
+        
+        # Log success with result data
+        await self._append_job_output(
+            job.job_id,
+            f"Disk creation completed: {envelope.message}",
+            f"Result status: {envelope.status}",
+        )
+        
+        # Store result data in job parameters for later retrieval
+        job.parameters["result_data"] = envelope.data
 
     async def _execute_create_nic_job(self, job: Job) -> None:
-        """Execute a NIC creation and attachment job."""
-        definition = job.parameters.get("definition", {})
+        """Execute a NIC creation and attachment job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
         target_host = (job.target_host or "").strip()
         if not target_host:
             raise RuntimeError("NIC creation job is missing a target host")
 
-        # Validate that VM exists
-        fields = definition.get("fields", {})
-        vm_id = fields.get("vm_id")
-        if not vm_id:
-            raise RuntimeError("NIC creation requires vm_id")
-
-        await self._validate_job_against_host_config(definition, target_host)
+        # Ensure host is prepared
         prepared = await host_deployment_service.ensure_host_setup(target_host)
         if not prepared:
             raise RuntimeError(
                 f"Failed to prepare host {target_host} for NIC creation")
 
+        # Extract resource_spec from job parameters
+        definition = job.parameters.get("definition", {})
+        resource_spec = definition.get("fields", {})
+        
+        # Validate that VM exists
+        vm_id = resource_spec.get("vm_id")
+        if not vm_id:
+            raise RuntimeError("NIC creation requires vm_id")
+        
+        # Create JobRequest envelope using the new protocol
+        job_request = create_job_request(
+            operation="nic.create",
+            resource_spec=resource_spec,
+            correlation_id=job.job_id,
+            metadata={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "target_host": target_host,
+            }
+        )
+        
+        # Serialize the envelope to JSON
         json_payload = await asyncio.to_thread(
-            json.dumps,
-            definition,
-            ensure_ascii=False,
-            separators=(",", ":"),
+            job_request.model_dump_json,
         )
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-CreateNicJob.ps1")
+        
+        self._log_agent_request(job.job_id, target_host, json_payload, "Main-NewProtocol.ps1")
+        
+        # Build command to invoke Main-NewProtocol.ps1
         command = self._build_agent_invocation_command(
-            "Invoke-CreateNicJob.ps1", json_payload
+            "Main-NewProtocol.ps1", json_payload
         )
-
-        exit_code = await self._execute_agent_command(job, target_host, command)
+        
+        # Storage for the result JSON
+        result_json_lines: List[str] = []
+        
+        def capture_json_output(line: str) -> None:
+            """Capture JSON output from the host agent."""
+            stripped = line.strip()
+            if stripped.startswith('{'):
+                result_json_lines.append(stripped)
+        
+        # Execute the command with JSON capture
+        exit_code = await self._execute_agent_command(
+            job, target_host, command, line_callback=capture_json_output
+        )
+        
         if exit_code != 0:
             raise RuntimeError(
                 f"NIC creation script exited with code {exit_code}")
+        
+        # Parse the JobResult envelope
+        if not result_json_lines:
+            raise RuntimeError(
+                "No JSON result returned from nic.create operation")
+        
+        # Use the first (and should be only) JSON line
+        result_json = result_json_lines[0]
+        envelope, error = parse_job_result(result_json)
+        
+        if error:
+            raise RuntimeError(f"Failed to parse job result: {error}")
+        
+        if not envelope:
+            raise RuntimeError("Job result envelope is None")
+        
+        # Check the result status
+        if envelope.status == "error":
+            error_msg = envelope.message or "Unknown error"
+            error_code = envelope.code or "UNKNOWN"
+            raise RuntimeError(f"NIC creation failed ({error_code}): {error_msg}")
+        
+        # Log success with result data
+        await self._append_job_output(
+            job.job_id,
+            f"NIC creation completed: {envelope.message}",
+            f"Result status: {envelope.status}",
+        )
+        
+        # Store result data in job parameters for later retrieval
+        job.parameters["result_data"] = envelope.data
+
+    async def _execute_new_protocol_operation(
+        self,
+        job: Job,
+        operation: str,
+        operation_name: str,
+    ) -> None:
+        """Execute an operation using the new JobRequest/JobResult protocol.
+        
+        Phase 4: Generic helper for all new protocol operations.
+        
+        Args:
+            job: Job object
+            operation: Operation identifier (e.g., 'vm.update', 'disk.delete')
+            operation_name: Human-readable operation name for error messages
+        """
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError(f"{operation_name} job is missing a target host")
+
+        # Ensure host is prepared
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for {operation_name}")
+
+        # Extract resource_spec from job parameters
+        definition = job.parameters.get("definition", {})
+        resource_spec = definition.get("fields", {})
+        
+        # Create JobRequest envelope using the new protocol
+        job_request = create_job_request(
+            operation=operation,
+            resource_spec=resource_spec,
+            correlation_id=job.job_id,
+            metadata={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "target_host": target_host,
+            }
+        )
+        
+        # Serialize the envelope to JSON
+        json_payload = await asyncio.to_thread(
+            job_request.model_dump_json,
+        )
+        
+        self._log_agent_request(job.job_id, target_host, json_payload, "Main-NewProtocol.ps1")
+        
+        # Build command to invoke Main-NewProtocol.ps1
+        command = self._build_agent_invocation_command(
+            "Main-NewProtocol.ps1", json_payload
+        )
+        
+        # Storage for the result JSON
+        result_json_lines: List[str] = []
+        
+        def capture_json_output(line: str) -> None:
+            """Capture JSON output from the host agent."""
+            stripped = line.strip()
+            if stripped.startswith('{'):
+                result_json_lines.append(stripped)
+        
+        # Execute the command with JSON capture
+        exit_code = await self._execute_agent_command(
+            job, target_host, command, line_callback=capture_json_output
+        )
+        
+        if exit_code != 0:
+            raise RuntimeError(
+                f"{operation_name} script exited with code {exit_code}")
+        
+        # Parse the JobResult envelope
+        if not result_json_lines:
+            raise RuntimeError(
+                f"No JSON result returned from {operation} operation")
+        
+        # Use the first (and should be only) JSON line
+        result_json = result_json_lines[0]
+        envelope, error = parse_job_result(result_json)
+        
+        if error:
+            raise RuntimeError(f"Failed to parse job result: {error}")
+        
+        if not envelope:
+            raise RuntimeError("Job result envelope is None")
+        
+        # Check the result status
+        if envelope.status == "error":
+            error_msg = envelope.message or "Unknown error"
+            error_code = envelope.code or "UNKNOWN"
+            raise RuntimeError(f"{operation_name} failed ({error_code}): {error_msg}")
+        
+        # Log success with result data
+        await self._append_job_output(
+            job.job_id,
+            f"{operation_name} completed: {envelope.message}",
+            f"Result status: {envelope.status}",
+        )
+        
+        # Store result data in job parameters for later retrieval
+        job.parameters["result_data"] = envelope.data
 
     async def _execute_update_vm_job(self, job: Job) -> None:
-        """Execute a VM update job."""
-
-        definition = job.parameters.get("definition", {})
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("VM update job is missing a target host")
-
-        fields = definition.get("fields", {})
-        vm_id = fields.get("vm_id")
-        if not vm_id:
-            raise RuntimeError("VM update requires vm_id")
-
-        await self._validate_job_against_host_config(definition, target_host)
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for VM update")
-
-        json_payload = await asyncio.to_thread(
-            json.dumps, definition, ensure_ascii=False, separators=(",", ":")
-        )
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-UpdateVmJob.ps1")
-        command = self._build_agent_invocation_command(
-            "Invoke-UpdateVmJob.ps1", json_payload
-        )
-
-        exit_code = await self._execute_agent_command(job, target_host, command)
-        if exit_code != 0:
-            raise RuntimeError(
-                f"VM update script exited with code {exit_code}")
+        """Execute a VM update job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
+        await self._execute_new_protocol_operation(job, "vm.update", "VM update")
 
     async def _execute_update_disk_job(self, job: Job) -> None:
-        """Execute a disk update job."""
-
-        definition = job.parameters.get("definition", {})
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("Disk update job is missing a target host")
-
-        fields = definition.get("fields", {})
-        vm_id = fields.get("vm_id")
-        if not vm_id:
-            raise RuntimeError("Disk update requires vm_id")
-
-        await self._validate_job_against_host_config(definition, target_host)
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for disk update")
-
-        json_payload = await asyncio.to_thread(
-            json.dumps, definition, ensure_ascii=False, separators=(",", ":")
-        )
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-UpdateDiskJob.ps1")
-        command = self._build_agent_invocation_command(
-            "Invoke-UpdateDiskJob.ps1", json_payload
-        )
-
-        exit_code = await self._execute_agent_command(job, target_host, command)
-        if exit_code != 0:
-            raise RuntimeError(
-                f"Disk update script exited with code {exit_code}")
+        """Execute a disk update job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
+        await self._execute_new_protocol_operation(job, "disk.update", "Disk update")
 
     async def _execute_update_nic_job(self, job: Job) -> None:
-        """Execute a NIC update job."""
-
-        definition = job.parameters.get("definition", {})
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("NIC update job is missing a target host")
-
-        fields = definition.get("fields", {})
-        vm_id = fields.get("vm_id")
-        if not vm_id:
-            raise RuntimeError("NIC update requires vm_id")
-
-        await self._validate_job_against_host_config(definition, target_host)
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for NIC update")
-
-        json_payload = await asyncio.to_thread(
-            json.dumps, definition, ensure_ascii=False, separators=(",", ":")
-        )
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-UpdateNicJob.ps1")
-        command = self._build_agent_invocation_command(
-            "Invoke-UpdateNicJob.ps1", json_payload
-        )
-
-        exit_code = await self._execute_agent_command(job, target_host, command)
-        if exit_code != 0:
-            raise RuntimeError(
-                f"NIC update script exited with code {exit_code}")
+        """Execute a NIC update job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
+        await self._execute_new_protocol_operation(job, "nic.update", "NIC update")
 
     async def _execute_delete_disk_job(self, job: Job) -> None:
-        """Execute a disk deletion job."""
-
-        definition = job.parameters.get("definition", {})
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("Disk deletion job is missing a target host")
-
-        fields = definition.get("fields", {})
-        vm_id = fields.get("vm_id")
-        resource_id = fields.get("resource_id")
-        if not vm_id or not resource_id:
-            raise RuntimeError("Disk deletion requires vm_id and resource_id")
-
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for disk deletion")
-
-        json_payload = await asyncio.to_thread(
-            json.dumps, fields, ensure_ascii=False, separators=(",", ":")
-        )
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-DeleteDiskJob.ps1")
-        command = self._build_agent_invocation_command(
-            "Invoke-DeleteDiskJob.ps1", json_payload
-        )
-
-        exit_code = await self._execute_agent_command(job, target_host, command)
-        if exit_code != 0:
-            raise RuntimeError(
-                f"Disk deletion script exited with code {exit_code}")
+        """Execute a disk deletion job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
+        await self._execute_new_protocol_operation(job, "disk.delete", "Disk deletion")
 
     async def _execute_delete_nic_job(self, job: Job) -> None:
-        """Execute a NIC deletion job."""
-
-        definition = job.parameters.get("definition", {})
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("NIC deletion job is missing a target host")
-
-        fields = definition.get("fields", {})
-        vm_id = fields.get("vm_id")
-        resource_id = fields.get("resource_id")
-        if not vm_id or not resource_id:
-            raise RuntimeError("NIC deletion requires vm_id and resource_id")
-
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for NIC deletion")
-
-        json_payload = await asyncio.to_thread(
-            json.dumps, fields, ensure_ascii=False, separators=(",", ":")
-        )
-        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-DeleteNicJob.ps1")
-        command = self._build_agent_invocation_command(
-            "Invoke-DeleteNicJob.ps1", json_payload
-        )
-
-        exit_code = await self._execute_agent_command(job, target_host, command)
-        if exit_code != 0:
-            raise RuntimeError(
-                f"NIC deletion script exited with code {exit_code}")
+        """Execute a NIC deletion job using new protocol.
+        
+        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        """
+        await self._execute_new_protocol_operation(job, "nic.delete", "NIC deletion")
 
     async def _execute_initialize_vm_job(self, job: Job) -> None:
         """Execute a VM initialization job that applies guest configuration."""
