@@ -404,10 +404,7 @@ class TestNewProtocolStubEndToEnd:
         custom_corr_id = "custom-correlation-id-12345"
         
         vm_spec = VmSpec(vm_name="test-vm", gb_ram=4, cpu_cores=2)
-        request = create_job_request_from_vm_spec(
-            vm_spec,
-            correlation_id=custom_corr_id,
-        )
+        request = create_job_request_from_vm_spec(vm_spec, correlation_id=custom_corr_id)
         
         json_input = request.model_dump_json()
         
