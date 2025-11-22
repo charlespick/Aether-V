@@ -1616,7 +1616,7 @@ class JobService:
             correlation_id=f"{job.job_id}-vm",
         )
         
-        vm_result = await self._execute_new_protocol_operation(
+        vm_result = await self._execute_managed_deployment_protocol_operation(
             job, target_host, vm_job_request, "VM creation"
         )
         
@@ -1651,7 +1651,7 @@ class JobService:
                 correlation_id=f"{job.job_id}-disk",
             )
             
-            disk_result = await self._execute_new_protocol_operation(
+            disk_result = await self._execute_managed_deployment_protocol_operation(
                 job, target_host, disk_job_request, "Disk creation"
             )
             
@@ -1677,7 +1677,7 @@ class JobService:
                 correlation_id=f"{job.job_id}-nic",
             )
             
-            nic_result = await self._execute_new_protocol_operation(
+            nic_result = await self._execute_managed_deployment_protocol_operation(
                 job, target_host, nic_job_request, "NIC creation"
             )
             
@@ -1746,7 +1746,7 @@ class JobService:
             f"Managed deployment v2 complete. VM '{request.vm_spec.vm_name}' fully deployed on {target_host}.",
         )
 
-    async def _execute_new_protocol_operation(
+    async def _execute_managed_deployment_protocol_operation(
         self,
         job: Job,
         target_host: str,
@@ -1756,7 +1756,8 @@ class JobService:
         """Execute a single operation using the new JobRequest/JobResult protocol.
         
         This is a helper method for executing individual operations (VM, Disk, NIC)
-        during managed deployment v2.
+        during managed deployment v2. This is separate from the Phase 4 
+        _execute_new_protocol_operation method which has a different signature.
         
         Args:
             job: The parent job (for logging context)
