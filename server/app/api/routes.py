@@ -38,6 +38,7 @@ from ..core.models import (
     NoopTestRequest,
     JobResult,
 )
+from ..core.pydantic_models import ManagedDeploymentRequest
 from ..core.auth import (
     Permission,
     authenticate_with_token,
@@ -1529,6 +1530,76 @@ async def create_managed_deployment(
         job_id=job.job_id,
         status="queued",
         message=f"Managed deployment queued for host {target_host}",
+    )
+
+
+@router.post("/api/v2/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
+async def create_managed_deployment_v2(
+    request: ManagedDeploymentRequest,
+    user: dict = Depends(require_permission(Permission.WRITER))
+):
+    """Create a complete VM deployment using the new Pydantic-based protocol.
+    
+    Phase 6: This endpoint replaces schema-driven validation with Pydantic models.
+    It orchestrates VM creation, disk attachment, NIC attachment, and guest 
+    configuration using the new JobRequest/JobResult protocol.
+    
+    The workflow:
+    1. Validate input with Pydantic (ManagedDeploymentRequest)
+    2. Create VM via new protocol (vm.create operation)
+    3. Create Disk via new protocol (disk.create operation)
+    4. Create NIC via new protocol (nic.create operation)
+    5. Generate guest config dict using generate_guest_config()
+    6. Send guest config through existing KVP mechanism
+    
+    This endpoint bypasses schemas entirely. The request is validated by Pydantic
+    and the component operations are executed via the new protocol.
+    """
+    
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. VM provisioning is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+    
+    # Ensure the target host is connected
+    target_host = request.target_host.strip()
+    if not target_host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target host is required",
+        )
+    
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+    
+    # Check if VM already exists
+    vm_name = request.vm_spec.vm_name
+    existing_vm = inventory_service.get_vm(target_host, vm_name)
+    if existing_vm:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm_name} already exists on host {target_host}",
+        )
+    
+    # Submit the managed deployment job using new protocol
+    job = await job_service.submit_managed_deployment_v2_job(
+        request=request,
+    )
+    
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Managed deployment (v2) queued for host {target_host}",
     )
 
 
