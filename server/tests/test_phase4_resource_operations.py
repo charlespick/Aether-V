@@ -46,31 +46,6 @@ from app.core.pydantic_models import (
 class TestVmOperations:
     """Test VM create/update/delete operations."""
     
-    @pytest.fixture
-    def script_path(self):
-        """Get path to Main-NewProtocol.ps1."""
-        repo_root = Path(__file__).parent.parent.parent
-        script_path = repo_root / "Powershell" / "Main-NewProtocol.ps1"
-        
-        if not script_path.exists():
-            pytest.skip(f"Script not found at {script_path}")
-        
-        return script_path
-    
-    @pytest.fixture
-    def pwsh_available(self):
-        """Check if pwsh is available."""
-        try:
-            result = subprocess.run(
-                ["pwsh", "-Version"],
-                capture_output=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                pytest.skip("PowerShell (pwsh) not available")
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pytest.skip("PowerShell (pwsh) not available")
-    
     def _execute_operation(
         self,
         script_path: Path,
@@ -146,31 +121,6 @@ class TestVmOperations:
 class TestDiskOperations:
     """Test Disk create/update/delete operations."""
     
-    @pytest.fixture
-    def script_path(self):
-        """Get path to Main-NewProtocol.ps1."""
-        repo_root = Path(__file__).parent.parent.parent
-        script_path = repo_root / "Powershell" / "Main-NewProtocol.ps1"
-        
-        if not script_path.exists():
-            pytest.skip(f"Script not found at {script_path}")
-        
-        return script_path
-    
-    @pytest.fixture
-    def pwsh_available(self):
-        """Check if pwsh is available."""
-        try:
-            result = subprocess.run(
-                ["pwsh", "-Version"],
-                capture_output=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                pytest.skip("PowerShell (pwsh) not available")
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pytest.skip("PowerShell (pwsh) not available")
-    
     def test_disk_create_envelope_structure(self):
         """Test that disk.create creates proper envelope structure."""
         disk_spec = DiskSpec(
@@ -226,31 +176,6 @@ class TestDiskOperations:
 
 class TestNicOperations:
     """Test NIC create/update/delete operations."""
-    
-    @pytest.fixture
-    def script_path(self):
-        """Get path to Main-NewProtocol.ps1."""
-        repo_root = Path(__file__).parent.parent.parent
-        script_path = repo_root / "Powershell" / "Main-NewProtocol.ps1"
-        
-        if not script_path.exists():
-            pytest.skip(f"Script not found at {script_path}")
-        
-        return script_path
-    
-    @pytest.fixture
-    def pwsh_available(self):
-        """Check if pwsh is available."""
-        try:
-            result = subprocess.run(
-                ["pwsh", "-Version"],
-                capture_output=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                pytest.skip("PowerShell (pwsh) not available")
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pytest.skip("PowerShell (pwsh) not available")
     
     def test_nic_create_envelope_structure(self):
         """Test that nic.create creates proper envelope structure."""

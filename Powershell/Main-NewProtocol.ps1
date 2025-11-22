@@ -338,14 +338,15 @@ end {
                 -Logs $logs
         }
         #
-        # vm.update operation
+        # vm.update operation (intentional stub for Phase 4)
         #
         elseif ($operation -eq 'vm.update') {
             $logs += 'Executing vm.update operation'
             $logs += "Correlation ID: $correlationId"
             
-            # For Phase 4, vm.update is a stub that returns success
+            # Phase 4: vm.update is intentionally a stub
             # Full implementation would update VM properties like RAM, CPU, etc.
+            # This will be implemented in a future phase when update semantics are fully defined
             $vmId = $resourceSpec['vm_id']
             
             $logs += "VM update operation for VM ID: $vmId"
@@ -574,7 +575,9 @@ end {
             $logs += 'Executing disk.update operation'
             $logs += "Correlation ID: $correlationId"
             
-            # For Phase 4, disk.update is a stub
+            # Phase 4: disk.update is intentionally a stub
+            # Full implementation would resize disks or modify disk properties
+            # This will be implemented in a future phase when update semantics are fully defined
             $vmId = $resourceSpec['vm_id']
             $resourceId = $resourceSpec['resource_id']
             
@@ -744,7 +747,9 @@ end {
             $logs += 'Executing nic.update operation'
             $logs += "Correlation ID: $correlationId"
             
-            # For Phase 4, nic.update is a stub
+            # Phase 4: nic.update is intentionally a stub
+            # Full implementation would change NIC network or VLAN settings
+            # This will be implemented in a future phase when update semantics are fully defined
             $vmId = $resourceSpec['vm_id']
             $resourceId = $resourceSpec['resource_id']
             
