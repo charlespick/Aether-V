@@ -196,6 +196,27 @@ class VMInitializationRequest(BaseModel):
     )
 
 
+class NoopTestRequest(BaseModel):
+    """Request to execute a noop-test job using the new protocol.
+    
+    Phase 3: This is the first operation to use the new JobRequest envelope.
+    It validates the round-trip communication without performing actual operations.
+    """
+    
+    target_host: str = Field(
+        ...,
+        description="Hostname of the connected Hyper-V host that will execute the test",
+    )
+    resource_spec: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Test data to echo back through the new protocol",
+    )
+    correlation_id: Optional[str] = Field(
+        None,
+        description="Optional correlation ID for tracking the request",
+    )
+
+
 class JobResult(BaseModel):
     """Result of a job submission that returns immediately."""
     job_id: str

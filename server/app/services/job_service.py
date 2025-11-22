@@ -17,6 +17,7 @@ from xml.etree import ElementTree
 from ..core.config import settings
 from ..core.job_schema import redact_job_parameters
 from ..core.models import Job, JobStatus, VMDeleteRequest, NotificationLevel
+from ..core.job_envelope import create_job_request, parse_job_result
 from .host_deployment_service import host_deployment_service
 from .host_resources_service import host_resources_service
 from .notification_service import notification_service
@@ -326,6 +327,46 @@ class JobService:
         )
         return self._prepare_job_response(job)
 
+    async def submit_noop_test_job(
+        self,
+        target_host: str,
+        resource_spec: Dict[str, Any],
+        correlation_id: Optional[str] = None,
+    ) -> Job:
+        """Submit a noop-test job using the new protocol.
+        
+        Phase 3: This is the first job type to use the new JobRequest envelope.
+        It validates the round-trip communication without performing actual operations.
+        """
+        if not self._started or self._queue is None:
+            raise RuntimeError("Job service is not running")
+        
+        if not target_host:
+            raise RuntimeError("Noop-test job requires a target host")
+        
+        job_id = str(uuid.uuid4())
+        job = Job(
+            job_id=job_id,
+            job_type="noop_test",
+            status=JobStatus.PENDING,
+            created_at=datetime.utcnow(),
+            target_host=target_host,
+            parameters={
+                "resource_spec": resource_spec,
+                "correlation_id": correlation_id or job_id,
+            },
+        )
+        
+        async with self._lock:
+            self.jobs[job_id] = job
+        
+        await self._sync_job_notification(job)
+        await self._broadcast_job_status(job)
+        
+        await self._queue.put(job_id)
+        logger.info("Queued noop-test job %s for host %s", job_id, target_host)
+        return self._prepare_job_response(job)
+
     async def get_job(self, job_id: str) -> Optional[Job]:
         """Return a previously submitted job."""
 
@@ -407,6 +448,8 @@ class JobService:
                     await self._execute_managed_deployment_job(job)
                 elif job.job_type == "initialize_vm":
                     await self._execute_initialize_vm_job(job)
+                elif job.job_type == "noop_test":
+                    await self._execute_noop_test_job(job)
                 else:
                     raise NotImplementedError(
                         f"Job type '{job.job_type}' is not supported"
@@ -960,6 +1003,103 @@ class JobService:
         if exit_code != 0:
             raise RuntimeError(
                 f"VM initialization script exited with code {exit_code}")
+
+    async def _execute_noop_test_job(self, job: Job) -> None:
+        """Execute a noop-test job using the new protocol.
+        
+        Phase 3: This is the first operation to use the new JobRequest/JobResult
+        envelope protocol. It validates the round-trip communication between
+        server and host agent without performing any actual operations.
+        """
+        target_host = (job.target_host or "").strip()
+        if not target_host:
+            raise RuntimeError("Noop-test job is missing a target host")
+        
+        # Ensure host is prepared
+        prepared = await host_deployment_service.ensure_host_setup(target_host)
+        if not prepared:
+            raise RuntimeError(
+                f"Failed to prepare host {target_host} for noop-test")
+        
+        # Extract resource_spec from job parameters
+        # For noop-test, resource_spec should be in parameters
+        resource_spec = job.parameters.get("resource_spec", {})
+        correlation_id = job.parameters.get("correlation_id") or job.job_id
+        
+        # Create JobRequest envelope using the new protocol
+        job_request = create_job_request(
+            operation="noop-test",
+            resource_spec=resource_spec,
+            correlation_id=correlation_id,
+            metadata={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "target_host": target_host,
+            }
+        )
+        
+        # Serialize the envelope to JSON
+        json_payload = await asyncio.to_thread(
+            job_request.model_dump_json,
+        )
+        
+        self._log_agent_request(job.job_id, target_host, json_payload, "Main-NewProtocol.ps1")
+        
+        # Build command to invoke Main-NewProtocol.ps1
+        command = self._build_agent_invocation_command(
+            "Main-NewProtocol.ps1", json_payload
+        )
+        
+        # Storage for the result JSON
+        result_json_lines: List[str] = []
+        
+        def capture_json_output(line: str) -> None:
+            """Capture JSON output from the host agent."""
+            stripped = line.strip()
+            if stripped.startswith('{'):
+                result_json_lines.append(stripped)
+        
+        # Execute the command with JSON capture
+        exit_code = await self._execute_agent_command(
+            job, target_host, command, line_callback=capture_json_output
+        )
+        
+        if exit_code != 0:
+            raise RuntimeError(
+                f"Noop-test script exited with code {exit_code}")
+        
+        # Parse the JobResult envelope
+        if not result_json_lines:
+            raise RuntimeError(
+                "No JSON result returned from noop-test operation")
+        
+        # Use the first (and should be only) JSON line
+        result_json = result_json_lines[0]
+        envelope, error = parse_job_result(result_json)
+        
+        if error:
+            raise RuntimeError(f"Failed to parse job result: {error}")
+        
+        if not envelope:
+            raise RuntimeError("Job result envelope is None")
+        
+        # Check the result status
+        if envelope.status == "error":
+            error_msg = envelope.message or "Unknown error"
+            error_code = envelope.code or "UNKNOWN"
+            raise RuntimeError(f"Noop-test failed ({error_code}): {error_msg}")
+        
+        # Log success with result data
+        await self._append_job_output(
+            job.job_id,
+            f"Noop-test completed: {envelope.message}",
+            f"Result status: {envelope.status}",
+        )
+        
+        # Store result data in job parameters for later retrieval
+        job.parameters["result_data"] = envelope.data
+        job.parameters["result_status"] = envelope.status
+        await self._update_job(job.job_id, parameters=job.parameters)
 
     async def _execute_managed_deployment_job(self, job: Job) -> None:
         """Execute a managed deployment via component sub-jobs instead of direct scripts."""

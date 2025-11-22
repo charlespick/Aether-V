@@ -1,13 +1,13 @@
 # Main-NewProtocol.ps1
-# Phase 2: New protocol stub entry point
+# Phase 3: New protocol entry point with noop-test implementation
 #
 # This script accepts a JSON job envelope via STDIN and returns a JSON job result.
-# It is a placeholder implementation that echoes back a success result without
-# performing any actual operations.
+# Phase 3 implements the "noop-test" operation as the first real operation.
+# All other operations remain as stubs that echo back success.
 #
 # Expected input envelope format:
 # {
-#   "operation": "vm.create",
+#   "operation": "vm.create" | "noop-test",
 #   "resource_spec": { ... },
 #   "correlation_id": "uuid",
 #   "metadata": { ... }
@@ -16,7 +16,7 @@
 # Output result format:
 # {
 #   "status": "success",
-#   "message": "Operation completed (stub)",
+#   "message": "Operation completed",
 #   "data": { ... },
 #   "correlation_id": "uuid",
 #   "logs": []
@@ -150,29 +150,75 @@ end {
         $operation = $envelope['operation']
         $resourceSpec = $envelope['resource_spec']
         $correlationId = $envelope['correlation_id']
+        
+        $logs = @()
 
-        # Phase 2 stub: Just echo back success with the operation info
-        $stubData = @{
-            stub_operation   = $operation
-            stub_received    = $true
-            resource_spec_keys = @($resourceSpec.Keys)
+        # Phase 3: Implement noop-test operation
+        if ($operation -eq 'noop-test') {
+            # Noop-test: Validate JSON parsing and envelope structure
+            $logs += 'Executing noop-test operation'
+            $logs += "Correlation ID: $correlationId"
+            $logs += "Resource spec validated: $($resourceSpec.Keys.Count) fields"
+            
+            # Validate STDIN parsing worked correctly
+            if ($null -eq $resourceSpec) {
+                throw 'Resource spec is null - STDIN parsing failed'
+            }
+            
+            # Validate JSON correctness
+            if (-not ($resourceSpec -is [hashtable])) {
+                throw 'Resource spec is not a hashtable - JSON parsing failed'
+            }
+            
+            # Echo back some of the resource spec to verify round-trip
+            $resultData = @{
+                operation_validated = $true
+                envelope_parsed     = $true
+                json_valid          = $true
+                correlation_id      = $correlationId
+            }
+            
+            # Include any test fields from the resource spec
+            if ($resourceSpec.ContainsKey('test_field')) {
+                $resultData['test_field_echo'] = $resourceSpec['test_field']
+            }
+            if ($resourceSpec.ContainsKey('test_number')) {
+                $resultData['test_number_echo'] = $resourceSpec['test_number']
+            }
+            
+            $logs += 'Noop-test completed successfully'
+            
+            Write-JobResult `
+                -Status 'success' `
+                -Message 'Noop-test operation completed successfully' `
+                -Data $resultData `
+                -CorrelationId $correlationId `
+                -Logs $logs
         }
+        else {
+            # All other operations remain as Phase 2 stubs
+            $stubData = @{
+                stub_operation   = $operation
+                stub_received    = $true
+                resource_spec_keys = @($resourceSpec.Keys)
+            }
 
-        # If it's a creation operation, add a fake ID
-        if ($operation -match '\.(create|clone)$') {
-            $stubData['created_id'] = [guid]::NewGuid().ToString()
+            # If it's a creation operation, add a fake ID
+            if ($operation -match '\.(create|clone)$') {
+                $stubData['created_id'] = [guid]::NewGuid().ToString()
+            }
+
+            # Return success result
+            Write-JobResult `
+                -Status 'success' `
+                -Message "New protocol stub: $operation operation received and acknowledged" `
+                -Data $stubData `
+                -CorrelationId $correlationId `
+                -Logs @(
+                    "Received operation: $operation",
+                    "Resource spec contains $($resourceSpec.Keys.Count) fields"
+                )
         }
-
-        # Return success result
-        Write-JobResult `
-            -Status 'success' `
-            -Message "New protocol stub: $operation operation received and acknowledged" `
-            -Data $stubData `
-            -CorrelationId $correlationId `
-            -Logs @(
-                "Received operation: $operation",
-                "Resource spec contains $($resourceSpec.Keys.Count) fields"
-            )
     }
     catch {
         # Return error result
