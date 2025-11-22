@@ -622,6 +622,7 @@ class JobService:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-DeleteVmJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-DeleteVmJob.ps1", json_payload
         )
@@ -685,6 +686,10 @@ class JobService:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        
+        # Log raw JSON being sent to host agent
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-CreateVmJob.ps1")
+        
         command = self._build_agent_invocation_command(
             "Invoke-CreateVmJob.ps1", json_payload
         )
@@ -719,6 +724,7 @@ class JobService:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-CreateDiskJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-CreateDiskJob.ps1", json_payload
         )
@@ -753,6 +759,7 @@ class JobService:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-CreateNicJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-CreateNicJob.ps1", json_payload
         )
@@ -784,6 +791,7 @@ class JobService:
         json_payload = await asyncio.to_thread(
             json.dumps, definition, ensure_ascii=False, separators=(",", ":")
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-UpdateVmJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-UpdateVmJob.ps1", json_payload
         )
@@ -815,6 +823,7 @@ class JobService:
         json_payload = await asyncio.to_thread(
             json.dumps, definition, ensure_ascii=False, separators=(",", ":")
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-UpdateDiskJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-UpdateDiskJob.ps1", json_payload
         )
@@ -846,6 +855,7 @@ class JobService:
         json_payload = await asyncio.to_thread(
             json.dumps, definition, ensure_ascii=False, separators=(",", ":")
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-UpdateNicJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-UpdateNicJob.ps1", json_payload
         )
@@ -877,6 +887,7 @@ class JobService:
         json_payload = await asyncio.to_thread(
             json.dumps, fields, ensure_ascii=False, separators=(",", ":")
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-DeleteDiskJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-DeleteDiskJob.ps1", json_payload
         )
@@ -908,6 +919,7 @@ class JobService:
         json_payload = await asyncio.to_thread(
             json.dumps, fields, ensure_ascii=False, separators=(",", ":")
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-DeleteNicJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-DeleteNicJob.ps1", json_payload
         )
@@ -939,6 +951,7 @@ class JobService:
         json_payload = await asyncio.to_thread(
             json.dumps, fields, ensure_ascii=False, separators=(",", ":")
         )
+        self._log_agent_request(job.job_id, target_host, json_payload, "Invoke-InitializeVmJob.ps1")
         command = self._build_agent_invocation_command(
             "Invoke-InitializeVmJob.ps1", json_payload
         )
@@ -1323,6 +1336,14 @@ class JobService:
 
         formatted_lines: List[str] = []
         for line in lines:
+            # Log raw JSON received from host agent (detect JSON by looking for leading '{')
+            if stream.lower() == "stdout" and line.strip().startswith('{'):
+                logger.debug(
+                    "Received JSON from host agent for job %s: %s",
+                    job_id,
+                    line
+                )
+            
             if stream.lower() == "stdout" and line_callback:
                 try:
                     line_callback(line)
@@ -1629,6 +1650,20 @@ class JobService:
         if job.job_type == "initialize_vm":
             return "Initialize VM"
         return job.job_type.replace("_", " ").title()
+    
+    def _log_agent_request(self, job_id: str, target_host: str, payload: str, script_name: str) -> None:
+        """Log raw JSON being sent to host agent.
+        
+        This logging is added as part of Phase 0 preparation for the schema-to-Pydantic refactor.
+        It provides visibility into server↔agent communication for debugging and validation.
+        """
+        logger.debug(
+            "Sending JSON to host agent - job=%s host=%s script=%s payload=%s",
+            job_id,
+            target_host,
+            script_name,
+            payload
+        )
 
     def _build_agent_invocation_command(self, script_name: str, payload: str) -> str:
         payload_bytes = payload.encode("utf-8")
