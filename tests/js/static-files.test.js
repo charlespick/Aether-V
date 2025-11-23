@@ -10,6 +10,13 @@ function readFile(relativePath) {
   return fs.readFileSync(fullPath, 'utf8');
 }
 
+// Helper function to extract class definitions from overlay.js
+function extractClass(content, className) {
+  const pattern = new RegExp(`class ${className} extends BaseOverlay \\{[\\s\\S]*?(?=\\nclass [A-Z]|\\n\\/\\/ [A-Z]|$)`);
+  const match = content.match(pattern);
+  return match ? match[0] : '';
+}
+
 test('main.js should define provisioning availability helper', () => {
   const content = readFile('main.js');
   assert.match(
@@ -39,5 +46,71 @@ test('views.js should include overview view markup', () => {
     content,
     /<h1 class=\"page-title\">Aether Overview<\/h1>/,
     'expected overview page title markup in views.js'
+  );
+});
+
+test('overlay.js disk and NIC overlays should not reference schema API', () => {
+  const content = readFile('overlay.js');
+  
+  const diskCreateClass = extractClass(content, 'DiskCreateOverlay');
+  const nicCreateClass = extractClass(content, 'NicCreateOverlay');
+  
+  // Ensure schema API endpoints are not referenced
+  assert.doesNotMatch(
+    diskCreateClass,
+    /\/api\/v1\/schema\/disk-create/,
+    'DiskCreateOverlay should not reference /api/v1/schema/disk-create'
+  );
+  
+  assert.doesNotMatch(
+    nicCreateClass,
+    /\/api\/v1\/schema\/nic-create/,
+    'NicCreateOverlay should not reference /api/v1/schema/nic-create'
+  );
+  
+  assert.doesNotMatch(
+    diskCreateClass,
+    /fetchSchema/,
+    'DiskCreateOverlay should not have fetchSchema method'
+  );
+  
+  assert.doesNotMatch(
+    nicCreateClass,
+    /fetchSchema/,
+    'NicCreateOverlay should not have fetchSchema method'
+  );
+});
+
+test('overlay.js disk and NIC overlays should use Pydantic-based forms', () => {
+  const content = readFile('overlay.js');
+  
+  const diskCreateClass = extractClass(content, 'DiskCreateOverlay');
+  const nicCreateClass = extractClass(content, 'NicCreateOverlay');
+  
+  // Verify DiskCreateOverlay renders hardcoded form
+  assert.match(
+    diskCreateClass,
+    /disk-size-gb/,
+    'DiskCreateOverlay should render hardcoded disk-size-gb field'
+  );
+  
+  // Verify NicCreateOverlay renders hardcoded form
+  assert.match(
+    nicCreateClass,
+    /name="network"/,
+    'NicCreateOverlay should render hardcoded network field'
+  );
+  
+  // Verify forms don't send schema_version
+  assert.doesNotMatch(
+    diskCreateClass,
+    /schema_version/,
+    'DiskCreateOverlay should not send schema_version in API request'
+  );
+  
+  assert.doesNotMatch(
+    nicCreateClass,
+    /schema_version/,
+    'NicCreateOverlay should not send schema_version in API request'
   );
 });
