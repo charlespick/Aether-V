@@ -616,7 +616,6 @@ async def root(request: Request):
                         "websocket_refresh_time": settings.websocket_refresh_time * 1000,
                         # Convert to milliseconds
                         "websocket_ping_interval": settings.websocket_ping_interval * 1000,
-                        "job_schema": None,  # Frontend composes schema from component schemas
                         "agent_deployment": host_deployment_service.get_startup_summary(),
                         "build_metadata": build_metadata,
                         "build_metadata_payload": _build_metadata_payload(),
