@@ -454,8 +454,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_only_one_provisioning_job_runs_per_host(self):
         await self.job_service.start()
 
-        # Test with managed_deployment_v2 job type (current implementation)
-        original_execute = self.job_service._execute_managed_deployment_v2_job
+        # Test with managed_deployment job type (current implementation)
+        original_execute = self.job_service._execute_managed_deployment_job
 
         first_job_started = asyncio.Event()
         second_job_started = asyncio.Event()
@@ -471,14 +471,14 @@ class JobServiceTests(IsolatedAsyncioTestCase):
                 second_job_started.set()
 
         # type: ignore[assignment]
-        self.job_service._execute_managed_deployment_v2_job = fake_execute
+        self.job_service._execute_managed_deployment_job = fake_execute
 
         request1 = ManagedDeploymentRequest(
             target_host="hyperv01",
             vm_spec=VmSpec(vm_name="vm-a", gb_ram=4, cpu_cores=2),
         )
 
-        job1 = await self.job_service.submit_managed_deployment_v2_job(
+        job1 = await self.job_service.submit_managed_deployment_job(
             request1
         )
 
@@ -487,7 +487,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             vm_spec=VmSpec(vm_name="vm-b", gb_ram=4, cpu_cores=2),
         )
 
-        job2 = await self.job_service.submit_managed_deployment_v2_job(
+        job2 = await self.job_service.submit_managed_deployment_job(
             request2
         )
 
@@ -503,7 +503,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             await asyncio.wait_for(second_job_started.wait(), timeout=1)
             self.assertEqual(start_order, [job1.job_id, job2.job_id])
         finally:
-            self.job_service._execute_managed_deployment_v2_job = (
+            self.job_service._execute_managed_deployment_job = (
                 original_execute
             )
             await self.job_service.stop()
