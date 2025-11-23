@@ -103,7 +103,7 @@ Changes made:
 - `/server/tests/test_managed_deployment.py` - Tests for legacy v1 managed deployment
 
 **Kept relevant tests:**
-- `test_phase1_pydantic_models.py` - Pydantic model validation tests
+- `test_pydantic_models.py` - Pydantic model validation tests (formerly test_phase1, schema converter tests removed)
 - `test_phase2_new_protocol.py` - JobRequest/JobResult protocol tests
 - `test_phase3_noop_test.py` - Noop test validation
 - `test_phase4_resource_operations.py` - Resource CRUD operations
