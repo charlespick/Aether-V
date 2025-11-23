@@ -2042,36 +2042,81 @@ class DiskCreateOverlay extends BaseOverlay {
         }
 
         try {
-            this.schema = await this.fetchSchema();
             this.renderForm();
         } catch (error) {
-            console.error('Failed to load disk schema:', error);
+            console.error('Failed to load disk creation form:', error);
             this.rootEl.innerHTML = `
                 <div class="form-error">Unable to load disk creation form. Please try again later.</div>
             `;
         }
     }
 
-    async fetchSchema() {
-        const response = await fetch('/api/v1/schema/disk-create', { credentials: 'same-origin' });
-        if (!response.ok) {
-            throw new Error(`Schema request failed: ${response.status}`);
-        }
-        return await response.json();
-    }
-
     renderForm() {
-        if (!this.schema) return;
-
-        const fieldsHtml = this.schema.fields
-            .filter(field => field.id !== 'vm_id' && field.id !== 'image_name')  // Exclude vm_id and image_name when adding disk to existing VM
-            .map(field => this.renderField(field))
-            .join('');
-
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
         this.rootEl.innerHTML = `
             <form id="disk-create-form" class="schema-form-body">
                 <div id="disk-create-messages" class="form-messages" role="alert"></div>
-                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="disk-size-gb" class="field-label">Disk Size (GB)</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="number" id="disk-size-gb" name="disk_size_gb" required 
+                                   min="1" max="65536" value="100" step="1" inputmode="numeric" />
+                        </div>
+                        <p class="field-description">Size of the virtual disk in gigabytes</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="disk-type" class="field-label">Disk Type</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <select id="disk-type" name="disk_type" required>
+                                <option value="Dynamic">Dynamic</option>
+                                <option value="Fixed">Fixed</option>
+                            </select>
+                        </div>
+                        <p class="field-description">Type of virtual hard disk (Dynamic or Fixed)</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="controller-type" class="field-label">Controller Type</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <select id="controller-type" name="controller_type" required>
+                                <option value="SCSI">SCSI</option>
+                                <option value="IDE">IDE</option>
+                            </select>
+                        </div>
+                        <p class="field-description">Type of controller to attach the disk to</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="storage-class" class="field-label">Storage Class</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="storage-class" name="storage_class" 
+                                   placeholder="e.g., fast-ssd" />
+                        </div>
+                        <p class="field-description">Name of the storage class where the disk will be stored (optional)</p>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="disk-create-cancel">Cancel</button>
                     <button type="submit" class="btn" id="disk-create-submit">Create Disk</button>
@@ -2087,79 +2132,20 @@ class DiskCreateOverlay extends BaseOverlay {
         this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
     }
 
-    renderField(field) {
-        const fieldId = `schema-${field.id}`;
-        const requiredPill = field.required ? '<span class="field-required-pill">Required</span>' : '';
-        const labelText = this.escapeHtml(field.label || field.id);
-        const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
-        const inputControl = this.renderInputControl(field, fieldId);
-
-        return `
-            <div class="schema-field" data-field-id="${field.id}">
-                <div class="field-header">
-                    <div class="field-title">
-                        <label for="${fieldId}" class="field-label">${labelText}</label>
-                        ${requiredPill}
-                    </div>
-                </div>
-                <div class="field-control">${inputControl}</div>
-                ${description}
-            </div>
-        `;
-    }
-
-    renderInputControl(field, fieldId) {
-        const type = (field.type || 'string').toLowerCase();
-        const defaultValue = field.default ?? '';
-        const validations = field.validations || {};
-        const requiredAttr = field.required ? 'required' : '';
-        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
-
-        if (type === 'boolean') {
-            const checked = defaultValue === true ? 'checked' : '';
-            return `
-                <label class="checkbox-field">
-                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
-                    <span>Enable</span>
-                </label>
-            `;
-        }
-
-        if (type === 'integer') {
-            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
-            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
-            const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-        }
-
-        if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
-        }
-
-        const inputType = type === 'secret' ? 'password' : 'text';
-        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
-        const pattern = patternValue ? `pattern="${patternValue}"` : '';
-        const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-    }
-
     async handleSubmit(event) {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
         const values = { vm_id: this.vmId };
 
-        for (const [key, value] of formData.entries()) {
-            const field = this.schema.fields.find(f => f.id === key);
-            if (!field) continue;
-
-            if (field.type === 'integer') {
-                values[key] = parseInt(value, 10);
-            } else if (field.type === 'boolean') {
-                values[key] = formData.has(key);
-            } else {
-                values[key] = value;
-            }
+        // Collect form values based on Pydantic DiskSpec model
+        values.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
+        values.disk_type = formData.get('disk_type');
+        values.controller_type = formData.get('controller_type');
+        
+        const storageClass = formData.get('storage_class');
+        if (storageClass && storageClass.trim()) {
+            values.storage_class = storageClass.trim();
         }
 
         try {
@@ -2168,7 +2154,6 @@ class DiskCreateOverlay extends BaseOverlay {
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    schema_version: this.schema.version || 1,
                     values: values,
                     target_host: this.host
                 })
@@ -2222,84 +2207,27 @@ class DiskEditOverlay extends DiskCreateOverlay {
         }
 
         try {
-            this.schema = await this.fetchSchema();
             // Extract original disk size for validation
             if (this.resourceData && this.resourceData.size_gb) {
                 this.originalDiskSize = parseFloat(this.resourceData.size_gb);
             }
             this.renderForm();
         } catch (error) {
-            console.error('Failed to load disk schema:', error);
+            console.error('Failed to load disk edit form:', error);
             this.rootEl.innerHTML = `
                 <div class="form-error">Unable to load disk edit form. Please try again later.</div>
             `;
         }
     }
 
-    renderInputControl(field, fieldId) {
-        const type = (field.type || 'string').toLowerCase();
-        const validations = field.validations || {};
-        const requiredAttr = field.required ? 'required' : '';
-        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
-        
-        // Map schema field IDs to VM disk object properties
-        let currentValue;
-        if (field.id === 'disk_size_gb') {
-            // Schema uses disk_size_gb but VM disk objects expose size_gb
-            currentValue = this.resourceData.size_gb ?? field.default ?? '';
-        } else if (field.id === 'disk_type') {
-            // Schema uses disk_type but VM disk objects expose type
-            currentValue = this.resourceData.type ?? field.default ?? '';
-        } else if (field.id === 'controller_type') {
-            // Controller type might be exposed differently
-            currentValue = this.resourceData.controller_type ?? this.resourceData.controller ?? field.default ?? '';
-        } else {
-            // Get current value from resource data, fallback to default
-            currentValue = this.resourceData[field.id] ?? field.default ?? '';
-        }
-
-        if (type === 'boolean') {
-            const checked = (this.resourceData[field.id] !== undefined ? this.resourceData[field.id] : field.default) === true ? 'checked' : '';
-            return `
-                <label class="checkbox-field">
-                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
-                    <span>Enable</span>
-                </label>
-            `;
-        }
-
-        if (type === 'integer') {
-            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
-            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
-            const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
-            
-            // Add min constraint for disk size to prevent shrinking
-            let additionalAttrs = '';
-            if (field.id === 'disk_size_gb' && this.originalDiskSize) {
-                additionalAttrs = `min="${this.originalDiskSize}" data-original-size="${this.originalDiskSize}"`;
-            }
-            
-            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${additionalAttrs} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-        }
-
-        if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(currentValue)}</textarea>`;
-        }
-
-        const inputType = type === 'secret' ? 'password' : 'text';
-        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
-        const pattern = patternValue ? `pattern="${patternValue}"` : '';
-        const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
-        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-    }
-
     renderForm() {
-        if (!this.schema) return;
-
-        const fieldsHtml = this.schema.fields
-            .filter(field => field.id !== 'vm_id')
-            .map(field => this.renderField(field))
-            .join('');
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
+        // Get current values from resource data
+        const currentDiskSize = this.resourceData.size_gb || 100;
+        const currentDiskType = this.resourceData.type || 'Dynamic';
+        const currentControllerType = this.resourceData.controller_type || this.resourceData.controller || 'SCSI';
+        const currentStorageClass = this.resourceData.storage_class || '';
 
         // Add notice about disk size restrictions
         const sizeNotice = this.originalDiskSize ? 
@@ -2311,7 +2239,70 @@ class DiskEditOverlay extends DiskCreateOverlay {
             <form id="disk-create-form" class="schema-form-body">
                 <div id="disk-create-messages" class="form-messages" role="alert"></div>
                 ${sizeNotice}
-                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="disk-size-gb" class="field-label">Disk Size (GB)</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="number" id="disk-size-gb" name="disk_size_gb" required 
+                                   min="${this.originalDiskSize || 1}" max="65536" 
+                                   value="${this.escapeHtml(currentDiskSize)}" 
+                                   step="1" inputmode="numeric" 
+                                   data-original-size="${this.originalDiskSize || ''}" />
+                        </div>
+                        <p class="field-description">Size of the virtual disk in gigabytes</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="disk-type" class="field-label">Disk Type</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <select id="disk-type" name="disk_type" required>
+                                <option value="Dynamic" ${currentDiskType === 'Dynamic' ? 'selected' : ''}>Dynamic</option>
+                                <option value="Fixed" ${currentDiskType === 'Fixed' ? 'selected' : ''}>Fixed</option>
+                            </select>
+                        </div>
+                        <p class="field-description">Type of virtual hard disk (Dynamic or Fixed)</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="controller-type" class="field-label">Controller Type</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <select id="controller-type" name="controller_type" required>
+                                <option value="SCSI" ${currentControllerType === 'SCSI' ? 'selected' : ''}>SCSI</option>
+                                <option value="IDE" ${currentControllerType === 'IDE' ? 'selected' : ''}>IDE</option>
+                            </select>
+                        </div>
+                        <p class="field-description">Type of controller to attach the disk to</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="storage-class" class="field-label">Storage Class</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="storage-class" name="storage_class" 
+                                   value="${this.escapeHtml(currentStorageClass)}"
+                                   placeholder="e.g., fast-ssd" />
+                        </div>
+                        <p class="field-description">Name of the storage class where the disk will be stored (optional)</p>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="disk-create-cancel">Cancel</button>
                     <button type="submit" class="btn" id="disk-create-submit">Update Disk</button>
@@ -2333,17 +2324,14 @@ class DiskEditOverlay extends DiskCreateOverlay {
         const formData = new FormData(this.formEl);
         const values = { vm_id: this.vmId };
 
-        for (const [key, value] of formData.entries()) {
-            const field = this.schema.fields.find(f => f.id === key);
-            if (!field) continue;
-
-            if (field.type === 'integer') {
-                values[key] = parseInt(value, 10);
-            } else if (field.type === 'boolean') {
-                values[key] = formData.has(key);
-            } else {
-                values[key] = value;
-            }
+        // Collect form values based on Pydantic DiskSpec model
+        values.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
+        values.disk_type = formData.get('disk_type');
+        values.controller_type = formData.get('controller_type');
+        
+        const storageClass = formData.get('storage_class');
+        if (storageClass && storageClass.trim()) {
+            values.storage_class = storageClass.trim();
         }
 
         // Client-side validation: prevent disk shrinking
@@ -2358,7 +2346,6 @@ class DiskEditOverlay extends DiskCreateOverlay {
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    schema_version: this.schema.version || 1,
                     values: values,
                     target_host: this.host,
                     resource_id: this.resourceId
@@ -2424,36 +2411,49 @@ class NicCreateOverlay extends BaseOverlay {
         }
 
         try {
-            this.schema = await this.fetchSchema();
             this.renderForm();
         } catch (error) {
-            console.error('Failed to load NIC schema:', error);
+            console.error('Failed to load NIC creation form:', error);
             this.rootEl.innerHTML = `
                 <div class="form-error">Unable to load network adapter creation form. Please try again later.</div>
             `;
         }
     }
 
-    async fetchSchema() {
-        const response = await fetch('/api/v1/schema/nic-create', { credentials: 'same-origin' });
-        if (!response.ok) {
-            throw new Error(`Schema request failed: ${response.status}`);
-        }
-        return await response.json();
-    }
-
     renderForm() {
-        if (!this.schema) return;
-
-        const fieldsHtml = this.schema.fields
-            .filter(field => field.id !== 'vm_id')
-            .map(field => this.renderField(field))
-            .join('');
-
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
         this.rootEl.innerHTML = `
             <form id="nic-create-form" class="schema-form-body">
                 <div id="nic-create-messages" class="form-messages" role="alert"></div>
-                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="network" class="field-label">Network</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="network" name="network" required 
+                                   placeholder="e.g., Production" />
+                        </div>
+                        <p class="field-description">Name of the network to connect the adapter to</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="adapter-name" class="field-label">Adapter Name</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="adapter-name" name="adapter_name" 
+                                   placeholder="e.g., Network Adapter 2" />
+                        </div>
+                        <p class="field-description">Optional name for the network adapter</p>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="nic-create-cancel">Cancel</button>
                     <button type="submit" class="btn" id="nic-create-submit">Create Network Adapter</button>
@@ -2469,79 +2469,18 @@ class NicCreateOverlay extends BaseOverlay {
         this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
     }
 
-    renderField(field) {
-        const fieldId = `schema-${field.id}`;
-        const requiredPill = field.required ? '<span class="field-required-pill">Required</span>' : '';
-        const labelText = this.escapeHtml(field.label || field.id);
-        const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
-        const inputControl = this.renderInputControl(field, fieldId);
-
-        return `
-            <div class="schema-field" data-field-id="${field.id}">
-                <div class="field-header">
-                    <div class="field-title">
-                        <label for="${fieldId}" class="field-label">${labelText}</label>
-                        ${requiredPill}
-                    </div>
-                </div>
-                <div class="field-control">${inputControl}</div>
-                ${description}
-            </div>
-        `;
-    }
-
-    renderInputControl(field, fieldId) {
-        const type = (field.type || 'string').toLowerCase();
-        const defaultValue = field.default ?? '';
-        const validations = field.validations || {};
-        const requiredAttr = field.required ? 'required' : '';
-        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
-
-        if (type === 'boolean') {
-            const checked = defaultValue === true ? 'checked' : '';
-            return `
-                <label class="checkbox-field">
-                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
-                    <span>Enable</span>
-                </label>
-            `;
-        }
-
-        if (type === 'integer') {
-            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
-            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
-            const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-        }
-
-        if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
-        }
-
-        const inputType = type === 'secret' ? 'password' : 'text';
-        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
-        const pattern = patternValue ? `pattern="${patternValue}"` : '';
-        const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-    }
-
     async handleSubmit(event) {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
         const values = { vm_id: this.vmId };
 
-        for (const [key, value] of formData.entries()) {
-            const field = this.schema.fields.find(f => f.id === key);
-            if (!field) continue;
-
-            if (field.type === 'integer') {
-                values[key] = parseInt(value, 10);
-            } else if (field.type === 'boolean') {
-                values[key] = formData.has(key);
-            } else {
-                values[key] = value;
-            }
+        // Collect form values based on Pydantic NicSpec model
+        values.network = formData.get('network');
+        
+        const adapterName = formData.get('adapter_name');
+        if (adapterName && adapterName.trim()) {
+            values.adapter_name = adapterName.trim();
         }
 
         try {
@@ -2550,7 +2489,6 @@ class NicCreateOverlay extends BaseOverlay {
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    schema_version: this.schema.version || 1,
                     values: values,
                     target_host: this.host
                 })
@@ -2602,75 +2540,55 @@ class NicEditOverlay extends NicCreateOverlay {
         }
 
         try {
-            this.schema = await this.fetchSchema();
             this.renderForm();
         } catch (error) {
-            console.error('Failed to load NIC schema:', error);
+            console.error('Failed to load NIC edit form:', error);
             this.rootEl.innerHTML = `
                 <div class="form-error">Unable to load network adapter edit form. Please try again later.</div>
             `;
         }
     }
 
-    renderInputControl(field, fieldId) {
-        const type = (field.type || 'string').toLowerCase();
-        const validations = field.validations || {};
-        const requiredAttr = field.required ? 'required' : '';
-        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
-        
-        // Map resource data fields to schema fields
-        let currentValue;
-        if (field.id === 'network') {
-            // Map from network_name or virtual_switch
-            currentValue = this.resourceData.network_name || this.resourceData.network || this.resourceData.virtual_switch || field.default || '';
-        } else if (field.id === 'adapter_name') {
-            currentValue = this.resourceData.adapter_name || this.resourceData.name || field.default || '';
-        } else {
-            currentValue = this.resourceData[field.id] ?? field.default ?? '';
-        }
-
-        if (type === 'boolean') {
-            const checked = (this.resourceData[field.id] !== undefined ? this.resourceData[field.id] : field.default) === true ? 'checked' : '';
-            return `
-                <label class="checkbox-field">
-                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
-                    <span>Enable</span>
-                </label>
-            `;
-        }
-
-        if (type === 'integer' || type === 'ipv4') {
-            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
-            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
-            const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
-            const inputMode = type === 'ipv4' ? 'text' : 'numeric';
-            const step = type === 'integer' ? 'step="1"' : '';
-            return `<input type="${type === 'ipv4' ? 'text' : 'number'}" inputmode="${inputMode}" ${step} id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-        }
-
-        if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(currentValue)}</textarea>`;
-        }
-
-        const inputType = type === 'secret' ? 'password' : 'text';
-        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
-        const pattern = patternValue ? `pattern="${patternValue}"` : '';
-        const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
-        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-    }
-
     renderForm() {
-        if (!this.schema) return;
-
-        const fieldsHtml = this.schema.fields
-            .filter(field => field.id !== 'vm_id')
-            .map(field => this.renderField(field))
-            .join('');
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
+        // Get current values from resource data
+        const currentNetwork = this.resourceData.network_name || this.resourceData.network || this.resourceData.virtual_switch || '';
+        const currentAdapterName = this.resourceData.adapter_name || this.resourceData.name || '';
 
         this.rootEl.innerHTML = `
             <form id="nic-create-form" class="schema-form-body">
                 <div id="nic-create-messages" class="form-messages" role="alert"></div>
-                <div class="schema-fields">${fieldsHtml}</div>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="network" class="field-label">Network</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="network" name="network" required 
+                                   value="${this.escapeHtml(currentNetwork)}"
+                                   placeholder="e.g., Production" />
+                        </div>
+                        <p class="field-description">Name of the network to connect the adapter to</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="adapter-name" class="field-label">Adapter Name</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="adapter-name" name="adapter_name" 
+                                   value="${this.escapeHtml(currentAdapterName)}"
+                                   placeholder="e.g., Network Adapter 2" />
+                        </div>
+                        <p class="field-description">Optional name for the network adapter</p>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="nic-create-cancel">Cancel</button>
                     <button type="submit" class="btn" id="nic-create-submit">Update Network Adapter</button>
@@ -2692,21 +2610,16 @@ class NicEditOverlay extends NicCreateOverlay {
         const formData = new FormData(this.formEl);
         const values = { vm_id: this.vmId };
 
-        for (const [key, value] of formData.entries()) {
-            const field = this.schema.fields.find(f => f.id === key);
-            if (!field) continue;
-
-            if (field.type === 'integer') {
-                values[key] = parseInt(value, 10);
-            } else if (field.type === 'boolean') {
-                values[key] = formData.has(key);
-            } else {
-                values[key] = value;
-            }
+        // Collect form values based on Pydantic NicSpec model
+        values.network = formData.get('network');
+        
+        const adapterName = formData.get('adapter_name');
+        if (adapterName && adapterName.trim()) {
+            values.adapter_name = adapterName.trim();
         }
 
         // Client-side validation: ensure network is specified
-        if (values.network && values.network.trim() === '') {
+        if (!values.network || values.network.trim() === '') {
             this.messagesEl.innerHTML = `<div class="form-error">Network name is required.</div>`;
             return;
         }
@@ -2717,7 +2630,6 @@ class NicEditOverlay extends NicCreateOverlay {
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    schema_version: this.schema.version || 1,
                     values: values,
                     target_host: this.host,
                     resource_id: this.resourceId
