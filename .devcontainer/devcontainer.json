@@ -80,9 +80,10 @@
 	// Use 'onCreateCommand' to run commands when creating the container
 	"onCreateCommand": {
 		"install-iso-tools": "sudo apt-get update && sudo apt-get install -y xorriso genisoimage mkisofs",
+		"install-kerberos-deps": "sudo apt-get install -y krb5-user libkrb5-dev libsasl2-dev",
 		"create-venv": "python -m venv /workspaces/Aether-V/.venv",
 		"install-app-deps": "/workspaces/Aether-V/.venv/bin/pip install -r /workspaces/Aether-V/server/requirements.txt",
-		"install-dev-deps": "/workspaces/Aether-V/.venv/bin/pip install flake8 black pytest pytest-asyncio httpx",
+		"install-dev-deps": "/workspaces/Aether-V/.venv/bin/pip install flake8 black pytest pytest-asyncio pytest-cov httpx",
 		"create-artifacts-dirs": "mkdir -p /workspaces/Aether-V/server/artifacts/{isos,scripts}",
 		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V"
 	},
