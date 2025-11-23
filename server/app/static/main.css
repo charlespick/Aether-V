@@ -1628,6 +1628,40 @@ tbody tr:last-child td {
     font-size: 14px;
 }
 
+/* Deployment Steps Section */
+.deployment-steps-section {
+    margin-top: 24px;
+}
+
+.deployment-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.deployment-step {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--card-bg);
+}
+
+.step-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+}
+
+.step-label {
+    font-weight: 600;
+    font-size: 14px;
+}
+
 .job-output {
     background: #1e1e1e;
     color: #d4d4d4;

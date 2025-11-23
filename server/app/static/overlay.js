@@ -814,6 +814,22 @@ class JobDetailsOverlay extends BaseOverlay {
         const details = job.parameters ? JSON.stringify(job.parameters, null, 2) : '{}';
         const jobSummaryTitle = this.getJobSummaryTitle(job);
         const childJobsSection = this.renderChildJobSection(job.child_jobs);
+        const isManagedDeployment = job.job_type === 'managed_deployment';
+
+        // For managed deployment, show deployment steps instead of activity log
+        const activitySection = isManagedDeployment ? 
+            this.renderManagedDeploymentSteps(job) :
+            `<div class='job-section'>
+                <h3>Activity log</h3>
+                <div class='job-log-toolbar'>
+                    <label class='job-log-follow'>
+                        <input type='checkbox' id='job-log-autoscroll' checked />
+                        Follow output
+                    </label>
+                    <button class='job-log-copy' id='job-log-copy' type='button'>Copy</button>
+                </div>
+                <pre class='job-output'><code id='job-log-output'>${this.escapeHtml(logText)}</code></pre>
+            </div>`;
 
         return `
             <div class='job-details' data-job-id='${this.escapeHtml(jobId)}'>
@@ -875,18 +891,25 @@ class JobDetailsOverlay extends BaseOverlay {
                     </div>
                 </div>
                 ${childJobsSection}
-                <div class='job-section'>
-                    <h3>Activity log</h3>
-                    <div class='job-log-toolbar'>
-                        <label class='job-log-follow'>
-                            <input type='checkbox' id='job-log-autoscroll' checked />
-                            Follow output
-                        </label>
-                        <button class='job-log-copy' id='job-log-copy' type='button'>Copy</button>
-                    </div>
-                    <pre class='job-output'><code id='job-log-output'>${this.escapeHtml(logText)}</code></pre>
-                </div>
+                ${activitySection}
                 ${job.error ? `<div class='job-section job-error'><h3>Error</h3><div class='job-error-box'><pre>${this.escapeHtml(job.error)}</pre></div></div>` : ''}
+            </div>
+        `;
+    }
+
+    renderManagedDeploymentSteps(job = this.job) {
+        if (!job) {
+            return '';
+        }
+
+        const stepsHtml = this.renderManagedDeploymentStepsContent(job);
+
+        return `
+            <div class='job-section deployment-steps-section'>
+                <h3>Deployment Steps</h3>
+                <div class='deployment-steps' data-field='deployment-steps'>
+                    ${stepsHtml}
+                </div>
             </div>
         `;
     }
@@ -1034,12 +1057,94 @@ class JobDetailsOverlay extends BaseOverlay {
             this.imageEl.textContent = this.extractField(job, ['image_name', 'image']) || '—';
         }
         this.updateChildJobs();
+        this.updateDeploymentSteps();
         this.updateTiming();
         if (job.status === 'running') {
             this.startDurationTimer();
         } else {
             this.clearDurationTimer();
         }
+    }
+
+    updateDeploymentSteps() {
+        // Only update for managed deployment jobs
+        if (this.job?.job_type !== 'managed_deployment') {
+            return;
+        }
+
+        const container = this.rootEl?.querySelector('[data-field="deployment-steps"]');
+        if (!container) {
+            return;
+        }
+
+        // Re-render the deployment steps with current state
+        const stepsHtml = this.renderManagedDeploymentStepsContent(this.job);
+        container.innerHTML = stepsHtml;
+        this.bindChildJobLinks();
+    }
+
+    renderManagedDeploymentStepsContent(job) {
+        if (!job) {
+            return '';
+        }
+
+        // Parse the log output to determine the status of each step
+        const logOutput = Array.isArray(job.output) ? job.output.join('\n') : '';
+        
+        const steps = [
+            { key: 'vm', label: 'Create VM', pattern: /Creating VM.*|VM created successfully/ },
+            { key: 'disk', label: 'Create Disk', pattern: /Creating disk.*|Disk created successfully/ },
+            { key: 'nic', label: 'Create NIC', pattern: /Creating NIC.*|NIC created successfully/ },
+            { key: 'init', label: 'Initialize Guest', pattern: /Generating guest configuration.*|Guest configuration sent successfully/ }
+        ];
+
+        const stepStatuses = steps.map(step => {
+            const started = step.pattern.test(logOutput);
+            const completed = logOutput.match(new RegExp(`${step.label.split(' ')[1]}.*successfully`, 'i'));
+            
+            let status = 'pending';
+            let statusClass = 'status-pending';
+            
+            if (completed) {
+                status = 'completed';
+                statusClass = 'status-completed';
+            } else if (started) {
+                status = 'running';
+                statusClass = 'status-running';
+            }
+            
+            // Check if this step has a child job
+            const childJob = Array.isArray(job.child_jobs) ? 
+                job.child_jobs.find(child => child.job_type === 'initialize_vm') : null;
+            
+            if (step.key === 'init' && childJob) {
+                status = childJob.status || status;
+                statusClass = `status-${childJob.status || 'pending'}`;
+            }
+            
+            return {
+                ...step,
+                status,
+                statusClass,
+                childJobId: (step.key === 'init' && childJob) ? childJob.job_id : null
+            };
+        });
+
+        return stepStatuses.map(step => {
+            const buttonHtml = step.childJobId ? 
+                `<button class='job-child-view' data-sub-job-id='${this.escapeHtml(step.childJobId)}' type='button'>View</button>` :
+                '';
+            
+            return `
+                <div class='deployment-step'>
+                    <div class='step-info'>
+                        <div class='step-label'>${this.escapeHtml(step.label)}</div>
+                        <span class='job-status-badge ${step.statusClass}'>${this.escapeHtml(step.status)}</span>
+                    </div>
+                    ${buttonHtml}
+                </div>
+            `;
+        }).join('');
     }
 
     updateLog() {
