@@ -83,7 +83,8 @@ Describe "PowerShell .Count Property Bug Prevention" {
             
             # Look for problematic pattern: $var = Get-VMNetworkAdapter (without @() wrapping)
             # This regex looks for assignment without @() wrapper
-            $problematicPattern = '\$\w+\s*=\s*Get-VMNetworkAdapter[^@]*\n[^\n]*\.Count'
+            # Use (?:\r?\n) to handle both Windows (CRLF) and Unix (LF) line endings
+            $problematicPattern = '\$\w+\s*=\s*Get-VMNetworkAdapter[^@]*(?:\r?\n)[^\r\n]*\.Count'
             
             # Should NOT match the problematic pattern
             $scriptContent | Should -Not -Match $problematicPattern -Because "All Get-VMNetworkAdapter calls used with .Count must be wrapped with @()"
@@ -124,14 +125,18 @@ Describe "PowerShell .Count Property Bug Prevention" {
                     
                     # Check if line assigns result of Get-VM* cmdlet to a variable
                     foreach ($cmdlet in $vulnerableCmdlets) {
+                        # Escape cmdlet name for safe use in regex
+                        $escapedCmdlet = [regex]::Escape($cmdlet)
+                        
                         # Pattern: $var = Get-VMSomething (without @() wrapper)
-                        if ($line -match '\$(\w+)\s*=\s*' + $cmdlet + '\s+' -and $line -notmatch '@\(\s*' + $cmdlet) {
+                        if ($line -match ('\$(\w+)\s*=\s*' + $escapedCmdlet + '\s+') -and $line -notmatch ('@\(\s*' + $escapedCmdlet)) {
                             $varName = $matches[1]
                             
                             # Check if this variable is later used with .Count in next ~20 lines
                             $checkLines = $lines[$i..([Math]::Min($i + 20, $lines.Count - 1))]
                             # Filter out comments when checking for .Count usage
-                            $usesCount = $checkLines | Where-Object { $_ -notmatch '^\s*#' -and $_ -match ('\$' + $varName + '\.Count') }
+                            $escapedVarName = [regex]::Escape($varName)
+                            $usesCount = $checkLines | Where-Object { $_ -notmatch '^\s*#' -and $_ -match ('\$' + $escapedVarName + '\.Count') }
                             
                             if ($usesCount) {
                                 $issues += @{
