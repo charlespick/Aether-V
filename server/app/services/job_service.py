@@ -53,22 +53,22 @@ def _redact_sensitive_parameters(
     replacement: str = "••••••",
 ) -> Dict[str, Any]:
     """Return a copy of job parameters with sensitive values redacted.
-    
+
     This replaces the schema-based redaction with a simple list of known
     sensitive field names.
     """
     if parameters is None:
         return {}
-    
+
     # Known sensitive field names from Pydantic models
     sensitive_fields = {
         "guest_la_pw",
         "guest_domain_joinpw",
         "cnf_ansible_ssh_key",
     }
-    
+
     sanitized = copy.deepcopy(parameters)
-    
+
     def _redact(value: Any) -> None:
         if isinstance(value, dict):
             for key, item in value.items():
@@ -79,7 +79,7 @@ def _redact_sensitive_parameters(
         elif isinstance(value, list):
             for element in value:
                 _redact(element)
-    
+
     _redact(sanitized)
     return sanitized
 
@@ -258,7 +258,8 @@ class JobService:
 
         job_copy = job.model_copy(deep=True)
         try:
-            job_copy.parameters = _redact_sensitive_parameters(job_copy.parameters)
+            job_copy.parameters = _redact_sensitive_parameters(
+                job_copy.parameters)
         except Exception:  # pragma: no cover - defensive logging
             logger.exception(
                 "Failed to redact job parameters for %s", job.job_id)
@@ -512,7 +513,16 @@ class JobService:
 
         try:
             # Acquire host slot for jobs that need serialization
-            if job.job_type in SERIALIZED_JOB_TYPES and host_key:
+            # Child jobs inherit the parent's serialization slot, so skip
+            # acquiring a new slot to avoid deadlock when parent waits
+            # for child completion
+            is_child_job = job.parameters.get("parent_job_id") is not None
+            needs_serialization = (
+                job.job_type in SERIALIZED_JOB_TYPES
+                and host_key
+                and not is_child_job
+            )
+            if needs_serialization:
                 await self._acquire_host_slot(host_key, job.job_id)
                 acquired_host = True
 
@@ -1508,28 +1518,39 @@ class JobService:
             {"fields": validation_fields}, target_host
         )
 
-        # Step 1: Create VM using protocol
+        # Step 1: Create VM as a child job
         await self._append_job_output(
             job.job_id,
             f"Creating VM '{request.vm_spec.vm_name}'...",
         )
 
-        vm_job_request = create_job_request(
-            operation="vm.create",
-            resource_spec=request.vm_spec.model_dump(),
-            correlation_id=f"{job.job_id}-vm",
+        vm_job_definition = {
+            "schema": {"id": "vm.create", "version": 1},
+            "fields": request.vm_spec.model_dump(),
+        }
+
+        vm_job = await self._queue_child_job(
+            job,
+            job_type="create_vm",
+            schema_id="vm.create",
+            payload=vm_job_definition,
         )
 
-        vm_result = await self._execute_managed_deployment_protocol_operation(
-            job, target_host, vm_job_request, "VM creation"
+        vm_job_result = await self._wait_for_child_job_completion(
+            job.job_id, vm_job.job_id
         )
 
-        # Extract VM ID from result
-        vm_id = vm_result.data.get("vm_id") or vm_result.data.get(
-            "vmId") or vm_result.data.get("id")
+        if vm_job_result.status != JobStatus.COMPLETED:
+            raise RuntimeError(
+                f"VM creation failed: {vm_job_result.error or 'unknown error'}"
+            )
+
+        # Extract VM ID from result data
+        vm_id = self._extract_vm_id_from_output(vm_job_result.output)
         if not vm_id:
             raise RuntimeError(
-                f"VM creation succeeded but no VM ID returned: {vm_result.data}")
+                "VM creation completed but no VM ID could be extracted from output"
+            )
 
         await self._append_job_output(
             job.job_id,
@@ -1540,7 +1561,7 @@ class JobService:
         job.parameters["vm_id"] = vm_id
         await self._update_job(job.job_id, parameters=job.parameters)
 
-        # Step 2: Create Disk if specified
+        # Step 2: Create Disk as a child job if specified
         if request.disk_spec:
             await self._append_job_output(
                 job.job_id,
@@ -1551,22 +1572,33 @@ class JobService:
             disk_dict = request.disk_spec.model_dump()
             disk_dict["vm_id"] = vm_id
 
-            disk_job_request = create_job_request(
-                operation="disk.create",
-                resource_spec=disk_dict,
-                correlation_id=f"{job.job_id}-disk",
+            disk_job_definition = {
+                "schema": {"id": "disk.create", "version": 1},
+                "fields": disk_dict,
+            }
+
+            disk_job = await self._queue_child_job(
+                job,
+                job_type="create_disk",
+                schema_id="disk.create",
+                payload=disk_job_definition,
             )
 
-            disk_result = await self._execute_managed_deployment_protocol_operation(
-                job, target_host, disk_job_request, "Disk creation"
+            disk_job_result = await self._wait_for_child_job_completion(
+                job.job_id, disk_job.job_id
             )
+
+            if disk_job_result.status != JobStatus.COMPLETED:
+                raise RuntimeError(
+                    f"Disk creation failed: {disk_job_result.error or 'unknown error'}"
+                )
 
             await self._append_job_output(
                 job.job_id,
                 "Disk created successfully",
             )
 
-        # Step 3: Create NIC if specified
+        # Step 3: Create NIC as a child job if specified
         if request.nic_spec:
             await self._append_job_output(
                 job.job_id,
@@ -1577,15 +1609,26 @@ class JobService:
             nic_dict = request.nic_spec.model_dump()
             nic_dict["vm_id"] = vm_id
 
-            nic_job_request = create_job_request(
-                operation="nic.create",
-                resource_spec=nic_dict,
-                correlation_id=f"{job.job_id}-nic",
+            nic_job_definition = {
+                "schema": {"id": "nic.create", "version": 1},
+                "fields": nic_dict,
+            }
+
+            nic_job = await self._queue_child_job(
+                job,
+                job_type="create_nic",
+                schema_id="nic.create",
+                payload=nic_job_definition,
             )
 
-            nic_result = await self._execute_managed_deployment_protocol_operation(
-                job, target_host, nic_job_request, "NIC creation"
+            nic_job_result = await self._wait_for_child_job_completion(
+                job.job_id, nic_job.job_id
             )
+
+            if nic_job_result.status != JobStatus.COMPLETED:
+                raise RuntimeError(
+                    f"NIC creation failed: {nic_job_result.error or 'unknown error'}"
+                )
 
             await self._append_job_output(
                 job.job_id,
@@ -2083,7 +2126,17 @@ class JobService:
         await self._broadcast_job_status(job)
 
     async def _sync_job_notification(self, job: Job) -> None:
-        """Create or update job notification using pre-enriched metadata."""
+        """Create or update job notification using pre-enriched metadata.
+
+        Child jobs (jobs with parent_job_id) do not create notifications since
+        the parent job (e.g., managed_deployment) has its own status page with
+        links to child jobs.
+        """
+
+        # Skip notifications for child jobs - parent job provides the status page
+        parent_job_id = job.parameters.get("parent_job_id")
+        if parent_job_id:
+            return
 
         # Get enriched metadata (populated in _enrich_job_metadata)
         # If not enriched yet (e.g., in tests), extract basic info from parameters

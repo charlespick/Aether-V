@@ -1088,45 +1088,37 @@ class JobDetailsOverlay extends BaseOverlay {
             return '';
         }
 
-        // Parse the log output to determine the status of each step
-        const logOutput = Array.isArray(job.output) ? job.output.join('\n') : '';
-        
-        const steps = [
-            { key: 'vm', label: 'Create VM', pattern: /Creating VM.*|VM created successfully/ },
-            { key: 'disk', label: 'Create Disk', pattern: /Creating disk.*|Disk created successfully/ },
-            { key: 'nic', label: 'Create NIC', pattern: /Creating NIC.*|NIC created successfully/ },
-            { key: 'init', label: 'Initialize Guest', pattern: /Generating guest configuration.*|Guest configuration sent successfully/ }
+        // Define the deployment steps and their corresponding child job types
+        const stepDefinitions = [
+            { key: 'vm', label: 'Create VM', jobType: 'create_vm' },
+            { key: 'disk', label: 'Create Disk', jobType: 'create_disk' },
+            { key: 'nic', label: 'Create NIC', jobType: 'create_nic' },
+            { key: 'init', label: 'Initialize Guest', jobType: 'initialize_vm' }
         ];
 
-        const stepStatuses = steps.map(step => {
-            const started = step.pattern.test(logOutput);
-            const completed = logOutput.match(new RegExp(`${step.label.split(' ')[1]}.*successfully`, 'i'));
+        const childJobs = Array.isArray(job.child_jobs) ? job.child_jobs : [];
+        
+        // Map each step to its corresponding child job and determine status
+        const stepStatuses = stepDefinitions.map(step => {
+            // Find the child job for this step
+            const childJob = childJobs.find(child => child.job_type === step.jobType);
             
             let status = 'pending';
             let statusClass = 'status-pending';
+            let childJobId = null;
             
-            if (completed) {
-                status = 'completed';
-                statusClass = 'status-completed';
-            } else if (started) {
-                status = 'running';
-                statusClass = 'status-running';
-            }
-            
-            // Check if this step has a child job
-            const childJob = Array.isArray(job.child_jobs) ? 
-                job.child_jobs.find(child => child.job_type === 'initialize_vm') : null;
-            
-            if (step.key === 'init' && childJob) {
-                status = childJob.status || status;
-                statusClass = `status-${childJob.status || 'pending'}`;
+            if (childJob) {
+                // Use the actual child job status
+                status = childJob.status || 'pending';
+                statusClass = `status-${status}`;
+                childJobId = childJob.job_id;
             }
             
             return {
                 ...step,
                 status,
                 statusClass,
-                childJobId: (step.key === 'init' && childJob) ? childJob.job_id : null
+                childJobId
             };
         });
 
