@@ -300,33 +300,12 @@ class TestManagedDeploymentExecution:
             parameters={"request": request.model_dump()},
         )
 
-        # Track which operations were called
-        operations_called = []
-
-        async def mock_execute_new_protocol(job, target_host, job_request, desc):
-            operations_called.append(desc)
-            if "VM creation" in desc:
-                return JobResultEnvelope(
-                    status=JobResultStatus.SUCCESS,
-                    message="VM created",
-                    data={"vm_id": "vm-123"},
-                )
-            elif "Disk creation" in desc:
-                return JobResultEnvelope(
-                    status=JobResultStatus.SUCCESS,
-                    message="Disk created",
-                    data={"disk_id": "disk-456"},
-                )
-            elif "NIC creation" in desc:
-                return JobResultEnvelope(
-                    status=JobResultStatus.SUCCESS,
-                    message="NIC created",
-                    data={"nic_id": "nic-789"},
-                )
-
-        # Mock initialization job for guest config
+        # Mock child job creation and completion for all steps
+        job_types_created = []
+        
         async def mock_queue_child_job(parent_job, job_type, schema_id, payload):
-            return Job(
+            job_types_created.append(job_type)
+            child_job = Job(
                 job_id=f"{job_type}-child",
                 job_type=job_type,
                 schema_id=schema_id,
@@ -334,17 +313,31 @@ class TestManagedDeploymentExecution:
                 created_at=datetime.utcnow(),
                 parameters=payload,
                 target_host=parent_job.target_host,
+                output=[],
             )
+            return child_job
 
         async def mock_wait_for_child_job(parent_job_id, child_job_id):
+            # Return completed job with appropriate output based on job type
+            job_type = child_job_id.replace("-child", "")
+            
+            output = []
+            if job_type == "create_vm":
+                output = ['{"vm_id": "vm-123"}']
+            elif job_type == "create_disk":
+                output = ['{"disk_id": "disk-456"}']
+            elif job_type == "create_nic":
+                output = ['{"nic_id": "nic-789"}']
+                
             return Job(
                 job_id=child_job_id,
-                job_type="initialize_vm",
-                schema_id="initialize-vm",
+                job_type=job_type,
+                schema_id=f"{job_type.replace('_', '.')}.v1",
                 status=JobStatus.COMPLETED,
                 created_at=datetime.utcnow(),
                 parameters={},
                 target_host="hyperv-01",
+                output=output,
             )
 
         # Setup mocks
@@ -353,13 +346,9 @@ class TestManagedDeploymentExecution:
             "ensure_host_setup",
             AsyncMock(return_value=True),
         )
-        monkeypatch.setattr(
-            service,
-            "_execute_new_protocol_operation",
-            AsyncMock(side_effect=mock_execute_new_protocol),
-        )
         monkeypatch.setattr(service, "_append_job_output", AsyncMock())
         monkeypatch.setattr(service, "_update_job", AsyncMock())
+        monkeypatch.setattr(service, "_extract_vm_id_from_output", lambda output: "vm-123")
         monkeypatch.setattr(
             service,
             "_queue_child_job",
@@ -374,17 +363,24 @@ class TestManagedDeploymentExecution:
         # Execute the job
         asyncio.run(service._execute_managed_deployment_job(job))
 
-        # Verify all operations were called
-        assert "VM creation" in operations_called
-        assert "Disk creation" in operations_called
-        assert "NIC creation" in operations_called
+        # Verify all child jobs were created
+        assert "create_vm" in job_types_created
+        assert "create_disk" in job_types_created
+        assert "create_nic" in job_types_created
+        assert "initialize_vm" in job_types_created
 
-        # Verify guest config initialization was called
-        assert service._queue_child_job.called
-        init_call = service._queue_child_job.call_args
-        assert init_call[1]["job_type"] == "initialize_vm"
+        # Verify they were created in the correct order
+        assert job_types_created.index("create_vm") < job_types_created.index("create_disk")
+        assert job_types_created.index("create_disk") < job_types_created.index("create_nic")
+        assert job_types_created.index("create_nic") < job_types_created.index("initialize_vm")
 
-        # Verify guest config was properly generated and included
+        # Verify guest config initialization payload
+        init_calls = [
+            call for call in service._queue_child_job.call_args_list
+            if call[1]["job_type"] == "initialize_vm"
+        ]
+        assert len(init_calls) == 1
+        init_call = init_calls[0]
         init_payload = init_call[1]["payload"]
         assert "guest_la_uid" in init_payload["fields"]
         assert "guest_la_pw" in init_payload["fields"]
