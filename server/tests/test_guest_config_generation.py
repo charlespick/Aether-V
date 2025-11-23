@@ -1,4 +1,4 @@
-"""Phase 5 Tests: Guest Configuration Generator
+"""Tests: Guest Configuration Generator
 
 This test suite validates the new guest config generation logic that
 replaces the schema-based auto-composition approach.
@@ -11,7 +11,7 @@ Tests cover:
 5. Combined scenarios (domain join + static IP, etc.)
 6. Edge cases and validation
 
-Phase 5 Note: These tests validate the new generator in isolation.
+Note: These tests validate the new generator in isolation.
 The generator is NOT yet used in production flows - that happens in Phase 6.
 """
 import pytest

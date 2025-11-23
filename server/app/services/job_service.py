@@ -390,7 +390,7 @@ class JobService:
     ) -> Job:
         """Submit a noop-test job using the new protocol.
 
-        Phase 3: This is the first job type to use the new JobRequest envelope.
+        Uses the JobRequest envelope protocol.
         It validates the round-trip communication without performing actual operations.
         """
         if not self._started or self._queue is None:
@@ -428,7 +428,7 @@ class JobService:
     ) -> Job:
         """Submit a managed deployment job using the new Pydantic-based protocol.
 
-        Phase 6: This replaces the schema-driven managed deployment with Pydantic
+        Orchestrates a complete VM deployment using Pydantic
         models and the new JobRequest/JobResult protocol.
 
         The deployment will orchestrate:
@@ -747,7 +747,7 @@ class JobService:
     async def _execute_delete_job(self, job: Job) -> None:
         """Execute a VM deletion job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -854,7 +854,7 @@ class JobService:
     async def _execute_create_vm_job(self, job: Job) -> None:
         """Execute a VM-only creation job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -957,7 +957,7 @@ class JobService:
     async def _execute_create_disk_job(self, job: Job) -> None:
         """Execute a disk creation and attachment job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -1063,7 +1063,7 @@ class JobService:
     async def _execute_create_nic_job(self, job: Job) -> None:
         """Execute a NIC creation and attachment job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -1174,7 +1174,7 @@ class JobService:
     ) -> None:
         """Execute an operation using the new JobRequest/JobResult protocol.
 
-        Phase 4: Generic helper for all new protocol operations.
+        Generic helper for JobRequest/JobResult protocol operations.
 
         Args:
             job: Job object
@@ -1282,35 +1282,35 @@ class JobService:
     async def _execute_update_vm_job(self, job: Job) -> None:
         """Execute a VM update job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         await self._execute_new_protocol_operation(job, "vm.update", "VM update")
 
     async def _execute_update_disk_job(self, job: Job) -> None:
         """Execute a disk update job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         await self._execute_new_protocol_operation(job, "disk.update", "Disk update")
 
     async def _execute_update_nic_job(self, job: Job) -> None:
         """Execute a NIC update job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         await self._execute_new_protocol_operation(job, "nic.update", "NIC update")
 
     async def _execute_delete_disk_job(self, job: Job) -> None:
         """Execute a disk deletion job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         await self._execute_new_protocol_operation(job, "disk.delete", "Disk deletion")
 
     async def _execute_delete_nic_job(self, job: Job) -> None:
         """Execute a NIC deletion job using new protocol.
 
-        Phase 4: Converted to use JobRequest/JobResult envelope protocol.
+        Uses the JobRequest/JobResult envelope protocol.
         """
         await self._execute_new_protocol_operation(job, "nic.delete", "NIC deletion")
 
@@ -1350,7 +1350,7 @@ class JobService:
     async def _execute_noop_test_job(self, job: Job) -> None:
         """Execute a noop-test job using the new protocol.
 
-        Phase 3: This is the first operation to use the new JobRequest/JobResult
+        Uses the JobRequest/JobResult
         envelope protocol. It validates the round-trip communication between
         server and host agent without performing any actual operations.
         """
@@ -1448,7 +1448,7 @@ class JobService:
     async def _execute_managed_deployment_v2_job(self, job: Job) -> None:
         """Execute a managed deployment using the new Pydantic-based protocol.
 
-        Phase 6: This method orchestrates VM creation using the new protocol:
+        Orchestrates VM creation using the JobRequest/JobResult protocol:
         1. Create VM via vm.create JobRequest
         2. Create Disk via disk.create JobRequest
         3. Create NIC via nic.create JobRequest
@@ -1662,8 +1662,7 @@ class JobService:
         """Execute a single operation using the new JobRequest/JobResult protocol.
 
         This is a helper method for executing individual operations (VM, Disk, NIC)
-        during managed deployment v2. This is separate from the Phase 4 
-        _execute_new_protocol_operation method which has a different signature.
+        during managed deployment. This provides a simplified interface for orchestration.
 
         Args:
             job: The parent job (for logging context)
@@ -2257,8 +2256,7 @@ class JobService:
     def _log_agent_request(self, job_id: str, target_host: str, payload: str, script_name: str) -> None:
         """Log raw JSON being sent to host agent.
 
-        This logging is added as part of Phase 0 preparation for the schema-to-Pydantic refactor.
-        It provides visibility into server↔agent communication for debugging and validation.
+        Provides visibility into server↔agent communication for debugging and validation.
         """
         logger.debug(
             "Sending JSON to host agent - job=%s host=%s script=%s payload=%s",

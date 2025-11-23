@@ -1,4 +1,4 @@
-"""Phase 4 Tests: Resource Operations Round-Trip Validation
+"""Tests: Resource Operations Round-Trip Validation
 
 This test suite validates the Phase 4 implementation of resource-level operations
 using the new JobRequest/JobResult protocol. It tests VM, Disk, and NIC operations

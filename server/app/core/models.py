@@ -197,10 +197,10 @@ class VMInitializationRequest(BaseModel):
 
 
 class NoopTestRequest(BaseModel):
-    """Request to execute a noop-test job using the new protocol.
+    """Request to execute a noop-test job using the JobRequest envelope protocol.
     
-    Phase 3: This is the first operation to use the new JobRequest envelope.
-    It validates the round-trip communication without performing actual operations.
+    Validates the round-trip communication between server and host agent
+    without performing actual operations.
     """
     
     target_host: str = Field(

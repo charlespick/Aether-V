@@ -1,4 +1,4 @@
-"""Phase 3 Tests: Noop-Test Round-Trip Validation
+"""Tests: Noop-Test Round-Trip Validation
 
 This test suite validates the first operation to use the new protocol end-to-end.
 The noop-test operation proves that:
@@ -264,7 +264,7 @@ class TestNoopTestProtocolIsolation:
     def test_other_operations_still_use_stub(self, script_path, pwsh_available):
         """Verify non-implemented operations return appropriate errors.
         
-        Phase 4 update: vm.create is now fully implemented, so this test
+        Updated: vm.create is now fully implemented, so this test
         has been updated to reflect that all resource operations are implemented.
         Unsupported operations should return error status.
         """

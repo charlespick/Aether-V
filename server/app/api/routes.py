@@ -1337,17 +1337,16 @@ async def create_managed_deployment_v2(
     request: ManagedDeploymentRequest,
     user: dict = Depends(require_permission(Permission.WRITER))
 ):
-    """Create a complete VM deployment using the new Pydantic-based protocol.
+    """Create a complete VM deployment using the Pydantic-based protocol.
     
-    Phase 6: This endpoint replaces schema-driven validation with Pydantic models.
-    It orchestrates VM creation, disk attachment, NIC attachment, and guest 
-    configuration using the new JobRequest/JobResult protocol.
+    This endpoint orchestrates VM creation, disk attachment, NIC attachment, and guest 
+    configuration using the JobRequest/JobResult protocol with strict Pydantic validation.
     
     The workflow:
     1. Validate input with Pydantic (ManagedDeploymentRequest)
-    2. Create VM via new protocol (vm.create operation)
-    3. Create Disk via new protocol (disk.create operation)
-    4. Create NIC via new protocol (nic.create operation)
+    2. Create VM via vm.create operation
+    3. Create Disk via disk.create operation
+    4. Create NIC via nic.create operation
     5. Generate guest config dict using generate_guest_config()
     6. Send guest config through existing KVP mechanism
     
@@ -1407,14 +1406,11 @@ async def submit_noop_test(
     request: NoopTestRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Execute a noop-test operation using the new protocol.
+    """Execute a noop-test operation using the JobRequest/JobResult protocol.
     
-    Phase 3: This is the first endpoint to use the new JobRequest/JobResult
-    envelope protocol. It validates the round-trip communication between
-    server and host agent without performing any actual operations.
-    
-    This endpoint demonstrates that the new protocol works end-to-end before
-    converting any production operations.
+    This endpoint validates the round-trip communication between server and host agent
+    without performing any actual operations. Useful for testing connectivity and
+    protocol compatibility.
     """
     
     if not host_deployment_service.is_provisioning_available():

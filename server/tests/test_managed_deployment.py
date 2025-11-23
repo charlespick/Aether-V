@@ -1,4 +1,4 @@
-"""Phase 6 Tests: Managed Deployment V2 with New Protocol
+"""Tests: Managed Deployment V2 with New Protocol
 
 This test suite validates the Phase 6 implementation of managed deployment
 using the new Pydantic-based protocol.
@@ -10,7 +10,7 @@ Tests cover:
 4. Guest config generation and integration
 5. End-to-end workflow validation
 
-Phase 6 Note: These tests validate that the managed deployment workflow
+Note: These tests validate that the managed deployment workflow
 now uses Pydantic models and bypasses schemas entirely.
 """
 import asyncio
