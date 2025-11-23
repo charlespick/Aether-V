@@ -1,7 +1,8 @@
 // Get configuration from backend
 const configData = JSON.parse(document.getElementById('config-data').textContent);
 window.appConfig = configData;
-window.jobSchema = configData.job_schema || null;
+// Schema system is deprecated - forms now use Pydantic models directly
+window.jobSchema = null;
 const authEnabled = configData.auth_enabled;
 
 if (window.viewManager && typeof window.viewManager.setAppName === 'function') {

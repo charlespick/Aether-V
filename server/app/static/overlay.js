@@ -710,7 +710,50 @@ class SettingsOverlay extends BaseOverlay {
     }
 }
 
+// ProvisionJobOverlay - Pydantic-based implementation (Phase 7)
+// Delegates to ProvisionFormPydantic for all form rendering and logic
 class ProvisionJobOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.pydanticForm = null;
+    }
+
+    getTitle() {
+        return 'Create Virtual Machine';
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="provision-job-root">
+                <div class="form-loading">Loading form...</div>
+            </div>
+        `;
+    }
+
+    async init() {
+        // Use the new Pydantic-based form
+        if (typeof window.ProvisionFormPydantic === 'function') {
+            this.pydanticForm = new window.ProvisionFormPydantic(this.data);
+            await this.pydanticForm.init();
+        } else {
+            console.error('ProvisionFormPydantic not loaded');
+            const rootEl = document.getElementById('provision-job-root');
+            if (rootEl) {
+                rootEl.innerHTML = '<div class="form-error">Form component not loaded. Please refresh the page.</div>';
+            }
+        }
+    }
+
+    cleanup() {
+        if (this.pydanticForm && typeof this.pydanticForm.cleanup === 'function') {
+            this.pydanticForm.cleanup();
+        }
+    }
+}
+
+// Legacy schema-based overlay (deprecated but kept for reference)
+// This is the OLD implementation that will be removed after Phase 7 is complete
+class ProvisionJobOverlayLegacy extends BaseOverlay {
     constructor(data = {}) {
         super(data);
         this.schema = this.resolveInitialSchema();
@@ -743,7 +786,7 @@ class ProvisionJobOverlay extends BaseOverlay {
     }
 
     getTitle() {
-        return 'Create Virtual Machine';
+        return 'Create Virtual Machine (Legacy)';
     }
 
     async render() {
