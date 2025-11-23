@@ -25,7 +25,6 @@ from ..core.models import (
     InventoryResponse,
     HealthResponse,
     NotificationsResponse,
-    JobSubmission,
     AboutResponse,
     BuildInfo,
     VMState,
