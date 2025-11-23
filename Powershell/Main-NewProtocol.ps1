@@ -708,7 +708,7 @@ end {
             
             # Determine adapter name
             if (-not $adapterName) {
-                $existingAdapters = Get-VMNetworkAdapter -VM $vm
+                $existingAdapters = @(Get-VMNetworkAdapter -VM $vm)
                 $adapterCount = $existingAdapters.Count
                 $adapterName = "Network Adapter $($adapterCount + 1)"
             }
