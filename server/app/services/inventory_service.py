@@ -8,7 +8,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, TypeVar
 
@@ -281,7 +281,7 @@ class InventoryService:
         self.clusters = {"Production": cluster1, "Development": cluster2}
 
         # Create connected hosts with VMs
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Production cluster hosts
         self.hosts["hyperv01.lab.local"] = Host(
@@ -564,7 +564,7 @@ class InventoryService:
         if not configured_hosts:
             # Inventory cleared elsewhere when no hosts are configured, but ensure
             # last_refresh stays current so readiness probes succeed.
-            self.last_refresh = datetime.utcnow()
+            self.last_refresh = datetime.now(timezone.utc)
             self._notify_inventory_status(
                 title="Inventory synchronised",
                 message="No Hyper-V hosts are configured; inventory data is empty.",

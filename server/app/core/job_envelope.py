@@ -1,8 +1,7 @@
-"""Job envelope utilities for the new server→agent protocol.
+"""Job envelope utilities for the server→agent protocol.
 
-Phase 2: These utilities create JobRequest envelopes and parse JobResult responses.
-They are introduced alongside the existing schema-driven protocol but are not yet
-connected to production code paths.
+These utilities create JobRequest envelopes and parse JobResult responses for
+communication between the AetherV server and PowerShell host agents.
 
 Functions:
 - create_job_request: Create a JobRequest envelope from operation and resource spec

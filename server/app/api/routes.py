@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from ..core.models import (
@@ -347,7 +347,7 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         version=build_metadata.version,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         build=_current_build_info(),
     )
 
@@ -365,7 +365,7 @@ async def readiness_check(response: Response):
         return HealthResponse(
             status="config_error",
             version=build_metadata.version,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             build=_current_build_info(),
         )
 
@@ -375,7 +375,7 @@ async def readiness_check(response: Response):
     return HealthResponse(
         status=readiness_status,
         version=build_metadata.version,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         build=_current_build_info(),
     )
 
@@ -1337,17 +1337,16 @@ async def create_managed_deployment_v2(
     request: ManagedDeploymentRequest,
     user: dict = Depends(require_permission(Permission.WRITER))
 ):
-    """Create a complete VM deployment using the new Pydantic-based protocol.
+    """Create a complete VM deployment using the Pydantic-based protocol.
     
-    Phase 6: This endpoint replaces schema-driven validation with Pydantic models.
-    It orchestrates VM creation, disk attachment, NIC attachment, and guest 
-    configuration using the new JobRequest/JobResult protocol.
+    This endpoint orchestrates VM creation, disk attachment, NIC attachment, and guest 
+    configuration using the JobRequest/JobResult protocol with strict Pydantic validation.
     
     The workflow:
     1. Validate input with Pydantic (ManagedDeploymentRequest)
-    2. Create VM via new protocol (vm.create operation)
-    3. Create Disk via new protocol (disk.create operation)
-    4. Create NIC via new protocol (nic.create operation)
+    2. Create VM via vm.create operation
+    3. Create Disk via disk.create operation
+    4. Create NIC via nic.create operation
     5. Generate guest config dict using generate_guest_config()
     6. Send guest config through existing KVP mechanism
     
@@ -1407,14 +1406,11 @@ async def submit_noop_test(
     request: NoopTestRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Execute a noop-test operation using the new protocol.
+    """Execute a noop-test operation using the JobRequest/JobResult protocol.
     
-    Phase 3: This is the first endpoint to use the new JobRequest/JobResult
-    envelope protocol. It validates the round-trip communication between
-    server and host agent without performing any actual operations.
-    
-    This endpoint demonstrates that the new protocol works end-to-end before
-    converting any production operations.
+    This endpoint validates the round-trip communication between server and host agent
+    without performing any actual operations. Useful for testing connectivity and
+    protocol compatibility.
     """
     
     if not host_deployment_service.is_provisioning_available():
@@ -1833,7 +1829,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     client_id = str(uuid.uuid4())
     client_ip = websocket.client.host if websocket.client else "unknown"
-    connection_start = datetime.utcnow()
+    connection_start = datetime.now(timezone.utc)
     MAX_CONNECTION_TIME = settings.websocket_timeout
 
     try:
@@ -1889,7 +1885,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             try:
                 # Check connection time limit
-                connection_age = (datetime.utcnow() -
+                connection_age = (datetime.now(timezone.utc) -
                                   connection_start).total_seconds()
                 if connection_age > MAX_CONNECTION_TIME:
                     logger.info(

@@ -1,11 +1,8 @@
-"""Guest configuration generator for Phase 5.
+"""Guest configuration generator.
 
-This module implements the new guest config generation logic that replaces
-the schema-based auto-composition approach. It takes Pydantic models
-(VmSpec, NicSpec, DiskSpec) and generates a guest configuration dictionary.
-
-Phase 5: This generator is implemented and tested but NOT yet used in
-production flows. The old schema-based system continues to be used.
+This module generates guest configuration dictionaries from Pydantic models
+for VM provisioning operations. The generated configuration is encrypted and
+transmitted to the guest VM via Hyper-V KVP for OS-level customization.
 """
 from typing import Dict, Any, Optional
 import logging

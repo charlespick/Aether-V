@@ -1,7 +1,7 @@
-"""Phase 5 Tests: Guest Configuration Generator
+"""Tests: Guest Configuration Generator
 
-This test suite validates the new guest config generation logic that
-replaces the schema-based auto-composition approach.
+This test suite validates guest configuration generation from Pydantic models
+for VM provisioning operations.
 
 Tests cover:
 1. Minimal guest config (local admin only)
@@ -11,8 +11,8 @@ Tests cover:
 5. Combined scenarios (domain join + static IP, etc.)
 6. Edge cases and validation
 
-Phase 5 Note: These tests validate the new generator in isolation.
-The generator is NOT yet used in production flows - that happens in Phase 6.
+The generator creates guest configuration dictionaries that are encrypted and
+transmitted to guest VMs via Hyper-V KVP for OS-level customization.
 """
 import pytest
 from pydantic import ValidationError

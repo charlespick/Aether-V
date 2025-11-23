@@ -97,7 +97,7 @@ Interactive API docs: `/docs` (Swagger UI), `/redoc`
 ## Extending & Customizing
 
 - Extend provisioning scripts (`ProvisioningService.sh/ps1`) for custom logic.
-- Add new fields or phases as needed.
+- Add new fields or features as needed.
 - Integrate with automation tools via API or future Terraform provider.
 
 ## Security

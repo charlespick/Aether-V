@@ -1,9 +1,9 @@
 # Main-NewProtocol.ps1
-# Phase 4: New protocol entry point with full resource operations
+# Resource operation entry point for all VM, Disk, and NIC operations
 #
 # This script accepts a JSON job envelope via STDIN and returns a JSON job result.
-# Phase 4 implements all VM, Disk, and NIC create/update/delete operations.
-# Guest configuration and managed deployment remain on old protocol.
+# Implements all VM, Disk, and NIC create/update/delete operations using the
+# standardized JobRequest/JobResult envelope protocol.
 #
 # Expected input envelope format:
 # {

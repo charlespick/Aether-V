@@ -1,4 +1,4 @@
-"""Phase 2 Tests: New JSON Envelope Protocol
+"""Tests: New JSON Envelope Protocol
 
 This test suite validates the new JSON envelope protocol components introduced
 in Phase 2. These tests ensure that:
@@ -295,7 +295,7 @@ class TestNewProtocolStubEndToEnd:
     def test_stub_vm_create_operation(self, stub_script_path, pwsh_available):
         """Test vm.create operation envelope handling.
 
-        Phase 4 update: vm.create is now a real implementation, not a stub.
+        Updated: vm.create is now a real implementation, not a stub.
         This test validates envelope parsing when config is missing.
         """
         # Create job request
@@ -322,7 +322,7 @@ class TestNewProtocolStubEndToEnd:
         assert error is None, f"Failed to parse result: {error}"
         assert envelope is not None
 
-        # Phase 4: vm.create is now a real implementation
+        # Updated: vm.create is now a real implementation
         # Without host config, it should return an error
         # With host config, it would succeed
         # Either way, envelope structure should be correct
@@ -338,7 +338,7 @@ class TestNewProtocolStubEndToEnd:
     def test_stub_disk_create_operation(self, stub_script_path, pwsh_available):
         """Test disk.create operation envelope handling.
 
-        Phase 4 update: disk.create is now a real implementation, not a stub.
+        Updated: disk.create is now a real implementation, not a stub.
         This test validates envelope parsing when config is missing.
         """
         disk_spec = DiskSpec(
@@ -368,7 +368,7 @@ class TestNewProtocolStubEndToEnd:
     def test_stub_nic_create_operation(self, stub_script_path, pwsh_available):
         """Test nic.create operation envelope handling.
 
-        Phase 4 update: nic.create is now a real implementation, not a stub.
+        Updated: nic.create is now a real implementation, not a stub.
         This test validates envelope parsing when config is missing.
         """
         nic_spec = NicSpec(
@@ -442,7 +442,7 @@ class TestNewProtocolStubEndToEnd:
     def test_stub_returns_logs(self, stub_script_path, pwsh_available):
         """Test that operations return logs in the result.
 
-        Phase 4 update: Logs may vary based on operation success/failure.
+        Updated: Logs may vary based on operation success/failure.
         """
         vm_spec = VmSpec(vm_name="test-vm", gb_ram=4, cpu_cores=2)
         request = create_job_request_from_vm_spec(vm_spec)
