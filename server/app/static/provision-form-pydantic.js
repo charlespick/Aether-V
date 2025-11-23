@@ -310,6 +310,19 @@ class ProvisionFormPydantic {
                             </div>
                             <p class="field-description">Secondary IPv4 DNS server (optional)</p>
                         </div>
+
+                        <div class="schema-field">
+                            <div class="field-header">
+                                <div class="field-title">
+                                    <label for="guest-net-dnssuffix" class="field-label">DNS Search Suffix</label>
+                                </div>
+                            </div>
+                            <div class="field-control">
+                                <input type="text" id="guest-net-dnssuffix" name="guest_net_dnssuffix" 
+                                       placeholder="e.g., example.com" />
+                            </div>
+                            <p class="field-description">DNS search suffix for the guest network configuration (optional)</p>
+                        </div>
                     </div>
 
                     <!-- Guest Configuration -->
@@ -415,6 +428,51 @@ class ProvisionFormPydantic {
                             <p class="field-description">Organizational unit path for the computer account</p>
                         </div>
                     </div>
+
+                    <!-- Ansible Configuration (optional group) -->
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="enable-ansible" class="field-label">Ansible Configuration</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <label class="checkbox-field">
+                                <input type="checkbox" id="enable-ansible" />
+                                <span>Configure Ansible SSH access</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="ansible-fields" style="display: none;">
+                        <div class="schema-field">
+                            <div class="field-header">
+                                <div class="field-title">
+                                    <label for="cnf-ansible-ssh-user" class="field-label">Ansible SSH Username</label>
+                                    <span class="field-required-pill conditional-required">Required</span>
+                                </div>
+                            </div>
+                            <div class="field-control">
+                                <input type="text" id="cnf-ansible-ssh-user" name="cnf_ansible_ssh_user" 
+                                       placeholder="e.g., ansible" />
+                            </div>
+                            <p class="field-description">Username used by Ansible for SSH automation</p>
+                        </div>
+
+                        <div class="schema-field">
+                            <div class="field-header">
+                                <div class="field-title">
+                                    <label for="cnf-ansible-ssh-key" class="field-label">Ansible SSH Public Key</label>
+                                    <span class="field-required-pill conditional-required">Required</span>
+                                </div>
+                            </div>
+                            <div class="field-control">
+                                <textarea id="cnf-ansible-ssh-key" name="cnf_ansible_ssh_key" rows="4"
+                                          placeholder="ssh-rsa AAAAB3NzaC1yc2E..."></textarea>
+                            </div>
+                            <p class="field-description">Public key provided to the guest for Ansible SSH access</p>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="form-actions">
@@ -460,6 +518,21 @@ class ProvisionFormPydantic {
             const domainJoinInputs = domainJoinFields.querySelectorAll('input');
             domainJoinInputs.forEach(input => {
                 input.required = enableDomainJoin;
+            });
+        });
+
+        // Ansible Configuration toggle
+        const enableAnsibleCheckbox = document.getElementById('enable-ansible');
+        const ansibleFields = document.getElementById('ansible-fields');
+        
+        enableAnsibleCheckbox?.addEventListener('change', () => {
+            const enableAnsible = enableAnsibleCheckbox.checked;
+            ansibleFields.style.display = enableAnsible ? 'block' : 'none';
+            
+            // Toggle required attributes on ansible fields
+            const ansibleInputs = ansibleFields.querySelectorAll('input, textarea');
+            ansibleInputs.forEach(input => {
+                input.required = enableAnsible;
             });
         });
     }
@@ -532,6 +605,12 @@ class ProvisionFormPydantic {
             payload.guest_config.guest_v4_defaultgw = formData.get('guest_v4_defaultgw');
             payload.guest_config.guest_v4_dns1 = formData.get('guest_v4_dns1');
             payload.guest_config.guest_v4_dns2 = formData.get('guest_v4_dns2') || null;
+            
+            // Add DNS suffix if provided (can be set with or without static IP)
+            const dnsSuffix = formData.get('guest_net_dnssuffix');
+            if (dnsSuffix) {
+                payload.guest_config.guest_net_dnssuffix = dnsSuffix;
+            }
         }
 
         // Add domain join config if enabled
@@ -541,6 +620,13 @@ class ProvisionFormPydantic {
             payload.guest_config.guest_domain_joinuid = formData.get('guest_domain_joinuid');
             payload.guest_config.guest_domain_joinpw = formData.get('guest_domain_joinpw');
             payload.guest_config.guest_domain_joinou = formData.get('guest_domain_joinou');
+        }
+
+        // Add Ansible config if enabled
+        const enableAnsible = document.getElementById('enable-ansible').checked;
+        if (enableAnsible) {
+            payload.guest_config.cnf_ansible_ssh_user = formData.get('cnf_ansible_ssh_user');
+            payload.guest_config.cnf_ansible_ssh_key = formData.get('cnf_ansible_ssh_key');
         }
 
         try {
