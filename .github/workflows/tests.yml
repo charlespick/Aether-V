@@ -109,16 +109,16 @@ jobs:
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install -r requirements.txt pytest
 
-      - name: Run Phase 2 protocol tests
+      - name: Run resource operations round-trip tests
         working-directory: server
         env:
           PYTHONPATH: ${{ github.workspace }}/server
         run: |
-          .venv/bin/pytest tests/test_phase2_new_protocol.py -v
+          .venv/bin/pytest tests/test_resource_operations.py -v
 
-      - name: Run Phase 3 noop-test round-trip tests
+      - name: Run noop-test round-trip tests
         working-directory: server
         env:
           PYTHONPATH: ${{ github.workspace }}/server
         run: |
-          .venv/bin/pytest tests/test_phase3_noop_test.py -v
+          .venv/bin/pytest tests/test_noop_operations.py -v
