@@ -144,7 +144,6 @@ class VMDeleteRequest(BaseModel):
 
 class ResourceCreateRequest(BaseModel):
     """Base class for resource creation requests."""
-    schema_version: int = Field(..., description="Version of the schema used")
     values: Dict[str, Any] = Field(
         default_factory=dict,
         description="Field values keyed by schema field id",
@@ -198,11 +197,11 @@ class VMInitializationRequest(BaseModel):
 
 class NoopTestRequest(BaseModel):
     """Request to execute a noop-test job using the JobRequest envelope protocol.
-    
+
     Validates the round-trip communication between server and host agent
     without performing actual operations.
     """
-    
+
     target_host: str = Field(
         ...,
         description="Hostname of the connected Hyper-V host that will execute the test",
@@ -287,21 +286,6 @@ class NotificationsResponse(BaseModel):
     notifications: List[Notification]
     total_count: int
     unread_count: int
-
-
-class JobSubmission(BaseModel):
-    """Schema-driven job submission payload."""
-
-    schema_version: int = Field(...,
-                                description="Version of the job schema used")
-    values: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Field values keyed by schema field id",
-    )
-    target_host: Optional[str] = Field(
-        default=None,
-        description="Hostname of the connected Hyper-V host that will execute the job",
-    )
 
 
 class RemoteTaskPoolMetrics(BaseModel):

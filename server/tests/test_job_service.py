@@ -22,7 +22,6 @@ try:
         Notification,
         NotificationCategory,
         NotificationLevel,
-        JobSubmission,
         VMDeleteRequest,
     )
     from app.core.pydantic_models import (

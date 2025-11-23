@@ -114,3 +114,60 @@ test('overlay.js disk and NIC overlays should use Pydantic-based forms', () => {
     'NicCreateOverlay should not send schema_version in API request'
   );
 });
+
+test('overlay.js VM edit overlay should not reference schema API', () => {
+  const content = readFile('overlay.js');
+  
+  const vmEditClass = extractClass(content, 'VMEditOverlay');
+  
+  // Ensure schema API endpoints are not referenced
+  assert.doesNotMatch(
+    vmEditClass,
+    /\/api\/v1\/schema\/vm-create/,
+    'VMEditOverlay should not reference /api/v1/schema/vm-create'
+  );
+  
+  assert.doesNotMatch(
+    vmEditClass,
+    /fetchSchema/,
+    'VMEditOverlay should not have fetchSchema method'
+  );
+});
+
+test('overlay.js VM edit overlay should use Pydantic-based form', () => {
+  const content = readFile('overlay.js');
+  
+  const vmEditClass = extractClass(content, 'VMEditOverlay');
+  
+  // Verify VMEditOverlay renders hardcoded form fields based on VmSpec model
+  assert.match(
+    vmEditClass,
+    /name="cpu_cores"/,
+    'VMEditOverlay should render hardcoded cpu_cores field'
+  );
+  
+  assert.match(
+    vmEditClass,
+    /name="gb_ram"/,
+    'VMEditOverlay should render hardcoded gb_ram field'
+  );
+  
+  assert.match(
+    vmEditClass,
+    /name="storage_class"/,
+    'VMEditOverlay should render hardcoded storage_class field'
+  );
+  
+  assert.match(
+    vmEditClass,
+    /name="vm_clustered"/,
+    'VMEditOverlay should render hardcoded vm_clustered field'
+  );
+  
+  // Verify form doesn't send schema_version
+  assert.doesNotMatch(
+    vmEditClass,
+    /schema_version/,
+    'VMEditOverlay should not send schema_version in API request'
+  );
+});

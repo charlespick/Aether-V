@@ -25,7 +25,6 @@ from ..core.models import (
     InventoryResponse,
     HealthResponse,
     NotificationsResponse,
-    JobSubmission,
     AboutResponse,
     BuildInfo,
     VMState,
@@ -100,7 +99,7 @@ def _decode_logout_token(packed_token: Optional[str]) -> Optional[str]:
         return None
 
     if packed_token.startswith(_LOGOUT_TOKEN_PREFIX):
-        payload = packed_token[len(_LOGOUT_TOKEN_PREFIX) :]
+        payload = packed_token[len(_LOGOUT_TOKEN_PREFIX):]
         try:
             compressed = base64.urlsafe_b64decode(payload.encode("ascii"))
             return zlib.decompress(compressed).decode("utf-8")
@@ -109,6 +108,8 @@ def _decode_logout_token(packed_token: Optional[str]) -> Optional[str]:
             return None
 
     return packed_token
+
+
 router = APIRouter()
 
 
@@ -313,7 +314,8 @@ def _build_idp_logout_url(
     """Construct an IdP logout URL when single logout is supported."""
 
     context = logout_context or {}
-    endpoint = context.get("end_session_endpoint") or get_end_session_endpoint()
+    endpoint = context.get(
+        "end_session_endpoint") or get_end_session_endpoint()
     if not endpoint:
         return None
 
@@ -621,7 +623,7 @@ async def create_vm_resource(
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Create a new virtual machine (without disk or NIC)."""
-    
+
     # Validate using Pydantic instead of schema
     try:
         vm_spec = VmSpec(**request.values)
@@ -643,7 +645,8 @@ async def create_vm_resource(
 
     target_host = request.target_host.strip()
     connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    host_match = next(
+        (host for host in connected_hosts if host.hostname == target_host), None)
     if not host_match:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -667,14 +670,14 @@ async def create_vm_resource(
         },
         "fields": vm_spec.model_dump(),
     }
-    
+
     job = await job_service.submit_resource_job(
         job_type="create_vm",
         schema_id="vm-create",
         payload=job_definition,
         target_host=target_host,
     )
-    
+
     return JobResult(
         job_id=job.job_id,
         status="queued",
@@ -693,7 +696,7 @@ async def update_vm_resource(
     """Update an existing virtual machine."""
 
     vm = _get_vm_or_404(vm_id)
-    
+
     # Validate using Pydantic instead of schema
     try:
         vm_spec = VmSpec(**request.values)
@@ -789,7 +792,7 @@ async def create_disk_resource(
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Create and attach a new disk to an existing VM."""
-    
+
     # Validate using Pydantic instead of schema
     try:
         disk_spec = DiskSpec(**request.values)
@@ -811,7 +814,8 @@ async def create_disk_resource(
 
     target_host = request.target_host.strip()
     connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    host_match = next(
+        (host for host in connected_hosts if host.hostname == target_host), None)
     if not host_match:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -840,14 +844,14 @@ async def create_disk_resource(
         },
         "fields": disk_spec.model_dump(),
     }
-    
+
     job = await job_service.submit_resource_job(
         job_type="create_disk",
         schema_id="disk-create",
         payload=job_definition,
         target_host=target_host,
     )
-    
+
     return JobResult(
         job_id=job.job_id,
         status="queued",
@@ -1029,7 +1033,7 @@ async def create_nic_resource(
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Create and attach a new network adapter to an existing VM."""
-    
+
     # Validate using Pydantic instead of schema
     try:
         nic_spec = NicSpec(**request.values)
@@ -1051,7 +1055,8 @@ async def create_nic_resource(
 
     target_host = request.target_host.strip()
     connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    host_match = next(
+        (host for host in connected_hosts if host.hostname == target_host), None)
     if not host_match:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1080,14 +1085,14 @@ async def create_nic_resource(
         },
         "fields": nic_spec.model_dump(),
     }
-    
+
     job = await job_service.submit_resource_job(
         job_type="create_nic",
         schema_id="nic-create",
         payload=job_definition,
         target_host=target_host,
     )
-    
+
     return JobResult(
         job_id=job.job_id,
         status="queued",
@@ -1338,10 +1343,10 @@ async def create_managed_deployment_v2(
     user: dict = Depends(require_permission(Permission.WRITER))
 ):
     """Create a complete VM deployment using the Pydantic-based protocol.
-    
+
     This endpoint orchestrates VM creation, disk attachment, NIC attachment, and guest 
     configuration using the JobRequest/JobResult protocol with strict Pydantic validation.
-    
+
     The workflow:
     1. Validate input with Pydantic (ManagedDeploymentRequest)
     2. Create VM via vm.create operation
@@ -1349,11 +1354,11 @@ async def create_managed_deployment_v2(
     4. Create NIC via nic.create operation
     5. Generate guest config dict using generate_guest_config()
     6. Send guest config through existing KVP mechanism
-    
+
     This endpoint bypasses schemas entirely. The request is validated by Pydantic
     and the component operations are executed via the new protocol.
     """
-    
+
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
         raise HTTPException(
@@ -1363,7 +1368,7 @@ async def create_managed_deployment_v2(
                 "agent_deployment": summary,
             },
         )
-    
+
     # Ensure the target host is connected
     target_host = request.target_host.strip()
     if not target_host:
@@ -1371,15 +1376,16 @@ async def create_managed_deployment_v2(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Target host is required",
         )
-    
+
     connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
+    host_match = next(
+        (host for host in connected_hosts if host.hostname == target_host), None)
     if not host_match:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Host {target_host} is not currently connected",
         )
-    
+
     # Check if VM already exists
     vm_name = request.vm_spec.vm_name
     existing_vm = inventory_service.get_vm(target_host, vm_name)
@@ -1388,12 +1394,12 @@ async def create_managed_deployment_v2(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"VM {vm_name} already exists on host {target_host}",
         )
-    
+
     # Submit the managed deployment job using new protocol
     job = await job_service.submit_managed_deployment_v2_job(
         request=request,
     )
-    
+
     return JobResult(
         job_id=job.job_id,
         status="queued",
@@ -1407,12 +1413,12 @@ async def submit_noop_test(
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Execute a noop-test operation using the JobRequest/JobResult protocol.
-    
+
     This endpoint validates the round-trip communication between server and host agent
     without performing any actual operations. Useful for testing connectivity and
     protocol compatibility.
     """
-    
+
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
         raise HTTPException(
@@ -1422,17 +1428,17 @@ async def submit_noop_test(
                 "agent_deployment": summary,
             },
         )
-    
+
     # Ensure the target host is connected
     _ensure_connected_host(request.target_host)
-    
+
     # Submit the noop-test job
     job = await job_service.submit_noop_test_job(
         target_host=request.target_host,
         resource_spec=request.resource_spec,
         correlation_id=request.correlation_id,
     )
-    
+
     return JobResult(
         job_id=job.job_id,
         status="queued",
@@ -1619,7 +1625,8 @@ async def auth_callback(request: Request):
         if access_token:
             try:
                 user_info = await authenticate_with_token(access_token, client_ip)
-                logger.debug("Access token provided sufficient permissions for session establishment")
+                logger.debug(
+                    "Access token provided sufficient permissions for session establishment")
             except HTTPException as exc:
                 validation_errors.append(f"access_token:{exc.detail}")
                 logger.warning(
@@ -1628,7 +1635,8 @@ async def auth_callback(request: Request):
                     exc.detail,
                 )
             except Exception as exc:
-                validation_errors.append(f"access_token_error:{type(exc).__name__}")
+                validation_errors.append(
+                    f"access_token_error:{type(exc).__name__}")
                 logger.error(
                     "Access token validation error during OAuth callback from %s: %s",
                     client_ip,
@@ -1637,7 +1645,8 @@ async def auth_callback(request: Request):
 
         if not user_info and id_token:
             try:
-                logger.info("Falling back to ID token validation for OAuth callback")
+                logger.info(
+                    "Falling back to ID token validation for OAuth callback")
                 claims = await validate_oidc_token(id_token)
                 enriched = enrich_identity(claims)
                 if not enriched.get("permissions"):
@@ -1654,7 +1663,8 @@ async def auth_callback(request: Request):
                     exc.detail,
                 )
             except Exception as exc:
-                validation_errors.append(f"id_token_error:{type(exc).__name__}")
+                validation_errors.append(
+                    f"id_token_error:{type(exc).__name__}")
                 logger.error(
                     "ID token validation error during OAuth callback from %s: %s",
                     client_ip,
@@ -1662,7 +1672,8 @@ async def auth_callback(request: Request):
                 )
 
         if not user_info:
-            detail = "; ".join(validation_errors) if validation_errors else "No tokens available"
+            detail = "; ".join(
+                validation_errors) if validation_errors else "No tokens available"
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Unable to establish session: {detail}",
@@ -1773,7 +1784,8 @@ async def get_auth_token(request: Request):
                 # Session is invalid, clear it
                 request.session.pop("user_info", None)
                 # Log the stack trace for debugging, but do not return details to the user
-                logger.error("Exception during session validation:\n%s", traceback.format_exc())
+                logger.error(
+                    "Exception during session validation:\n%s", traceback.format_exc())
                 response_data = {"authenticated": False,
                                  "reason": "Session error"}
     # Create response with cache control headers
@@ -1798,10 +1810,12 @@ async def logout(request: Request):
 
     idp_logout_url: Optional[str] = None
     if request.method == "POST":
-        idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+        idp_logout_url = _build_idp_logout_url(
+            request, logout_context, post_logout_redirect)
     elif logout_context:
         # Treat GET requests with stored logout context as user-initiated logouts.
-        idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+        idp_logout_url = _build_idp_logout_url(
+            request, logout_context, post_logout_redirect)
 
     # Clear session data regardless of logout method
     request.session.clear()
