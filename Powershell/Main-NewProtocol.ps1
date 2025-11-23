@@ -202,12 +202,17 @@ end {
     }
 
     # Main execution
+    # Initialize correlation_id before try block so it's available in catch
+    $correlationId = $null
+    
     try {
         # Read and parse the job envelope
         $envelope = Read-JobEnvelope -PipelinedInput $script:CollectedInput
 
         # Extract correlation_id early for error handling
-        $correlationId = $envelope['correlation_id']
+        if ($envelope.ContainsKey('correlation_id')) {
+            $correlationId = $envelope['correlation_id']
+        }
         
         # Validate required fields
         if (-not $envelope.ContainsKey('operation')) {
@@ -559,11 +564,11 @@ end {
             $logs += "Disk created and attached successfully"
             
             $resultData = @{
-                disk_id    = $diskId
-                disk_path  = $vhdxPath
-                vm_id      = $vmId
-                vm_name    = $vmName
-                status     = "created"
+                disk_id   = $diskId
+                disk_path = $vhdxPath
+                vm_id     = $vmId
+                vm_name   = $vmName
+                status    = "created"
             }
 
             Write-JobResult `
