@@ -31,7 +31,6 @@ from .services.job_service import job_service
 from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
 from .services.websocket_service import websocket_manager
-from .core.job_schema import load_schema_by_id, SchemaValidationError
 from .services.kerberos_manager import (
     initialize_kerberos,
     cleanup_kerberos,
@@ -73,15 +72,6 @@ async def lifespan(app: FastAPI):
     logger.info(f"Version: {build_metadata.version}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
-
-    try:
-        # Load component schemas to validate they exist
-        load_schema_by_id("vm-create")
-        load_schema_by_id("disk-create")
-        load_schema_by_id("nic-create")
-    except SchemaValidationError as exc:
-        logger.error("Failed to load component schemas: %s", "; ".join(exc.errors))
-        raise
 
     config_result = run_config_checks()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import logging
 import re
@@ -15,7 +16,6 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from xml.etree import ElementTree
 
 from ..core.config import settings
-from ..core.job_schema import redact_job_parameters
 from ..core.models import Job, JobStatus, VMDeleteRequest, NotificationLevel
 from ..core.job_envelope import create_job_request, parse_job_result
 from ..core.pydantic_models import (
@@ -37,15 +37,51 @@ logger = logging.getLogger(__name__)
 
 # Job type constants for categorization
 LONG_RUNNING_JOB_TYPES = {
-    "delete_vm", "create_vm", "managed_deployment", "managed_deployment_v2", "initialize_vm"
+    "delete_vm", "create_vm", "managed_deployment_v2", "initialize_vm"
 }
 
 SERIALIZED_JOB_TYPES = {
     "delete_vm", "create_vm", "create_disk",
     "create_nic", "update_vm", "update_disk",
     "update_nic", "delete_disk", "delete_nic", "initialize_vm",
-    "managed_deployment", "managed_deployment_v2"
+    "managed_deployment_v2"
 }
+
+
+def _redact_sensitive_parameters(
+    parameters: Optional[Dict[str, Any]],
+    replacement: str = "••••••",
+) -> Dict[str, Any]:
+    """Return a copy of job parameters with sensitive values redacted.
+    
+    This replaces the schema-based redaction with a simple list of known
+    sensitive field names.
+    """
+    if parameters is None:
+        return {}
+    
+    # Known sensitive field names from Pydantic models
+    sensitive_fields = {
+        "guest_la_pw",
+        "guest_domain_joinpw",
+        "cnf_ansible_ssh_key",
+    }
+    
+    sanitized = copy.deepcopy(parameters)
+    
+    def _redact(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in sensitive_fields and item is not None:
+                    value[key] = replacement
+                else:
+                    _redact(item)
+        elif isinstance(value, list):
+            for element in value:
+                _redact(element)
+    
+    _redact(sanitized)
+    return sanitized
 
 
 class _PowerShellStreamDecoder:
@@ -222,7 +258,7 @@ class JobService:
 
         job_copy = job.model_copy(deep=True)
         try:
-            job_copy.parameters = redact_job_parameters(job_copy.parameters)
+            job_copy.parameters = _redact_sensitive_parameters(job_copy.parameters)
         except Exception:  # pragma: no cover - defensive logging
             logger.exception(
                 "Failed to redact job parameters for %s", job.job_id)
@@ -503,8 +539,6 @@ class JobService:
                     await self._execute_delete_disk_job(job)
                 elif job.job_type == "delete_nic":
                     await self._execute_delete_nic_job(job)
-                elif job.job_type == "managed_deployment":
-                    await self._execute_managed_deployment_job(job)
                 elif job.job_type == "managed_deployment_v2":
                     await self._execute_managed_deployment_v2_job(job)
                 elif job.job_type == "initialize_vm":
@@ -1410,176 +1444,6 @@ class JobService:
         job.parameters["result_data"] = envelope.data
         job.parameters["result_status"] = envelope.status
         await self._update_job(job.job_id, parameters=job.parameters)
-
-    async def _execute_managed_deployment_job(self, job: Job) -> None:
-        """Execute a managed deployment via component sub-jobs instead of direct scripts."""
-
-        from ..core.job_schema import load_schema_by_id
-
-        definition = job.parameters.get("definition", {})
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError(
-                "Managed deployment job is missing a target host")
-
-        fields = definition.get("fields", {})
-        schema_info = definition.get("schema", {})
-        schema_version = schema_info.get("version", 1)
-        component_versions = schema_info.get("components", {})
-        vm_schema_version = component_versions.get("vm-create", schema_version)
-        disk_schema_version = component_versions.get(
-            "disk-create", schema_version)
-        nic_schema_version = component_versions.get(
-            "nic-create", schema_version)
-
-        await self._append_job_output(
-            job.job_id,
-            "Managed deployment is orchestrating component jobs. See sub-job list for progress.",
-        )
-
-        await self._validate_job_against_host_config(definition, target_host)
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for deployment")
-
-        vm_schema = load_schema_by_id("vm-create")
-        disk_schema = load_schema_by_id("disk-create")
-        nic_schema = load_schema_by_id("nic-create")
-
-        vm_hardware_fields: Dict[str, Any] = {}
-        vm_guest_config_fields: Dict[str, Any] = {}
-        for field in vm_schema.get("fields", []):
-            field_id = field.get("id")
-            if field_id in fields:
-                if field.get("guest_config", False):
-                    vm_guest_config_fields[field_id] = fields[field_id]
-                else:
-                    vm_hardware_fields[field_id] = fields[field_id]
-
-        nic_hardware_fields: Dict[str, Any] = {}
-        nic_guest_config_fields: Dict[str, Any] = {}
-        for field in nic_schema.get("fields", []):
-            field_id = field.get("id")
-            if field_id in fields:
-                if field.get("guest_config", False):
-                    nic_guest_config_fields[field_id] = fields[field_id]
-                elif field_id != "vm_id":
-                    nic_hardware_fields[field_id] = fields[field_id]
-
-        vm_definition = {
-            "schema": {"id": "vm-create", "version": vm_schema_version},
-            "fields": vm_hardware_fields,
-        }
-
-        vm_job = await self._queue_child_job(
-            job,
-            job_type="create_vm",
-            schema_id="vm-create",
-            payload=vm_definition,
-        )
-        vm_job_result = await self._wait_for_child_job_completion(job.job_id, vm_job.job_id)
-        if vm_job_result.status != JobStatus.COMPLETED:
-            raise RuntimeError(
-                f"VM creation job {vm_job.job_id} failed: {vm_job_result.error or 'unknown error'}"
-            )
-
-        vm_id = self._extract_vm_id_from_output(vm_job_result.output)
-        if not vm_id:
-            raise RuntimeError("Unable to parse VM ID from VM creation output")
-
-        job.parameters["vm_id"] = vm_id
-        await self._update_job(job.job_id, parameters=job.parameters)
-
-        vm_name = vm_hardware_fields.get("vm_name")
-
-        disk_fields: Dict[str, Any] = {}
-        for field in disk_schema.get("fields", []):
-            field_id = field.get("id")
-            if field_id == "vm_id":
-                continue
-            if field_id in fields:
-                disk_fields[field_id] = fields[field_id]
-
-        # Create disk if either image_name or disk_size_gb is provided
-        has_image = bool(disk_fields.get("image_name"))
-        has_size = disk_fields.get("disk_size_gb") is not None
-        if has_image or has_size:
-            disk_fields["vm_id"] = vm_id
-
-            disk_definition = {
-                "schema": {"id": "disk-create", "version": disk_schema_version},
-                "fields": disk_fields,
-            }
-
-            disk_job = await self._queue_child_job(
-                job,
-                job_type="create_disk",
-                schema_id="disk-create",
-                payload=disk_definition,
-            )
-            disk_job_result = await self._wait_for_child_job_completion(
-                job.job_id, disk_job.job_id
-            )
-            if disk_job_result.status != JobStatus.COMPLETED:
-                raise RuntimeError(
-                    f"Disk creation job {disk_job.job_id} failed: {disk_job_result.error or 'unknown error'}"
-                )
-
-        if nic_hardware_fields.get("network"):
-            nic_hardware_fields["vm_id"] = vm_id
-
-            nic_definition = {
-                "schema": {"id": "nic-create", "version": nic_schema_version},
-                "fields": nic_hardware_fields,
-            }
-
-            nic_job = await self._queue_child_job(
-                job,
-                job_type="create_nic",
-                schema_id="nic-create",
-                payload=nic_definition,
-            )
-            nic_job_result = await self._wait_for_child_job_completion(
-                job.job_id, nic_job.job_id
-            )
-            if nic_job_result.status != JobStatus.COMPLETED:
-                raise RuntimeError(
-                    f"NIC creation job {nic_job.job_id} failed: {nic_job_result.error or 'unknown error'}"
-                )
-
-        all_guest_config_fields = {
-            **vm_guest_config_fields, **nic_guest_config_fields}
-        if all_guest_config_fields:
-            init_fields = {
-                "vm_id": vm_id,
-                "vm_name": vm_name,
-                **all_guest_config_fields,
-            }
-
-            init_job_definition = {
-                "schema": {"id": "initialize-vm", "version": vm_schema_version},
-                "fields": init_fields,
-            }
-
-            init_job = await self._queue_child_job(
-                job,
-                job_type="initialize_vm",
-                schema_id="initialize-vm",
-                payload=init_job_definition,
-            )
-            init_job_result = await self._wait_for_child_job_completion(
-                job.job_id, init_job.job_id
-            )
-            if init_job_result.status != JobStatus.COMPLETED:
-                raise RuntimeError(
-                    f"VM initialization job {init_job.job_id} failed: {init_job_result.error or 'unknown error'}"
-                )
-
-        await self._append_job_output(
-            job.job_id,
-            f"Managed deployment complete. VM '{vm_name or vm_id}' fully deployed on {target_host}.",
-        )
 
     async def _execute_managed_deployment_v2_job(self, job: Job) -> None:
         """Execute a managed deployment using the new Pydantic-based protocol.

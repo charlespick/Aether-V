@@ -38,7 +38,13 @@ from ..core.models import (
     NoopTestRequest,
     JobResult,
 )
-from ..core.pydantic_models import ManagedDeploymentRequest
+from ..core.pydantic_models import (
+    ManagedDeploymentRequest,
+    VmSpec,
+    DiskSpec,
+    NicSpec,
+    GuestConfigSpec,
+)
 from ..core.auth import (
     Permission,
     authenticate_with_token,
@@ -54,11 +60,6 @@ from ..core.auth import (
 )
 from ..core.config import settings, get_config_validation_result
 from ..core.build_info import build_metadata
-from ..core.job_schema import (
-    SchemaValidationError,
-    load_schema_by_id,
-    validate_job_submission,
-)
 from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
 from ..services.host_deployment_service import host_deployment_service
@@ -183,24 +184,6 @@ def _get_vm_or_404(vm_id: str) -> VM:
             detail=f"VM with ID {vm_id} not found",
         )
     return vm
-
-
-def _build_schema_with_vm_id(schema: Dict[str, object]) -> Dict[str, object]:
-    """Add vm_id to the provided schema for update and initialization flows."""
-
-    schema_copy = copy.deepcopy(schema)
-    field_ids = {field.get("id") for field in schema_copy.get("fields", [])}
-    if "vm_id" not in field_ids:
-        schema_copy.setdefault("fields", []).append(
-            {
-                "id": "vm_id",
-                "type": "string",
-                "required": True,
-                "label": "VM ID",
-                "description": "Hyper-V unique ID for the virtual machine",
-            }
-        )
-    return schema_copy
 
 
 def _find_vm_disk(vm: VM, disk_id: str) -> Optional[VMDisk]:
@@ -639,23 +622,13 @@ async def create_vm_resource(
 ):
     """Create a new virtual machine (without disk or NIC)."""
     
-    schema = load_schema_by_id("vm-create")
-    if request.schema_version != schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": schema.get("version"),
-                "received": request.schema_version,
-            },
-        )
-
+    # Validate using Pydantic instead of schema
     try:
-        validated_values = validate_job_submission(request.values, schema)
-    except SchemaValidationError as exc:
+        vm_spec = VmSpec(**request.values)
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": exc.errors}
+            detail={"errors": [str(exc)]}
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -677,7 +650,7 @@ async def create_vm_resource(
             detail=f"Host {target_host} is not currently connected",
         )
 
-    vm_name = validated_values.get("vm_name")
+    vm_name = vm_spec.vm_name
     if vm_name:
         existing_vm = inventory_service.get_vm(target_host, vm_name)
         if existing_vm:
@@ -686,12 +659,13 @@ async def create_vm_resource(
                 detail=f"VM {vm_name} already exists on host {target_host}",
             )
 
+    # Use the validated Pydantic model's dict for the job payload
     job_definition = {
         "schema": {
             "id": "vm-create",
-            "version": request.schema_version,
+            "version": 1,  # Static version, not schema-based
         },
-        "fields": validated_values,
+        "fields": vm_spec.model_dump(),
     }
     
     job = await job_service.submit_resource_job(
@@ -719,25 +693,14 @@ async def update_vm_resource(
     """Update an existing virtual machine."""
 
     vm = _get_vm_or_404(vm_id)
-    schema = load_schema_by_id("vm-create")
-    if request.schema_version != schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": schema.get("version"),
-                "received": request.schema_version,
-            },
-        )
-
-    augmented_schema = _build_schema_with_vm_id(schema)
+    
+    # Validate using Pydantic instead of schema
     try:
-        values_with_id = {**request.values, "vm_id": vm_id}
-        validated_values = validate_job_submission(values_with_id, augmented_schema)
-    except SchemaValidationError as exc:
+        vm_spec = VmSpec(**request.values)
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": exc.errors},
+            detail={"errors": [str(exc)]},
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -759,10 +722,14 @@ async def update_vm_resource(
 
     _ensure_connected_host(target_host)
 
+    # Add vm_id to the validated values
+    validated_values = vm_spec.model_dump()
+    validated_values["vm_id"] = vm_id
+
     job_definition = {
         "schema": {
             "id": "vm-create",
-            "version": request.schema_version,
+            "version": 1,
         },
         "fields": validated_values,
     }
@@ -823,23 +790,13 @@ async def create_disk_resource(
 ):
     """Create and attach a new disk to an existing VM."""
     
-    schema = load_schema_by_id("disk-create")
-    if request.schema_version != schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": schema.get("version"),
-                "received": request.schema_version,
-            },
-        )
-
+    # Validate using Pydantic instead of schema
     try:
-        validated_values = validate_job_submission(request.values, schema)
-    except SchemaValidationError as exc:
+        disk_spec = DiskSpec(**request.values)
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": exc.errors}
+            detail={"errors": [str(exc)]}
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -862,7 +819,7 @@ async def create_disk_resource(
         )
 
     # Validate that VM exists
-    vm_id = validated_values.get("vm_id")
+    vm_id = disk_spec.vm_id
     if not vm_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -879,9 +836,9 @@ async def create_disk_resource(
     job_definition = {
         "schema": {
             "id": "disk-create",
-            "version": request.schema_version,
+            "version": 1,
         },
-        "fields": validated_values,
+        "fields": disk_spec.model_dump(),
     }
     
     job = await job_service.submit_resource_job(
@@ -961,24 +918,14 @@ async def update_disk_resource(
             detail="Resource ID in payload does not match disk in path",
         )
 
-    schema = load_schema_by_id("disk-create")
-    if request.schema_version != schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": schema.get("version"),
-                "received": request.schema_version,
-            },
-        )
-
+    # Validate using Pydantic instead of schema
     try:
         values_with_vm = {**request.values, "vm_id": vm_id}
-        validated_values = validate_job_submission(values_with_vm, schema)
-    except SchemaValidationError as exc:
+        disk_spec = DiskSpec(**values_with_vm)
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": exc.errors},
+            detail={"errors": [str(exc)]},
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -1000,12 +947,15 @@ async def update_disk_resource(
 
     _ensure_connected_host(target_host)
 
+    validated_values = disk_spec.model_dump()
+    validated_values["resource_id"] = request.resource_id
+
     job_definition = {
         "schema": {
             "id": "disk-create",
-            "version": request.schema_version,
+            "version": 1,
         },
-        "fields": {**validated_values, "resource_id": request.resource_id},
+        "fields": validated_values,
     }
 
     job = await job_service.submit_resource_job(
@@ -1080,23 +1030,13 @@ async def create_nic_resource(
 ):
     """Create and attach a new network adapter to an existing VM."""
     
-    schema = load_schema_by_id("nic-create")
-    if request.schema_version != schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": schema.get("version"),
-                "received": request.schema_version,
-            },
-        )
-
+    # Validate using Pydantic instead of schema
     try:
-        validated_values = validate_job_submission(request.values, schema)
-    except SchemaValidationError as exc:
+        nic_spec = NicSpec(**request.values)
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": exc.errors}
+            detail={"errors": [str(exc)]}
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -1119,7 +1059,7 @@ async def create_nic_resource(
         )
 
     # Validate that VM exists
-    vm_id = validated_values.get("vm_id")
+    vm_id = nic_spec.vm_id
     if not vm_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1136,9 +1076,9 @@ async def create_nic_resource(
     job_definition = {
         "schema": {
             "id": "nic-create",
-            "version": request.schema_version,
+            "version": 1,
         },
-        "fields": validated_values,
+        "fields": nic_spec.model_dump(),
     }
     
     job = await job_service.submit_resource_job(
@@ -1218,24 +1158,14 @@ async def update_nic_resource(
             detail="Resource ID in payload does not match NIC in path",
         )
 
-    schema = load_schema_by_id("nic-create")
-    if request.schema_version != schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": schema.get("version"),
-                "received": request.schema_version,
-            },
-        )
-
+    # Validate using Pydantic instead of schema
     try:
         values_with_vm = {**request.values, "vm_id": vm_id}
-        validated_values = validate_job_submission(values_with_vm, schema)
-    except SchemaValidationError as exc:
+        nic_spec = NicSpec(**values_with_vm)
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": exc.errors},
+            detail={"errors": [str(exc)]},
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -1257,12 +1187,15 @@ async def update_nic_resource(
 
     _ensure_connected_host(target_host)
 
+    validated_values = nic_spec.model_dump()
+    validated_values["resource_id"] = request.resource_id
+
     job_definition = {
         "schema": {
             "id": "nic-create",
-            "version": request.schema_version,
+            "version": 1,
         },
-        "fields": {**validated_values, "resource_id": request.resource_id},
+        "fields": validated_values,
     }
 
     job = await job_service.submit_resource_job(
@@ -1399,140 +1332,6 @@ async def initialize_vm_resource(
     )
 
 
-@router.post("/api/v1/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
-async def create_managed_deployment(
-    submission: JobSubmission,
-    user: dict = Depends(require_permission(Permission.WRITER))
-):
-    """Create a complete VM deployment with disk, network adapter, and guest configuration.
-    
-    The schema for this endpoint is composed client-side from vm-create, disk-create,  
-    and nic-create schemas. The server validates against these component schemas.
-    
-    Guest configuration fields (marked with guest_config: true in vm-create and nic-create)
-    are collected and used during initialization.
-    
-    The managed deployment orchestrates 4 steps:
-    1. Create VM (hardware only)
-    2. Attach disk
-    3. Attach network adapter
-    4. Initialize guest OS (hostname, IP, domain join, etc.)
-    """
-
-    # Load the component schemas for validation
-    # Guest config fields come from vm-create and nic-create (marked with guest_config: true)
-    vm_schema = load_schema_by_id("vm-create")
-    disk_schema = load_schema_by_id("disk-create")
-    nic_schema = load_schema_by_id("nic-create")
-    
-    component_versions = {
-        "vm-create": vm_schema.get("version"),
-        "disk-create": disk_schema.get("version"),
-        "nic-create": nic_schema.get("version"),
-    }
-
-    # Ensure the submitted schema version matches each component schema
-    for schema_id, expected_version in component_versions.items():
-        if submission.schema_version != expected_version:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "message": f"Schema version mismatch for {schema_id}",
-                    "schema_id": schema_id,
-                    "expected": expected_version,
-                    "received": submission.schema_version,
-                },
-            )
-
-    # Validate fields against the appropriate schemas
-    try:
-        # Create a combined field map for validation
-        # Include all fields from vm, disk, and nic schemas
-        # Skip vm_id from disk and nic (used internally, added during orchestration)
-        all_fields = {}
-        for schema in [vm_schema, disk_schema, nic_schema]:
-            for field in schema.get("fields", []):
-                # Skip vm_id from disk/nic schemas (added dynamically during orchestration)
-                if field.get("id") == "vm_id" and schema.get("id") in ["disk-create", "nic-create"]:
-                    continue
-                if field.get("id") not in all_fields:
-                    all_fields[field["id"]] = field
-        
-        # Collect parameter sets from all schemas for validation
-        all_parameter_sets = []
-        for schema in [vm_schema, disk_schema, nic_schema]:
-            all_parameter_sets.extend(schema.get("parameter_sets", []) or [])
-        
-        # Build a temporary combined schema for validation
-        combined_schema = {
-            "version": vm_schema.get("version"),
-            "fields": list(all_fields.values()),
-            "parameter_sets": all_parameter_sets,
-        }
-        
-        validated_values = validate_job_submission(submission.values, combined_schema)
-    except SchemaValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": exc.errors})
-
-    if not host_deployment_service.is_provisioning_available():
-        summary = host_deployment_service.get_startup_summary()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "message": "Provisioning agents are still deploying. VM provisioning is temporarily unavailable.",
-                "agent_deployment": summary,
-            },
-        )
-
-    target_host = (submission.target_host or "").strip()
-    if not target_host:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Target host is required",
-        )
-
-    connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
-    if not host_match:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host {target_host} is not currently connected",
-        )
-
-    vm_name = validated_values.get("vm_name")
-    if vm_name:
-        existing_vm = inventory_service.get_vm(target_host, vm_name)
-        if existing_vm:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"VM {vm_name} already exists on host {target_host}",
-            )
-
-    # Job definition uses a virtual "managed-deployment" schema ID for tracking
-    # but the actual validation happens against the 4 component schemas
-    job_definition = {
-        "schema": {
-            "id": "managed-deployment",
-            "version": submission.schema_version,
-            "components": component_versions,
-        },
-        "fields": validated_values,
-    }
-    
-    job = await job_service.submit_resource_job(
-        job_type="managed_deployment",
-        schema_id="managed-deployment",
-        payload=job_definition,
-        target_host=target_host,
-    )
-    
-    return JobResult(
-        job_id=job.job_id,
-        status="queued",
-        message=f"Managed deployment queued for host {target_host}",
-    )
-
-
 @router.post("/api/v2/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
 async def create_managed_deployment_v2(
     request: ManagedDeploymentRequest,
@@ -1643,21 +1442,6 @@ async def submit_noop_test(
         status="queued",
         message=f"Noop-test job queued for host {request.target_host}",
     )
-
-
-@router.get("/api/v1/schema/{schema_id}", tags=["Schema"])
-async def get_schema_by_id(
-    schema_id: str,
-    user: dict = Depends(require_permission(Permission.READER))
-):
-    """Return a specific job input schema by ID."""
-    try:
-        return load_schema_by_id(schema_id)
-    except SchemaValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc)
-        )
 
 
 @router.get("/api/v1/notifications", response_model=NotificationsResponse, tags=["Notifications"])

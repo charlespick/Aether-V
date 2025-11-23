@@ -1,6 +1,9 @@
 # Host Resources Configuration
 
-This directory contains JSON schemas for configuring Aether-V components.
+This directory contains host resource configuration files for Aether-V.
+
+**Note**: As of Phase 8, YAML job input schemas (vm-create.yaml, disk-create.yaml, nic-create.yaml) have been removed. 
+The system now uses Pydantic models exclusively for validation. See `server/app/core/pydantic_models.py` for the current data models.
 
 ## hostresources.json Schema
 
@@ -76,25 +79,30 @@ See `hostresources.example.json` for a complete example.
 
 ### Usage in Job Submissions
 
-When submitting a VM provisioning job, users can now specify:
+When submitting a VM provisioning job via the `/api/v2/managed-deployments` endpoint, users specify:
 
 - **network** (optional): Name of a network defined in the host configuration (e.g., "Production")
 - **storage_class** (optional): Name of a storage class (e.g., "fast-ssd")
 
-Example job submission:
+Example using Pydantic-based API (v2):
 ```json
 {
-  "schema": {
-    "id": "vm-provisioning",
-    "version": 1
-  },
-  "fields": {
+  "target_host": "hyperv-01",
+  "vm_spec": {
     "vm_name": "web-server-01",
-    "image_name": "Windows Server 2022",
     "gb_ram": 8,
     "cpu_cores": 4,
-    "network": "Production",
-    "storage_class": "fast-ssd",
+    "storage_class": "fast-ssd"
+  },
+  "disk_spec": {
+    "image_name": "Windows Server 2022",
+    "disk_size_gb": 100,
+    "storage_class": "fast-ssd"
+  },
+  "nic_spec": {
+    "network": "Production"
+  },
+  "guest_config": {
     "guest_la_uid": "Administrator",
     "guest_la_pw": "SecurePassword123!"
   }
@@ -119,9 +127,3 @@ Now, VMs use:
 3. **Simplified Cleanup**: No complex folder cleanup is needed during VM deletion
 4. **Better Organization**: Storage and VMs are organized in predictable, configured locations
 5. **Improved Inventory**: Network information is displayed as human-readable names instead of VLAN numbers
-
-## job-inputs.yaml Schema
-
-The `job-inputs.yaml` schema defines the fields required for VM provisioning requests. This schema is used by the server to validate incoming job submissions.
-
-See the file itself for field definitions and validation rules.
