@@ -39,13 +39,9 @@ Describe "PowerShell .Count Property Bug Prevention" {
         }
         
         It "verifies @() wrapping works with zero items" {
-            $empty = $null
-            $wrapped = @($empty)
-            
-            # Wrapped null becomes empty array with Count = 0
-            # Actually, @($null) gives Count = 1 with a null element
-            # For proper empty array from null, we need different logic
-            # But for cmdlets returning nothing, @() handles it correctly
+            # For cmdlets that return nothing, @() wraps into an empty array
+            # Note: @($null) creates an array with one null element (Count = 1)
+            # But @() itself or @(cmdlet-returning-nothing) creates an empty array
             $result = @()
             $result.Count | Should -Be 0
         }
@@ -129,13 +125,13 @@ Describe "PowerShell .Count Property Bug Prevention" {
                     # Check if line assigns result of Get-VM* cmdlet to a variable
                     foreach ($cmdlet in $vulnerableCmdlets) {
                         # Pattern: $var = Get-VMSomething (without @() wrapper)
-                        if ($line -match "\`$(\w+)\s*=\s*$cmdlet\s+" -and $line -notmatch "@\(\s*$cmdlet") {
+                        if ($line -match '\$(\w+)\s*=\s*' + $cmdlet + '\s+' -and $line -notmatch '@\(\s*' + $cmdlet) {
                             $varName = $matches[1]
                             
                             # Check if this variable is later used with .Count in next ~20 lines
                             $checkLines = $lines[$i..([Math]::Min($i + 20, $lines.Count - 1))]
                             # Filter out comments when checking for .Count usage
-                            $usesCount = $checkLines | Where-Object { $_ -notmatch '^\s*#' -and $_ -match "\`$$varName\.Count" }
+                            $usesCount = $checkLines | Where-Object { $_ -notmatch '^\s*#' -and $_ -match ('\$' + $varName + '\.Count') }
                             
                             if ($usesCount) {
                                 $issues += @{
