@@ -2619,7 +2619,7 @@ class NicEditOverlay extends NicCreateOverlay {
         }
 
         // Client-side validation: ensure network is specified
-        if (!values.network || values.network.trim() === '') {
+        if (!values.network?.trim()) {
             this.messagesEl.innerHTML = `<div class="form-error">Network name is required.</div>`;
             return;
         }
