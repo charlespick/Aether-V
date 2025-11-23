@@ -28,7 +28,7 @@ from app.core.pydantic_models import (
 )
 
 
-class TestManagedDeploymentV2Request:
+class TestManagedDeploymentRequest:
     """Test ManagedDeploymentRequest Pydantic model validation."""
 
     def test_minimal_managed_deployment_request(self):
@@ -111,12 +111,12 @@ class TestManagedDeploymentV2Request:
         assert request.guest_config.guest_v4_cidrprefix == 24
 
 
-class TestManagedDeploymentV2JobSubmission:
-    """Test job submission for managed deployment v2."""
+class TestManagedDeploymentJobSubmission:
+    """Test job submission for managed deployment."""
 
     @pytest.mark.skip(reason="Integration test - requires full service infrastructure")
-    def test_submit_managed_deployment_v2_job(self):
-        """Test submitting a managed deployment v2 job."""
+    def test_submit_managed_deployment_job(self):
+        """Test submitting a managed deployment job."""
         from app.services.job_service import JobService
         from app.core.models import JobStatus
 
@@ -134,10 +134,10 @@ class TestManagedDeploymentV2JobSubmission:
                     target_host="hyperv-01",
                 )
 
-                job = await service.submit_managed_deployment_v2_job(request=request)
+                job = await service.submit_managed_deployment_job(request=request)
 
                 assert job.job_id is not None
-                assert job.job_type == "managed_deployment_v2"
+                assert job.job_type == "managed_deployment"
                 assert job.status == JobStatus.PENDING
                 assert job.target_host == "hyperv-01"
                 assert "request" in job.parameters
@@ -152,8 +152,8 @@ class TestManagedDeploymentV2JobSubmission:
         asyncio.run(run_test())
 
     @pytest.mark.skip(reason="Integration test - requires full service infrastructure")
-    def test_submit_full_managed_deployment_v2_job(self):
-        """Test submitting a full managed deployment v2 job with all components."""
+    def test_submit_full_managed_deployment_job(self):
+        """Test submitting a full managed deployment job with all components."""
         from app.services.job_service import JobService
         from app.core.models import JobStatus
 
@@ -182,9 +182,9 @@ class TestManagedDeploymentV2JobSubmission:
                     target_host="hyperv-01",
                 )
 
-                job = await service.submit_managed_deployment_v2_job(request=request)
+                job = await service.submit_managed_deployment_job(request=request)
 
-                assert job.job_type == "managed_deployment_v2"
+                assert job.job_type == "managed_deployment"
 
                 # Verify all components were serialized
                 stored_request = ManagedDeploymentRequest(
@@ -198,8 +198,8 @@ class TestManagedDeploymentV2JobSubmission:
         asyncio.run(run_test())
 
 
-class TestManagedDeploymentV2Execution:
-    """Test execution of managed deployment v2 jobs."""
+class TestManagedDeploymentExecution:
+    """Test execution of managed deployment jobs."""
 
     @pytest.mark.skip(reason="Integration test - requires mocked service infrastructure")
     def test_execute_minimal_deployment(self, monkeypatch):
@@ -220,7 +220,7 @@ class TestManagedDeploymentV2Execution:
 
         job = Job(
             job_id="test-job-1",
-            job_type="managed_deployment_v2",
+            job_type="managed_deployment",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
             target_host="hyperv-01",
@@ -256,7 +256,7 @@ class TestManagedDeploymentV2Execution:
         monkeypatch.setattr(service, "_update_job", AsyncMock())
 
         # Execute the job
-        asyncio.run(service._execute_managed_deployment_v2_job(job))
+        asyncio.run(service._execute_managed_deployment_job(job))
 
         # Verify the protocol operation was called for VM creation
         assert service._execute_new_protocol_operation.called
@@ -293,7 +293,7 @@ class TestManagedDeploymentV2Execution:
 
         job = Job(
             job_id="test-job-2",
-            job_type="managed_deployment_v2",
+            job_type="managed_deployment",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
             target_host="hyperv-01",
@@ -372,7 +372,7 @@ class TestManagedDeploymentV2Execution:
         )
 
         # Execute the job
-        asyncio.run(service._execute_managed_deployment_v2_job(job))
+        asyncio.run(service._execute_managed_deployment_job(job))
 
         # Verify all operations were called
         assert "VM creation" in operations_called
@@ -420,7 +420,7 @@ class TestManagedDeploymentV2Execution:
 
         job = Job(
             job_id="test-validation-job",
-            job_type="managed_deployment_v2",
+            job_type="managed_deployment",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
             target_host="hyperv-01",
@@ -458,7 +458,7 @@ class TestManagedDeploymentV2Execution:
         monkeypatch.setattr(service, "_update_job", AsyncMock())
 
         # Execute the job
-        asyncio.run(service._execute_managed_deployment_v2_job(job))
+        asyncio.run(service._execute_managed_deployment_job(job))
 
         # Verify validation was called
         assert service._validate_job_against_host_config.called

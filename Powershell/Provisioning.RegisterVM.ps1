@@ -32,8 +32,16 @@ function Invoke-ProvisioningRegisterVm {
     # VMDataFolder is now the base path where all VMs are created
     # Hyper-V will automatically create VM-specific subdirectories
     
+    # Ensure the VM base path exists - create it if it doesn't
     if (-not (Test-Path -LiteralPath $VMDataFolder -PathType Container)) {
-        throw "VM base path '$VMDataFolder' does not exist. Cannot create VM."
+        try {
+            # Use .NET method to handle paths with spaces correctly
+            $null = [System.IO.Directory]::CreateDirectory($VMDataFolder)
+            Write-Host "Created VM base path: $VMDataFolder" -ForegroundColor Green
+        }
+        catch {
+            throw "Failed to create VM base path '$VMDataFolder': $_"
+        }
     }
 
     try {

@@ -1337,8 +1337,8 @@ async def initialize_vm_resource(
     )
 
 
-@router.post("/api/v2/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
-async def create_managed_deployment_v2(
+@router.post("/api/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
+async def create_managed_deployment(
     request: ManagedDeploymentRequest,
     user: dict = Depends(require_permission(Permission.WRITER))
 ):
@@ -1356,7 +1356,7 @@ async def create_managed_deployment_v2(
     6. Send guest config through existing KVP mechanism
 
     This endpoint bypasses schemas entirely. The request is validated by Pydantic
-    and the component operations are executed via the new protocol.
+    and the component operations are executed via the protocol.
     """
 
     if not host_deployment_service.is_provisioning_available():
@@ -1395,15 +1395,15 @@ async def create_managed_deployment_v2(
             detail=f"VM {vm_name} already exists on host {target_host}",
         )
 
-    # Submit the managed deployment job using new protocol
-    job = await job_service.submit_managed_deployment_v2_job(
+    # Submit the managed deployment job
+    job = await job_service.submit_managed_deployment_job(
         request=request,
     )
 
     return JobResult(
         job_id=job.job_id,
         status="queued",
-        message=f"Managed deployment (v2) queued for host {target_host}",
+        message=f"Managed deployment queued for host {target_host}",
     )
 
 

@@ -37,14 +37,14 @@ logger = logging.getLogger(__name__)
 
 # Job type constants for categorization
 LONG_RUNNING_JOB_TYPES = {
-    "delete_vm", "create_vm", "managed_deployment_v2", "initialize_vm"
+    "delete_vm", "create_vm", "managed_deployment", "initialize_vm"
 }
 
 SERIALIZED_JOB_TYPES = {
     "delete_vm", "create_vm", "create_disk",
     "create_nic", "update_vm", "update_disk",
     "update_nic", "delete_disk", "delete_nic", "initialize_vm",
-    "managed_deployment_v2"
+    "managed_deployment"
 }
 
 
@@ -422,14 +422,14 @@ class JobService:
         logger.info("Queued noop-test job %s for host %s", job_id, target_host)
         return self._prepare_job_response(job)
 
-    async def submit_managed_deployment_v2_job(
+    async def submit_managed_deployment_job(
         self,
         request: ManagedDeploymentRequest,
     ) -> Job:
-        """Submit a managed deployment job using the new Pydantic-based protocol.
+        """Submit a managed deployment job using the Pydantic-based protocol.
 
         Orchestrates a complete VM deployment using Pydantic
-        models and the new JobRequest/JobResult protocol.
+        models and the JobRequest/JobResult protocol.
 
         The deployment will orchestrate:
         1. VM creation via vm.create operation
@@ -443,12 +443,12 @@ class JobService:
         target_host = request.target_host.strip()
         if not target_host:
             raise RuntimeError(
-                "Managed deployment v2 job requires a target host")
+                "Managed deployment job requires a target host")
 
         job_id = str(uuid.uuid4())
         job = Job(
             job_id=job_id,
-            job_type="managed_deployment_v2",
+            job_type="managed_deployment",
             status=JobStatus.PENDING,
             created_at=datetime.utcnow(),
             target_host=target_host,
@@ -464,7 +464,7 @@ class JobService:
         await self._broadcast_job_status(job)
 
         await self._queue.put(job_id)
-        logger.info("Queued managed deployment v2 job %s for host %s",
+        logger.info("Queued managed deployment job %s for host %s",
                     job_id, target_host)
         return self._prepare_job_response(job)
 
@@ -539,8 +539,8 @@ class JobService:
                     await self._execute_delete_disk_job(job)
                 elif job.job_type == "delete_nic":
                     await self._execute_delete_nic_job(job)
-                elif job.job_type == "managed_deployment_v2":
-                    await self._execute_managed_deployment_v2_job(job)
+                elif job.job_type == "managed_deployment":
+                    await self._execute_managed_deployment_job(job)
                 elif job.job_type == "initialize_vm":
                     await self._execute_initialize_vm_job(job)
                 elif job.job_type == "noop_test":
@@ -1445,8 +1445,8 @@ class JobService:
         job.parameters["result_status"] = envelope.status
         await self._update_job(job.job_id, parameters=job.parameters)
 
-    async def _execute_managed_deployment_v2_job(self, job: Job) -> None:
-        """Execute a managed deployment using the new Pydantic-based protocol.
+    async def _execute_managed_deployment_job(self, job: Job) -> None:
+        """Execute a managed deployment using the Pydantic-based protocol.
 
         Orchestrates VM creation using the JobRequest/JobResult protocol:
         1. Create VM via vm.create JobRequest
@@ -1472,11 +1472,11 @@ class JobService:
         target_host = request.target_host.strip()
         if not target_host:
             raise RuntimeError(
-                "Managed deployment v2 job is missing a target host")
+                "Managed deployment job is missing a target host")
 
         await self._append_job_output(
             job.job_id,
-            "Managed deployment v2 starting - using new Pydantic protocol",
+            "Managed deployment starting - using Pydantic protocol",
         )
 
         # Ensure host is prepared
@@ -1508,10 +1508,10 @@ class JobService:
             {"fields": validation_fields}, target_host
         )
 
-        # Step 1: Create VM using new protocol
+        # Step 1: Create VM using protocol
         await self._append_job_output(
             job.job_id,
-            f"Creating VM '{request.vm_spec.vm_name}' via new protocol...",
+            f"Creating VM '{request.vm_spec.vm_name}'...",
         )
 
         vm_job_request = create_job_request(
@@ -1544,7 +1544,7 @@ class JobService:
         if request.disk_spec:
             await self._append_job_output(
                 job.job_id,
-                "Creating disk via new protocol...",
+                "Creating disk...",
             )
 
             # Add VM ID to disk spec
@@ -1570,7 +1570,7 @@ class JobService:
         if request.nic_spec:
             await self._append_job_output(
                 job.job_id,
-                "Creating NIC via new protocol...",
+                "Creating NIC...",
             )
 
             # Add VM ID to NIC spec
@@ -1649,7 +1649,7 @@ class JobService:
 
         await self._append_job_output(
             job.job_id,
-            f"Managed deployment v2 complete. VM '{request.vm_spec.vm_name}' fully deployed on {target_host}.",
+            f"Managed deployment complete. VM '{request.vm_spec.vm_name}' fully deployed on {target_host}.",
         )
 
     async def _execute_managed_deployment_protocol_operation(

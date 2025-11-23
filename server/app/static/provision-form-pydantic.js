@@ -630,7 +630,7 @@ class ProvisionFormPydantic {
         }
 
         try {
-            const response = await fetch('/api/v2/managed-deployments', {
+            const response = await fetch('/api/managed-deployments', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
