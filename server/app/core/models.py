@@ -197,11 +197,11 @@ class VMInitializationRequest(BaseModel):
 
 class NoopTestRequest(BaseModel):
     """Request to execute a noop-test job using the JobRequest envelope protocol.
-    
+
     Validates the round-trip communication between server and host agent
     without performing actual operations.
     """
-    
+
     target_host: str = Field(
         ...,
         description="Hostname of the connected Hyper-V host that will execute the test",
