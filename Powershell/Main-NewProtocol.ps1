@@ -131,7 +131,8 @@ end {
         }
 
         try {
-            $envelope = $rawInput | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            $parsedJson = $rawInput | ConvertFrom-Json -ErrorAction Stop
+            $envelope = ConvertTo-Hashtable -InputObject $parsedJson
             return $envelope
         }
         catch {
