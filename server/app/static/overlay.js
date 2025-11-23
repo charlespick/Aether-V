@@ -2670,7 +2670,6 @@ class VMEditOverlay extends BaseOverlay {
         this.vmName = data.vm_name || '';
         this.host = data.host || '';
         this.vmData = data.vm_data || {};
-        this.schema = null;
         this.rootEl = null;
         this.formEl = null;
         this.messagesEl = null;
@@ -2683,7 +2682,7 @@ class VMEditOverlay extends BaseOverlay {
     async render() {
         return `
             <div class="schema-form" id="vm-edit-root">
-                <div class="form-loading">Loading schema...</div>
+                <div class="form-loading">Loading form...</div>
             </div>
         `;
     }
@@ -2696,38 +2695,91 @@ class VMEditOverlay extends BaseOverlay {
         }
 
         try {
-            this.schema = await this.fetchSchema();
             this.renderForm();
         } catch (error) {
-            console.error('Failed to load VM schema:', error);
+            console.error('Failed to load VM edit form:', error);
             this.rootEl.innerHTML = `
                 <div class="form-error">Unable to load VM edit form. Please try again later.</div>
             `;
         }
     }
 
-    async fetchSchema() {
-        const response = await fetch('/api/v1/schema/vm-create', { credentials: 'same-origin' });
-        if (!response.ok) {
-            throw new Error(`Schema request failed: ${response.status}`);
-        }
-        return await response.json();
-    }
-
     renderForm() {
-        if (!this.schema) return;
-
-        // Filter out guest_config fields for VM edit (only hardware fields)
-        const fieldsHtml = this.schema.fields
-            .filter(field => !field.guest_config && field.id !== 'vm_name')
-            .map(field => this.renderField(field))
-            .join('');
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
+        // Get current values from VM data
+        const currentCpuCores = this.vmData.cpu_cores ?? 2;
+        const currentMemoryGb = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? 4;
+        const currentStorageClass = this.vmData.storage_class ?? '';
+        const currentVmClustered = this.vmData.vm_clustered ?? false;
 
         this.rootEl.innerHTML = `
             <form id="vm-edit-form" class="schema-form-body">
                 <div id="vm-edit-messages" class="form-messages" role="alert"></div>
-                <p class="field-note">Note: You can only modify hardware properties. Guest configuration (hostname, domain join, etc.) is set during initial provisioning.</p>
-                <div class="schema-fields">${fieldsHtml}</div>
+                <p class="field-note" style="margin-bottom: 16px;">
+                    <strong>Note:</strong> You can only modify hardware properties. Guest configuration (hostname, domain join, etc.) is set during initial provisioning.
+                </p>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="cpu-cores" class="field-label">CPU Cores</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="number" id="cpu-cores" name="cpu_cores" required 
+                                   min="1" max="64" value="${this.escapeHtml(currentCpuCores)}" 
+                                   step="1" inputmode="numeric" />
+                        </div>
+                        <p class="field-description">Number of virtual CPU cores</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="gb-ram" class="field-label">Memory (GB)</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="number" id="gb-ram" name="gb_ram" required 
+                                   min="1" max="512" value="${this.escapeHtml(currentMemoryGb)}" 
+                                   step="1" inputmode="numeric" />
+                        </div>
+                        <p class="field-description">Amount of memory to assign to the VM in gigabytes</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="storage-class" class="field-label">Storage Class</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="storage-class" name="storage_class" 
+                                   value="${this.escapeHtml(currentStorageClass)}"
+                                   placeholder="e.g., fast-ssd" />
+                        </div>
+                        <p class="field-description">Name of the storage class where VM configuration will be stored (optional)</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="vm-clustered" class="field-label">Clustered</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <label class="checkbox-field">
+                                <input type="checkbox" id="vm-clustered" name="vm_clustered" 
+                                       ${currentVmClustered ? 'checked' : ''} />
+                                <span>Enable clustering for this VM</span>
+                            </label>
+                        </div>
+                        <p class="field-description">Request that the VM be registered with the Failover Cluster</p>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="vm-edit-cancel">Cancel</button>
                     <button type="submit" class="btn" id="vm-edit-submit">Update VM</button>
@@ -2743,99 +2795,21 @@ class VMEditOverlay extends BaseOverlay {
         this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
     }
 
-    renderField(field) {
-        const fieldId = `schema-${field.id}`;
-        const requiredPill = field.required ? '<span class="field-required-pill">Required</span>' : '';
-        const labelText = this.escapeHtml(field.label || field.id);
-        const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
-        const inputControl = this.renderInputControl(field, fieldId);
-
-        return `
-            <div class="schema-field" data-field-id="${field.id}">
-                <div class="field-header">
-                    <div class="field-title">
-                        <label for="${fieldId}" class="field-label">${labelText}</label>
-                        ${requiredPill}
-                    </div>
-                </div>
-                <div class="field-control">${inputControl}</div>
-                ${description}
-            </div>
-        `;
-    }
-
-    renderInputControl(field, fieldId) {
-        const type = (field.type || 'string').toLowerCase();
-        const validations = field.validations || {};
-        const requiredAttr = field.required ? 'required' : '';
-        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
-        
-        // Map VM data fields to schema fields
-        let currentValue;
-        if (field.id === 'cpu_cores') {
-            currentValue = this.vmData.cpu_cores ?? field.default ?? '';
-        } else if (field.id === 'gb_ram') {
-            // Schema uses gb_ram but VM data exposes memory_gb
-            currentValue = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? field.default ?? '';
-        } else if (field.id === 'memory_gb') {
-            currentValue = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? field.default ?? '';
-        } else if (field.id === 'memory_startup_gb') {
-            currentValue = this.vmData.memory_startup_gb ?? field.default ?? '';
-        } else if (field.id === 'memory_min_gb') {
-            currentValue = this.vmData.memory_min_gb ?? field.default ?? '';
-        } else if (field.id === 'memory_max_gb') {
-            currentValue = this.vmData.memory_max_gb ?? field.default ?? '';
-        } else if (field.id === 'dynamic_memory_enabled') {
-            currentValue = this.vmData.dynamic_memory_enabled ?? field.default ?? false;
-        } else {
-            currentValue = this.vmData[field.id] ?? field.default ?? '';
-        }
-
-        if (type === 'boolean') {
-            const checked = currentValue === true ? 'checked' : '';
-            return `
-                <label class="checkbox-field">
-                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
-                    <span>Enable</span>
-                </label>
-            `;
-        }
-
-        if (type === 'integer') {
-            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
-            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
-            const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
-            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-        }
-
-        if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(currentValue)}</textarea>`;
-        }
-
-        const inputType = type === 'secret' ? 'password' : 'text';
-        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
-        const pattern = patternValue ? `pattern="${patternValue}"` : '';
-        const valueAttr = currentValue !== '' ? `value="${this.escapeHtml(currentValue)}"` : '';
-        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-    }
-
     async handleSubmit(event) {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
         const values = {};
 
-        for (const [key, value] of formData.entries()) {
-            const field = this.schema.fields.find(f => f.id === key);
-            if (!field) continue;
-
-            if (field.type === 'integer') {
-                values[key] = parseInt(value, 10);
-            } else if (field.type === 'boolean') {
-                values[key] = formData.has(key);
-            } else {
-                values[key] = value;
-            }
+        // Collect form values based on Pydantic VmSpec model
+        values.vm_name = this.vmName;  // VM name is not editable, use existing name
+        values.cpu_cores = parseInt(formData.get('cpu_cores'), 10);
+        values.gb_ram = parseInt(formData.get('gb_ram'), 10);
+        values.vm_clustered = formData.has('vm_clustered');
+        
+        const storageClass = formData.get('storage_class');
+        if (storageClass && storageClass.trim()) {
+            values.storage_class = storageClass.trim();
         }
 
         try {
@@ -2844,7 +2818,6 @@ class VMEditOverlay extends BaseOverlay {
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    schema_version: this.schema.version || 1,
                     values: values,
                     target_host: this.host
                 })
