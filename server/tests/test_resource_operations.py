@@ -1,8 +1,7 @@
 """Tests: Resource Operations Round-Trip Validation
 
-This test suite validates the Phase 4 implementation of resource-level operations
-using the new JobRequest/JobResult protocol. It tests VM, Disk, and NIC operations
-without requiring actual Hyper-V hosts.
+This test suite validates resource-level operations using the JobRequest/JobResult 
+protocol. It tests VM, Disk, and NIC operations without requiring actual Hyper-V hosts.
 
 Operations tested:
 - vm.create, vm.update, vm.delete

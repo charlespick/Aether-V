@@ -1,17 +1,16 @@
-"""Tests: Managed Deployment V2 with New Protocol
+"""Tests: Managed Deployment with Pydantic Protocol
 
-This test suite validates the Phase 6 implementation of managed deployment
-using the new Pydantic-based protocol.
+This test suite validates managed deployment using the Pydantic-based protocol.
 
 Tests cover:
 1. Endpoint validation with ManagedDeploymentRequest
 2. Job submission and queuing
-3. Job execution with new protocol (VM, Disk, NIC creation)
+3. Job execution using JobRequest/JobResult protocol (VM, Disk, NIC creation)
 4. Guest config generation and integration
 5. End-to-end workflow validation
 
-Note: These tests validate that the managed deployment workflow
-now uses Pydantic models and bypasses schemas entirely.
+These tests ensure the managed deployment workflow uses Pydantic models
+for validation and the JobRequest/JobResult envelope for host communication.
 """
 import asyncio
 import pytest

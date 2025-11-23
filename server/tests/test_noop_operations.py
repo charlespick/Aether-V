@@ -1,15 +1,15 @@
 """Tests: Noop-Test Round-Trip Validation
 
-This test suite validates the first operation to use the new protocol end-to-end.
-The noop-test operation proves that:
+This test suite validates the noop-test operation which provides protocol 
+connectivity testing between server and host agents.
 
+The noop-test operation verifies:
 1. The server can create JobRequest envelopes
 2. PowerShell Main-NewProtocol.ps1 can receive and parse the envelope
 3. PowerShell can execute the operation and return a JobResult
 4. The server can parse the JobResult and complete the job
 
-This is a critical milestone that validates the entire new protocol stack before
-converting any production operations.
+This validates the entire JobRequest/JobResult protocol stack.
 """
 import json
 import subprocess
