@@ -96,8 +96,12 @@ async def lifespan(app: FastAPI):
 
     # Initialize Kerberos if configured
     if not config_result.has_errors and settings.has_kerberos_config():
-        logger.info("Initializing Kerberos authentication for principal: %s", settings.winrm_kerberos_principal)
+        logger.info("Initializing Kerberos authentication for principal: %s",
+                    settings.winrm_kerberos_principal)
         try:
+            # has_kerberos_config() ensures these are not None
+            assert settings.winrm_kerberos_principal is not None
+            assert settings.winrm_keytab_b64 is not None
             initialize_kerberos(
                 principal=settings.winrm_kerberos_principal,
                 keytab_b64=settings.winrm_keytab_b64,
@@ -106,7 +110,8 @@ async def lifespan(app: FastAPI):
             )
         except KerberosManagerError as exc:
             kerberos_failed = True
-            logger.error("Failed to initialize Kerberos authentication: %s", exc)
+            logger.error(
+                "Failed to initialize Kerberos authentication: %s", exc)
             config_result.errors.append(
                 ConfigIssue(
                     message=f"Kerberos initialization failed: {exc}",
@@ -121,7 +126,8 @@ async def lifespan(app: FastAPI):
             # We need to get cluster information for delegation checking
             hyperv_hosts = settings.get_hyperv_hosts_list()
             if hyperv_hosts:
-                logger.info("Validating Kerberos setup for %d configured host(s)", len(hyperv_hosts))
+                logger.info(
+                    "Validating Kerberos setup for %d configured host(s)", len(hyperv_hosts))
 
                 # Import inventory service to get cluster information after it's started
                 # For now, do initial validation without cluster info (will re-validate later)
@@ -152,7 +158,8 @@ async def lifespan(app: FastAPI):
 
                     # Handle delegation errors
                     for error in validation_result.get("delegation_errors", []):
-                        logger.warning("Kerberos delegation validation: %s", error)
+                        logger.warning(
+                            "Kerberos delegation validation: %s", error)
                         config_result.warnings.append(
                             ConfigIssue(
                                 message=error,
@@ -172,13 +179,15 @@ async def lifespan(app: FastAPI):
                         len(validation_result.get("delegation_errors", []))
                     )
                 else:
-                    logger.info("Kerberos host validation completed successfully")
+                    logger.info(
+                        "Kerberos host validation completed successfully")
     elif settings.has_kerberos_config():
         logger.error(
             "Skipping Kerberos initialization because configuration errors were detected"
         )
     else:
-        logger.warning("Kerberos credentials not configured; WinRM operations will fail")
+        logger.warning(
+            "Kerberos credentials not configured; WinRM operations will fail")
 
     remote_started = False
     notifications_started = False
@@ -221,7 +230,8 @@ async def lifespan(app: FastAPI):
 
         asyncio.create_task(_log_startup_deployment_summary())
     else:
-        logger.error("Skipping host deployment startup because Kerberos authentication is unavailable")
+        logger.error(
+            "Skipping host deployment startup because Kerberos authentication is unavailable")
 
     if not config_result.has_errors:
         await inventory_service.start()
@@ -231,10 +241,11 @@ async def lifespan(app: FastAPI):
         logger.info(
             "Application services initialised; inventory refresh will continue in the background"
         )
-        
+
         # Schedule delegation validation after initial inventory refresh
         # This allows us to check RBCD on discovered cluster objects
         kerberos_realm_for_delegation = kerberos_realm
+
         async def _validate_delegation_after_inventory() -> None:
             try:
                 # Wait for initial inventory refresh to complete
@@ -265,10 +276,12 @@ async def lifespan(app: FastAPI):
 
                     # Log any delegation issues found
                     for error in delegation_validation.get("delegation_errors", []):
-                        logger.warning("Kerberos delegation validation: %s", error)
+                        logger.warning(
+                            "Kerberos delegation validation: %s", error)
 
                     for warning in delegation_validation.get("warnings", []):
-                        logger.warning("Kerberos delegation validation: %s", warning)
+                        logger.warning(
+                            "Kerberos delegation validation: %s", warning)
 
                     if delegation_validation.get("delegation_errors") or delegation_validation.get("warnings"):
                         issues = []
@@ -301,7 +314,8 @@ async def lifespan(app: FastAPI):
                             },
                         )
                     else:
-                        logger.info("Kerberos delegation validation completed successfully")
+                        logger.info(
+                            "Kerberos delegation validation completed successfully")
                         notification_service.clear_system_notification(
                             "kerberos-delegation-validation"
                         )
@@ -313,7 +327,7 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to validate cluster delegation")
 
         asyncio.create_task(_validate_delegation_after_inventory())
-        
+
     else:
         logger.error(
             "Skipping job and inventory service startup because configuration errors were detected."
@@ -333,12 +347,12 @@ async def lifespan(app: FastAPI):
             await notification_service.stop()
         if remote_started:
             await remote_task_service.stop()
-        
+
         # Clean up Kerberos resources
         if kerberos_initialized:
             logger.info("Cleaning up Kerberos resources")
             cleanup_kerberos()
-        
+
         logger.info("Application stopped")
 
 
@@ -534,11 +548,13 @@ app.add_middleware(
 app.include_router(router)
 
 # Custom Swagger UI endpoint using local assets to avoid CSP issues
+
+
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
     """Serve Swagger UI with local assets instead of CDN."""
     return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
+        openapi_url=app.openapi_url or "/openapi.json",
         title=f"{app.title} - API Documentation",
         swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
         swagger_css_url="/static/swagger-ui/swagger-ui.css",
@@ -584,10 +600,12 @@ async def root(request: Request):
 
             # Check authentication status to determine which view to render
             session_user = request.session.get("user_info")
-            is_authenticated = bool(session_user and session_user.get("authenticated"))
+            is_authenticated = bool(
+                session_user and session_user.get("authenticated"))
 
             if not is_authenticated:
-                logger.info("Unauthenticated request for UI; rendering login page")
+                logger.info(
+                    "Unauthenticated request for UI; rendering login page")
                 response = templates.TemplateResponse(
                     "login.html",
                     {
@@ -603,7 +621,8 @@ async def root(request: Request):
                     status_code=status.HTTP_200_OK,
                 )
             else:
-                username = session_user.get("preferred_username", "unknown")
+                username = session_user.get(
+                    "preferred_username", "unknown") if session_user else "unknown"
                 logger.info(f"Authenticated request from user: {username}")
 
                 response = templates.TemplateResponse(

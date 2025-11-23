@@ -22,8 +22,9 @@ pretty = true
 # disallow_incomplete_defs = true
 
 # Paths
-files = ["app", "tests"]
+files = ["app"]
 exclude = [
+    "^tests/",
     "^build/",
     "^node_modules/",
     "^artifacts/",
