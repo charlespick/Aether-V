@@ -7,7 +7,7 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make dev           - Start development server with hot reload"
-	@echo "  make test          - Run tests (when implemented)"
+	@echo "  make test          - Run tests and type checking (pytest + mypy)"
 	@echo "  make all           - Build everything (ISOs + container)"
 	@echo ""
 	@echo "Build & Deploy:"
@@ -39,12 +39,20 @@ run:
 	docker run -p 8000:8000 --env-file server/.env aetherv:latest
 
 test:
-	@echo "⚠️  'make test' only runs Python tests for now. Run JavaScript and PowerShell tests manually."
-	@if [ -f .venv/bin/pytest ]; then \
-		.venv/bin/pytest server/tests/; \
-	else \
-		pytest server/tests/; \
-	fi
+	@echo "Running Python tests and type checking..."
+	@cd server && (\
+		if [ -f ../.venv/bin/pytest ]; then \
+			echo "Running pytest..." && ../.venv/bin/pytest tests/; \
+		else \
+			echo "Running pytest..." && pytest tests/; \
+		fi; \
+		if [ -f ../.venv/bin/mypy ]; then \
+			echo "Running mypy type checker..." && ../.venv/bin/mypy .; \
+		else \
+			echo "Running mypy type checker..." && mypy .; \
+		fi \
+	)
+	@echo "⚠️  Run JavaScript and PowerShell tests manually if needed."
 
 all: isos build
 	@echo "✅ All components built successfully"

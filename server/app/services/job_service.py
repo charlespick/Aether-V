@@ -2306,6 +2306,27 @@ class JobService:
             return "Initialize VM"
         return job.job_type.replace("_", " ").title()
 
+    def _extract_vm_name(self, job: Job) -> Optional[str]:
+        """Extract VM name from job parameters.
+
+        Attempts to get vm_name from enriched metadata first, then falls back
+        to various parameter locations depending on job type.
+        """
+        # Try enriched metadata first (from _enrich_job_metadata)
+        metadata = job.parameters.get("_metadata", {})
+        vm_name = metadata.get("vm_name") or metadata.get("resource_name")
+        if vm_name:
+            return vm_name
+
+        # Fallback for delete_vm jobs
+        if job.job_type == "delete_vm":
+            return job.parameters.get("vm_name")
+
+        # Fallback for other job types - check definition.fields
+        definition = job.parameters.get("definition") or {}
+        fields = definition.get("fields") or {}
+        return fields.get("vm_name")
+
     def _log_agent_request(self, job_id: str, target_host: str, payload: str, script_name: str) -> None:
         """Log raw JSON being sent to host agent.
 
