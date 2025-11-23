@@ -45,10 +45,17 @@ test('views.js should include overview view markup', () => {
 test('overlay.js disk and NIC overlays should not reference schema API', () => {
   const content = readFile('overlay.js');
   
-  // Ensure no schema API endpoints are referenced in disk/NIC create overlays
-  const diskCreateClass = content.match(/class DiskCreateOverlay extends BaseOverlay \{[\s\S]*?\n\}\n/)?.[0] || '';
-  const nicCreateClass = content.match(/class NicCreateOverlay extends BaseOverlay \{[\s\S]*?\n\}\n/)?.[0] || '';
+  // Extract class definitions more reliably
+  const extractClass = (className) => {
+    const pattern = new RegExp(`class ${className} extends BaseOverlay \\{[\\s\\S]*?(?=\\nclass [A-Z]|\\n\\/\\/ [A-Z]|$)`);
+    const match = content.match(pattern);
+    return match ? match[0] : '';
+  };
   
+  const diskCreateClass = extractClass('DiskCreateOverlay');
+  const nicCreateClass = extractClass('NicCreateOverlay');
+  
+  // Ensure schema API endpoints are not referenced
   assert.doesNotMatch(
     diskCreateClass,
     /\/api\/v1\/schema\/disk-create/,
@@ -77,9 +84,15 @@ test('overlay.js disk and NIC overlays should not reference schema API', () => {
 test('overlay.js disk and NIC overlays should use Pydantic-based forms', () => {
   const content = readFile('overlay.js');
   
-  // Extract class definitions
-  const diskCreateClass = content.match(/class DiskCreateOverlay extends BaseOverlay \{[\s\S]*?(?=\n\/\/ |\nclass [A-Z])/)?.[0] || '';
-  const nicCreateClass = content.match(/class NicCreateOverlay extends BaseOverlay \{[\s\S]*?(?=\n\/\/ |\nclass [A-Z])/)?.[0] || '';
+  // Extract class definitions using helper function
+  const extractClass = (className) => {
+    const pattern = new RegExp(`class ${className} extends BaseOverlay \\{[\\s\\S]*?(?=\\nclass [A-Z]|\\n\\/\\/ [A-Z]|$)`);
+    const match = content.match(pattern);
+    return match ? match[0] : '';
+  };
+  
+  const diskCreateClass = extractClass('DiskCreateOverlay');
+  const nicCreateClass = extractClass('NicCreateOverlay');
   
   // Verify DiskCreateOverlay renders hardcoded form
   assert.match(
