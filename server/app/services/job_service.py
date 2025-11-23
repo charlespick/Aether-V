@@ -53,22 +53,22 @@ def _redact_sensitive_parameters(
     replacement: str = "••••••",
 ) -> Dict[str, Any]:
     """Return a copy of job parameters with sensitive values redacted.
-    
+
     This replaces the schema-based redaction with a simple list of known
     sensitive field names.
     """
     if parameters is None:
         return {}
-    
+
     # Known sensitive field names from Pydantic models
     sensitive_fields = {
         "guest_la_pw",
         "guest_domain_joinpw",
         "cnf_ansible_ssh_key",
     }
-    
+
     sanitized = copy.deepcopy(parameters)
-    
+
     def _redact(value: Any) -> None:
         if isinstance(value, dict):
             for key, item in value.items():
@@ -79,7 +79,7 @@ def _redact_sensitive_parameters(
         elif isinstance(value, list):
             for element in value:
                 _redact(element)
-    
+
     _redact(sanitized)
     return sanitized
 
@@ -258,7 +258,8 @@ class JobService:
 
         job_copy = job.model_copy(deep=True)
         try:
-            job_copy.parameters = _redact_sensitive_parameters(job_copy.parameters)
+            job_copy.parameters = _redact_sensitive_parameters(
+                job_copy.parameters)
         except Exception:  # pragma: no cover - defensive logging
             logger.exception(
                 "Failed to redact job parameters for %s", job.job_id)
@@ -512,7 +513,16 @@ class JobService:
 
         try:
             # Acquire host slot for jobs that need serialization
-            if job.job_type in SERIALIZED_JOB_TYPES and host_key:
+            # Child jobs inherit the parent's serialization slot, so skip
+            # acquiring a new slot to avoid deadlock when parent waits
+            # for child completion
+            is_child_job = job.parameters.get("parent_job_id") is not None
+            needs_serialization = (
+                job.job_type in SERIALIZED_JOB_TYPES
+                and host_key
+                and not is_child_job
+            )
+            if needs_serialization:
                 await self._acquire_host_slot(host_key, job.job_id)
                 acquired_host = True
 
@@ -2117,12 +2127,12 @@ class JobService:
 
     async def _sync_job_notification(self, job: Job) -> None:
         """Create or update job notification using pre-enriched metadata.
-        
+
         Child jobs (jobs with parent_job_id) do not create notifications since
         the parent job (e.g., managed_deployment) has its own status page with
         links to child jobs.
         """
-        
+
         # Skip notifications for child jobs - parent job provides the status page
         parent_job_id = job.parameters.get("parent_job_id")
         if parent_job_id:
