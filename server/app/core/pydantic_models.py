@@ -1,12 +1,11 @@
 """Pydantic models for VM resource specifications and job requests.
 
-Phase 1: These models are introduced in parallel to the existing schema system.
-They do not replace the schemas yet, but provide a new validation layer.
+These models provide validation and type safety for all VM resource operations.
 
 Models defined here:
 - Resource specifications: VmSpec, DiskSpec, NicSpec, GuestConfigSpec
 - Deployment requests: ManagedDeploymentRequest
-- Job envelope: JobRequest, JobResult (enhanced)
+- Job envelope: JobRequest, JobResult
 """
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, model_validator, ConfigDict

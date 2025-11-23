@@ -2,7 +2,7 @@
 import logging
 import uuid
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..core.models import (
@@ -110,7 +110,7 @@ class NotificationService:
         """Initialize with dummy notifications for development."""
         logger.info("Initializing dummy notifications for development")
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         dummy_notifications = [
             Notification(
                 id=str(uuid.uuid4()),
@@ -202,7 +202,7 @@ class NotificationService:
             message=message,
             level=level,
             category=category,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             read=False,
             related_entity=related_entity,
             metadata=metadata or {},
@@ -571,7 +571,7 @@ class NotificationService:
 
     def cleanup_old_notifications(self, max_age_days: int = 30) -> int:
         """Clean up notifications older than specified days. Returns count of deleted notifications."""
-        cutoff_date = datetime.utcnow() - timedelta(days=max_age_days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=max_age_days)
         to_delete = []
 
         for notification_id, notification in self.notifications.items():

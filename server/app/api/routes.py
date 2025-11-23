@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from ..core.models import (
@@ -347,7 +347,7 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         version=build_metadata.version,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         build=_current_build_info(),
     )
 
@@ -365,7 +365,7 @@ async def readiness_check(response: Response):
         return HealthResponse(
             status="config_error",
             version=build_metadata.version,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             build=_current_build_info(),
         )
 
@@ -375,7 +375,7 @@ async def readiness_check(response: Response):
     return HealthResponse(
         status=readiness_status,
         version=build_metadata.version,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         build=_current_build_info(),
     )
 
@@ -1833,7 +1833,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     client_id = str(uuid.uuid4())
     client_ip = websocket.client.host if websocket.client else "unknown"
-    connection_start = datetime.utcnow()
+    connection_start = datetime.now(timezone.utc)
     MAX_CONNECTION_TIME = settings.websocket_timeout
 
     try:
@@ -1889,7 +1889,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             try:
                 # Check connection time limit
-                connection_age = (datetime.utcnow() -
+                connection_age = (datetime.now(timezone.utc) -
                                   connection_start).total_seconds()
                 if connection_age > MAX_CONNECTION_TIME:
                     logger.info(
