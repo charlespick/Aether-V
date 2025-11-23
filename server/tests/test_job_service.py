@@ -25,6 +25,10 @@ try:
         JobSubmission,
         VMDeleteRequest,
     )
+    from app.core.pydantic_models import (
+        ManagedDeploymentRequest,
+        VmSpec,
+    )
     from app.services.job_service import JobService
     IMPORT_ERROR = None
 except ModuleNotFoundError as exc:  # pragma: no cover - environment guard
@@ -352,7 +356,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "app.services.job_service.redact_job_parameters",
+            "app.services.job_service._redact_sensitive_parameters",
             side_effect=RuntimeError("boom"),
         ):
             safe_job = self.job_service._prepare_job_response(job)
@@ -451,8 +455,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
     async def test_only_one_provisioning_job_runs_per_host(self):
         await self.job_service.start()
 
-        # Test with managed_deployment job type instead of the removed provision_vm
-        original_execute = self.job_service._execute_managed_deployment_job
+        # Test with managed_deployment_v2 job type (current implementation)
+        original_execute = self.job_service._execute_managed_deployment_v2_job
 
         first_job_started = asyncio.Event()
         second_job_started = asyncio.Event()
@@ -468,24 +472,24 @@ class JobServiceTests(IsolatedAsyncioTestCase):
                 second_job_started.set()
 
         # type: ignore[assignment]
-        self.job_service._execute_managed_deployment_job = fake_execute
+        self.job_service._execute_managed_deployment_v2_job = fake_execute
 
-        payload = {
-            "schema": {"id": "vm-create", "version": 1},
-            "fields": {"vm_name": "vm-a"},
-        }
-
-        job1 = await self.job_service.submit_resource_job(
-            "managed_deployment", "vm-create", payload, "hyperv01"
+        request1 = ManagedDeploymentRequest(
+            target_host="hyperv01",
+            vm_spec=VmSpec(vm_name="vm-a", gb_ram=4, cpu_cores=2),
         )
 
-        payload2 = {
-            "schema": {"id": "vm-create", "version": 1},
-            "fields": {"vm_name": "vm-b"},
-        }
+        job1 = await self.job_service.submit_managed_deployment_v2_job(
+            request1
+        )
 
-        job2 = await self.job_service.submit_resource_job(
-            "managed_deployment", "vm-create", payload2, "HYPERV01"
+        request2 = ManagedDeploymentRequest(
+            target_host="HYPERV01",
+            vm_spec=VmSpec(vm_name="vm-b", gb_ram=4, cpu_cores=2),
+        )
+
+        job2 = await self.job_service.submit_managed_deployment_v2_job(
+            request2
         )
 
         try:
@@ -500,7 +504,10 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             await asyncio.wait_for(second_job_started.wait(), timeout=1)
             self.assertEqual(start_order, [job1.job_id, job2.job_id])
         finally:
-            self.job_service._execute_managed_deployment_job = original_execute
+            self.job_service._execute_managed_deployment_v2_job = (
+                original_execute
+            )
+            await self.job_service.stop()
 
     async def test_only_one_delete_job_runs_per_host(self):
         await self.job_service.start()
