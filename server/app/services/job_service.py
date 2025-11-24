@@ -85,7 +85,7 @@ def _redact_sensitive_parameters(
 
 class _SimpleLineBuffer:
     """Stateful line buffer for streamed output.
-    
+
     Note: pypsrp handles CLIXML deserialization internally, so we only need
     simple line buffering for the plain text it returns.
     """
@@ -883,8 +883,18 @@ class JobService:
         await self._execute_new_protocol_operation(job, "nic.delete", "NIC deletion")
 
     async def _execute_initialize_vm_job(self, job: Job) -> None:
-        """Execute a VM initialization job that applies guest configuration."""
+        """Execute a VM initialization job that applies guest configuration.
 
+        This operation orchestrates the guest OS initialization workflow:
+        1. Mounts provisioning ISO to the VM
+        2. Starts the VM
+        3. Waits for guest readiness signal via KVP
+        4. Publishes encrypted provisioning data via KVP
+        5. Waits for guest provisioning completion
+
+        Uses the JobResult envelope protocol for consistent error handling,
+        though the operation itself is not a standard CRUD resource operation.
+        """
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -901,6 +911,7 @@ class JobService:
             raise RuntimeError(
                 f"Failed to prepare host {target_host} for initialization")
 
+        # Serialize fields to JSON for the initialization script
         json_payload = await asyncio.to_thread(
             json.dumps, fields, ensure_ascii=False, separators=(",", ":")
         )
@@ -910,12 +921,44 @@ class JobService:
             "Invoke-InitializeVmJob.ps1", json_payload
         )
 
-        exit_code = await self._execute_agent_command(
-            job, target_host, command
-        )
-        if exit_code != 0:
+        # Execute and parse JobResult envelope
+        await self._execute_agent_command(job, target_host, command)
+
+        # Parse JobResult from last line of output
+        # job.output is a List[str], so iterate directly
+        result_envelope = None
+
+        # Find the last JSON line (JobResult envelope)
+        for line in reversed(job.output):
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    result_envelope = json.loads(line)
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+        if not result_envelope:
             raise RuntimeError(
-                f"VM initialization script exited with code {exit_code}")
+                "No valid JobResult envelope found in initialization output"
+            )
+
+        # Check status
+        status = result_envelope.get("status")
+        if status != "success":
+            error_msg = result_envelope.get("message", "Unknown error")
+            raise RuntimeError(f"VM initialization failed: {error_msg}")
+
+        # Store result data
+        result_data = result_envelope.get("data", {})
+        if result_data:
+            await self._update_job(job.job_id, result_data=result_data)
+
+        # Append logs from envelope if present
+        logs = result_envelope.get("logs", [])
+        if logs:
+            log_text = "\n".join(logs)
+            await self._append_job_output(job.job_id, log_text)
 
     async def _execute_noop_test_job(self, job: Job) -> None:
         """Execute a noop-test job using the new protocol.
@@ -1678,7 +1721,7 @@ class JobService:
 
         # Format resource name for display
         resource_label = resource_name if resource_name else job.job_id[:8]
-        
+
         # For managed deployment, always treat as VM deployment
         if job.job_type == "managed_deployment":
             resource_type = "VM"
