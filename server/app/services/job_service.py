@@ -19,9 +19,6 @@ from ..core.models import Job, JobStatus, VMDeleteRequest, NotificationLevel
 from ..core.job_envelope import create_job_request, parse_job_result
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
-    JobRequest,
-    JobResultEnvelope,
-    JobResultStatus,
 )
 from ..core.guest_config_generator import generate_guest_config
 from .host_deployment_service import host_deployment_service
@@ -1071,10 +1068,6 @@ class JobService:
         This completely bypasses schemas and uses Pydantic models throughout.
         """
         from ..core.pydantic_models import (
-            VmSpec,
-            DiskSpec,
-            NicSpec,
-            GuestConfigSpec,
             ManagedDeploymentRequest,
         )
 
@@ -1297,87 +1290,6 @@ class JobService:
             job.job_id,
             f"Managed deployment complete. VM '{request.vm_spec.vm_name}' fully deployed on {target_host}.",
         )
-
-    async def _execute_managed_deployment_protocol_operation(
-        self,
-        job: Job,
-        target_host: str,
-        job_request: JobRequest,
-        operation_description: str,
-    ) -> JobResultEnvelope:
-        """Execute a single operation using the new JobRequest/JobResult protocol.
-
-        This is a helper method for executing individual operations (VM, Disk, NIC)
-        during managed deployment. This provides a simplified interface for orchestration.
-
-        Args:
-            job: The parent job (for logging context)
-            target_host: Target host for execution
-            job_request: JobRequest envelope
-            operation_description: Human-readable description for logging
-
-        Returns:
-            JobResultEnvelope with the operation result
-
-        Raises:
-            RuntimeError: If the operation fails
-        """
-        # Serialize the JobRequest to JSON
-        json_payload = await asyncio.to_thread(
-            job_request.model_dump_json,
-        )
-
-        self._log_agent_request(job.job_id, target_host,
-                                json_payload, "Main-NewProtocol.ps1")
-
-        # Build command to invoke Main-NewProtocol.ps1
-        command = self._build_agent_invocation_command(
-            "Main-NewProtocol.ps1", json_payload
-        )
-
-        # Storage for the result JSON
-        result_json_lines: List[str] = []
-
-        def capture_json_output(line: str) -> None:
-            """Capture JSON output from the host agent."""
-            stripped = line.strip()
-            if stripped.startswith('{'):
-                result_json_lines.append(stripped)
-
-        # Execute the command with JSON capture
-        exit_code = await self._execute_agent_command(
-            job, target_host, command, line_callback=capture_json_output
-        )
-
-        if exit_code != 0:
-            raise RuntimeError(
-                f"{operation_description} script exited with code {exit_code}")
-
-        # Parse the JobResult envelope
-        if not result_json_lines:
-            raise RuntimeError(
-                f"No JSON result returned from {operation_description}")
-
-        # Use the first (and should be only) JSON line
-        result_json = result_json_lines[0]
-        envelope, error = parse_job_result(result_json)
-
-        if error:
-            raise RuntimeError(
-                f"Failed to parse {operation_description} result: {error}")
-
-        if not envelope:
-            raise RuntimeError(
-                f"{operation_description} result envelope is None")
-
-        # Check the result status
-        if envelope.status == JobResultStatus.ERROR:
-            error_msg = envelope.message or "Unknown error"
-            error_code = envelope.code or "UNKNOWN"
-            raise RuntimeError(
-                f"{operation_description} failed ({error_code}): {error_msg}")
-
-        return envelope
 
     async def _queue_child_job(
         self,
