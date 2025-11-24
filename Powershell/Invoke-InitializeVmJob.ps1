@@ -67,9 +67,16 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Load and validate provisioning scripts version
 # This version must match the server version and the guest agent version
+# In production (on host), version file is in same directory as scripts
+# In development (in repository), version file is in parent directory
 $versionFilePath = Join-Path -Path $scriptDir -ChildPath "version"
 if (-not (Test-Path -LiteralPath $versionFilePath)) {
-    throw "Version file not found at $versionFilePath. Cannot validate provisioning system version."
+    # Try parent directory (for development/testing in repository)
+    $parentDir = Split-Path -Parent $scriptDir
+    $versionFilePath = Join-Path -Path $parentDir -ChildPath "version"
+    if (-not (Test-Path -LiteralPath $versionFilePath)) {
+        throw "Version file not found in script directory or parent directory. Cannot validate provisioning system version."
+    }
 }
 
 $versionRaw = Get-Content -Path $versionFilePath -Raw -ErrorAction Stop
