@@ -59,6 +59,7 @@ for the UI banner.
 | `JOB_WORKER_CONCURRENCY`        | `6`                          | No                      | Maximum number of provisioning jobs executed simultaneously.                                                         |
 | `JOB_LONG_TIMEOUT_SECONDS`      | `900.0`                        | No                      | Timeout applied to long-running orchestration jobs such as VM provisioning or deletion.                              |
 | `JOB_SHORT_TIMEOUT_SECONDS`     | `60.0`                         | No                      | Timeout applied to quick orchestration jobs (power actions, script triggers).                                        |
+| `JOB_DISK_TIMEOUT_SECONDS`      | `900.0`                        | No                      | Timeout applied to disk operations (copy, create, delete). Disk image cloning can take several minutes.              |
 | `REMOTE_TASK_MIN_CONCURRENCY`   | `6`                          | No                      | Initial number of concurrent WinRM/PowerShell operations the orchestrator will run.                                  |
 | `REMOTE_TASK_MAX_CONCURRENCY`   | `24`                         | No                      | Baseline upper bound on simultaneous remote operations before dynamic scaling considers resource headroom.          |
 | `REMOTE_TASK_DYNAMIC_CEILING`   | `48`                         | No                      | Hard ceiling for automatic fast-pool expansion driven by local resource utilisation.                                 |

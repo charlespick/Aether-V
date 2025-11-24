@@ -792,9 +792,20 @@ class JobDetailsOverlay extends BaseOverlay {
         if (!job) {
             return 'Job Details';
         }
+        
+        // Use enriched metadata if available for better resource naming
+        const metadata = job.parameters?._metadata || {};
+        const resourceType = metadata.resource_type || '';
+        const resourceName = metadata.resource_name || this.extractVmName(job) || job.job_id || 'Job';
+        
         const label = this.formatJobType(job.job_type);
-        const target = this.extractVmName(job) || job.job_id || 'Job';
-        return `${label} • ${target}`;
+        
+        // Format: <Operation> <Resource Type> • <Resource Name>
+        // For VM jobs, resource_type will be "VM", so we get "Delete VM • vm-name"
+        // For NIC jobs, we get "Delete Network Adapter • NIC-Prod-01"
+        // For Disk jobs, we get "Create Disk • data-disk-01"
+        
+        return `${label} • ${resourceName}`;
     }
 
     async render() {
@@ -916,7 +927,14 @@ class JobDetailsOverlay extends BaseOverlay {
 
     renderChildJobSection(childJobs = []) {
         const jobs = Array.isArray(childJobs) ? childJobs : [];
-        const shouldShow = jobs.length > 0 || this.job?.job_type === 'managed_deployment';
+        
+        // Don't show Sub-jobs section for managed_deployment - use Deployment Steps instead
+        const isManagedDeployment = this.job?.job_type === 'managed_deployment';
+        if (isManagedDeployment) {
+            return '';
+        }
+        
+        const shouldShow = jobs.length > 0;
         if (!shouldShow) {
             return '';
         }
@@ -1356,6 +1374,10 @@ class JobDetailsOverlay extends BaseOverlay {
     }
 
     extractVmName(job) {
+        // Try enriched metadata first for accurate VM names
+        if (job?.parameters?._metadata?.vm_name) {
+            return job.parameters._metadata.vm_name;
+        }
         return this.extractField(job, ['vm_name', 'name']);
     }
 
@@ -1363,6 +1385,17 @@ class JobDetailsOverlay extends BaseOverlay {
         if (!job) {
             return null;
         }
+        
+        // Check enriched metadata first
+        const metadata = job.parameters?._metadata || {};
+        for (const field of fieldNames) {
+            const value = metadata[field];
+            if (typeof value === 'string' && value.trim()) {
+                return value.trim();
+            }
+        }
+        
+        // Fallback to original logic
         const parameters = job.parameters || {};
         const sources = [parameters.definition?.fields, parameters.fields, parameters];
         for (const source of sources) {

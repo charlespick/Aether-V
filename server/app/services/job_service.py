@@ -241,8 +241,15 @@ class JobService:
                 float(settings.job_long_timeout_seconds),
             )
 
-        # Shorter jobs for component creation
-        if job_type in {"create_disk", "create_nic", "update_vm", "update_disk", "update_nic", "delete_disk", "delete_nic"}:
+        # Disk operations can take several minutes for copying/cloning
+        if job_type in {"create_disk", "update_disk", "delete_disk"}:
+            return (
+                RemoteTaskCategory.GENERAL,
+                float(settings.job_disk_timeout_seconds),
+            )
+
+        # Shorter jobs for NIC operations and VM updates
+        if job_type in {"create_nic", "update_vm", "update_nic", "delete_nic"}:
             return (
                 RemoteTaskCategory.GENERAL,
                 float(settings.job_short_timeout_seconds),
@@ -608,6 +615,11 @@ class JobService:
             # For VM jobs, get VM name from parameters
             if job.job_type == "delete_vm":
                 vm_name = job.parameters.get("vm_name")
+            elif job.job_type == "managed_deployment":
+                # For managed deployment, extract from request.vm_spec
+                request_data = job.parameters.get("request", {})
+                vm_spec = request_data.get("vm_spec", {})
+                vm_name = vm_spec.get("vm_name")
             else:
                 vm_name = fields.get("vm_name")
 
@@ -2178,6 +2190,16 @@ class JobService:
 
         # Format resource name for display
         resource_label = resource_name if resource_name else job.job_id[:8]
+        
+        # For managed deployment, always treat as VM deployment
+        if job.job_type == "managed_deployment":
+            resource_type = "VM"
+            if not resource_name:
+                # Extract VM name from request if metadata not available
+                request_data = job.parameters.get("request", {})
+                vm_spec = request_data.get("vm_spec", {})
+                resource_label = vm_spec.get("vm_name", job.job_id[:8])
+                resource_name = resource_label
 
         # Determine location phrase
         is_vm_job = resource_type == "VM"
