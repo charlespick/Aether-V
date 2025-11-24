@@ -326,7 +326,7 @@ class KerberosManager:
             try:
                 creds_raw = gssapi_raw.acquire_cred_from(
                     {'client_keytab': str(self._keytab_path), 'ccache': f'FILE:{self._cache_path}'},
-                    name=name.raw,
+                    name=name.raw,  # type: ignore[attr-defined]
                     usage='initiate'
                 )
                 # Wrap the raw credentials in the high-level API for convenience
@@ -558,10 +558,10 @@ def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
         ordered: List[Tuple[int, int, str, str]] = []
         domain_hosts: List[str] = []
         for rdata in answers:
-            target = getattr(rdata, "target", None)
-            if not target:
+            srv_target: Optional[str] = getattr(rdata, "target", None)
+            if not srv_target:
                 continue
-            host = str(target).rstrip(".")
+            host = str(srv_target).rstrip(".")
             if not host:
                 continue
             priority = getattr(rdata, "priority", 0)
@@ -729,7 +729,7 @@ def _extract_allowed_sids_from_security_descriptor(descriptor: bytes) -> List[by
         descriptor = bytes(descriptor)
 
     if not isinstance(descriptor, (bytes, bytearray)):
-        return []
+        return []  # type: ignore[unreachable]  # Defensive: handle unexpected types
 
     data = bytes(descriptor)
     if len(data) < 20:
@@ -1236,7 +1236,7 @@ def validate_host_kerberos_setup(
     Returns:
         Dictionary with 'errors', 'warnings', 'spn_errors', and 'delegation_errors' lists
     """
-    result = {
+    result: Dict[str, List[str]] = {
         "errors": [],
         "warnings": [],
         "spn_errors": [],
@@ -1289,7 +1289,8 @@ def validate_host_kerberos_setup(
                 result["warnings"].append(warning_msg)
                 continue
 
-            host_sid = (directory_info.get("object_sid") or "").strip()
+            host_sid_value = directory_info.get("object_sid") or ""
+            host_sid = str(host_sid_value).strip()
             if host_sid:
                 host_tokens.setdefault(host, set()).add(host_sid.lower())
                 expected_host_tokens.add(host_sid.lower())
@@ -1303,11 +1304,16 @@ def validate_host_kerberos_setup(
                 result["delegation_errors"].append(error_msg)
                 continue
 
-            delegate_targets = directory_info.get("delegate_targets") or []
+            delegate_targets_value = directory_info.get("delegate_targets") or []
+            if isinstance(delegate_targets_value, list):
+                delegate_targets = delegate_targets_value
+            else:
+                delegate_targets = []
             if delegate_targets:
+                delegate_targets_str = ', '.join(str(t) for t in delegate_targets)
                 warning_msg = (
                     f"Host '{host}': Legacy constrained delegation is configured "
-                    f"(msDS-AllowedToDelegateTo: {', '.join(delegate_targets)}). Remove these entries when using RBCD unless explicitly required."
+                    f"(msDS-AllowedToDelegateTo: {delegate_targets_str}). Remove these entries when using RBCD unless explicitly required."
                 )
                 logger.warning(warning_msg)
                 result["warnings"].append(warning_msg)
@@ -1346,15 +1352,17 @@ def validate_host_kerberos_setup(
                     continue
 
                 cluster_hosts = clusters.get(cluster_name, []) or []
+                rbcd_principals = directory_info.get("rbcd_principals", [])
+                rbcd_sid_strings = directory_info.get("rbcd_sid_strings", [])
                 combined_principals = [
                     str(principal)
-                    for principal in directory_info.get("rbcd_principals", [])
+                    for principal in rbcd_principals  # type: ignore[attr-defined]
                     if principal
                 ]
                 combined_principals.extend(
                     [
                         str(sid)
-                        for sid in directory_info.get("rbcd_sid_strings", [])
+                        for sid in rbcd_sid_strings  # type: ignore[attr-defined]
                         if sid
                     ]
                 )
@@ -1544,8 +1552,8 @@ def _service_principal_in_allowed_list(
     combined_tokens = set(service_tokens)
     if resolved_tokens:
         for token in resolved_tokens:
-            if token is None:
-                continue
+            if token is None:  # Defensive: handle unexpected None in set
+                continue  # type: ignore[unreachable]
             token_lower = str(token).strip().lower()
             if not token_lower:
                 continue
@@ -1646,9 +1654,10 @@ def _check_host_delegation_legacy(
     trusted_to_auth = bool(directory_info.get("trusted_to_auth"))
     trusted_for = bool(directory_info.get("trusted_for_delegation"))
     delegate_present = bool(directory_info.get("delegate_present"))
+    delegate_targets_raw = directory_info.get("delegate_targets", [])
     delegate_targets = [
         str(target)
-        for target in directory_info.get("delegate_targets", [])
+        for target in delegate_targets_raw  # type: ignore[attr-defined]
         if target
     ]
 

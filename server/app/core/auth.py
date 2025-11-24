@@ -107,9 +107,8 @@ class JWKSCache:
                     
                 self._keys = new_keys
                 self._fetched_at = now
-                if self._keys is not None:
-                    logger.info(f"Successfully fetched JWKS (keys: {len(self._keys.get('keys', []))})")
-                return self._keys
+                logger.info(f"Successfully fetched JWKS (keys: {len(new_keys.get('keys', []))})")
+                return cast(Dict[str, Any], new_keys)
         except Exception as e:
             logger.error(f"JWKS fetch failed from {self.jwks_uri}: {e}")
             if self._keys is not None:
