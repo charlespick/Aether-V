@@ -21,6 +21,18 @@ from ..core.config import settings
 logger = logging.getLogger(__name__)
 
 
+# PSInvocationState integer values to string names mapping
+_PS_INVOCATION_STATE_MAP = {
+    getattr(PSInvocationState, "NOT_STARTED", 0): "not_started",
+    getattr(PSInvocationState, "RUNNING", 1): "running",
+    getattr(PSInvocationState, "STOPPING", 2): "stopping",
+    getattr(PSInvocationState, "STOPPED", 3): "stopped",
+    getattr(PSInvocationState, "COMPLETED", 4): "completed",
+    getattr(PSInvocationState, "FAILED", 5): "failed",
+    getattr(PSInvocationState, "DISCONNECTED", 6): "disconnected",
+}
+
+
 class WinRMServiceError(RuntimeError):
     """Base exception for WinRM service failures."""
 
@@ -653,16 +665,7 @@ class WinRMService:
 
         if isinstance(state, int):
             # PSInvocationState values are integers, need to map them to names
-            state_map = {
-                getattr(PSInvocationState, "NOT_STARTED", 0): "not_started",
-                getattr(PSInvocationState, "RUNNING", 1): "running",
-                getattr(PSInvocationState, "STOPPING", 2): "stopping",
-                getattr(PSInvocationState, "STOPPED", 3): "stopped",
-                getattr(PSInvocationState, "COMPLETED", 4): "completed",
-                getattr(PSInvocationState, "FAILED", 5): "failed",
-                getattr(PSInvocationState, "DISCONNECTED", 6): "disconnected",
-            }
-            return state_map.get(state, str(state).lower())
+            return _PS_INVOCATION_STATE_MAP.get(state, str(state).lower())
         if state is None:
             return "unknown"
         return str(state).lower()

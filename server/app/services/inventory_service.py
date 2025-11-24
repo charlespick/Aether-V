@@ -1380,9 +1380,11 @@ class InventoryService:
                 memory_gb = memory_startup_gb
 
             cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
-            # Ensure cpu_cores and memory_gb are never None for VM constructor
-            cpu_cores_value = cpu_cores if cpu_cores is not None else 0
-            memory_gb_value = memory_gb if memory_gb is not None else 0.0
+            # Ensure values are never None (VM model requires non-optional int/float)
+            if cpu_cores is None:
+                cpu_cores = 0
+            if memory_gb is None:
+                memory_gb = 0.0
             
             vm_id = self._coerce_str(vm_data.get("Id"))
             os_name = self._coerce_str(
@@ -1406,8 +1408,8 @@ class InventoryService:
                 name=vm_data.get("Name", ""),
                 host=hostname,
                 state=state,
-                cpu_cores=cpu_cores_value,
-                memory_gb=memory_gb_value,
+                cpu_cores=cpu_cores,
+                memory_gb=memory_gb,
                 memory_startup_gb=memory_startup_gb,
                 memory_min_gb=memory_min_gb,
                 memory_max_gb=memory_max_gb,
