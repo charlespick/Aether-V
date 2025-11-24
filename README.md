@@ -39,13 +39,21 @@ The orchestration service relies on the [`pypsrp`](https://github.com/jborean93/
 ### Development Setup
 
 1. Create a `.env` file with your settings (see below).
-2. Run locally:
+2. Install dependencies:
+    ```bash
+    pip install -r server/requirements.txt
+    ```
+3. Run the full test suite:
+    ```bash
+    make test
+    ```
+    This runs all tests including pytest, mypy type checking, Node.js tests, PowerShell Pester tests, and protocol round-trip tests.
+4. Run locally:
     ```bash
     cd server
-    pip install -r requirements.txt
     python -m app.main
     ```
-3. Access the UI at [http://localhost:8000](http://localhost:8000) or API docs at `/docs`.
+5. Access the UI at [http://localhost:8000](http://localhost:8000) or API docs at `/docs`.
 
 ### Production Deployment
 
