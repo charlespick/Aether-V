@@ -7,7 +7,6 @@ import base64
 import copy
 import json
 import logging
-import re
 import uuid
 from datetime import datetime
 from pathlib import PureWindowsPath
@@ -1142,7 +1141,7 @@ class JobService:
             )
 
         # Extract VM ID from result data
-        vm_id = self._extract_vm_id_from_output(vm_job_result.output)
+        vm_id = self._extract_vm_id_from_output(vm_job_result)
         if not vm_id:
             raise RuntimeError(
                 "VM creation completed but no VM ID could be extracted from output"
@@ -1389,39 +1388,11 @@ class JobService:
             merged.append(new_child)
         return merged
 
-    def _extract_vm_id_from_output(self, lines: List[str]) -> Optional[str]:
-        """Parse a VM ID from the output of a child VM creation job."""
-
-        for line in lines:
-            parsed: Optional[Dict[str, Any]] = None
-            try:
-                candidate = line[line.index("{"): line.rindex("}") + 1]
-                parsed = json.loads(candidate)
-            except (ValueError, json.JSONDecodeError):
-                try:
-                    parsed = json.loads(line)
-                except Exception:
-                    parsed = None
-
-            if isinstance(parsed, dict):
-                for key in ("vm_id", "vmId", "id", "Id", "ID"):
-                    value = parsed.get(key)
-                    if isinstance(value, str) and value.strip():
-                        return value.strip()
-
-                nested_vm = parsed.get("vm")
-                if isinstance(nested_vm, dict):
-                    for key in ("id", "vm_id", "vmId", "Id", "ID"):
-                        value = nested_vm.get(key)
-                        if isinstance(value, str) and value.strip():
-                            return value.strip()
-
-            id_match = re.search(
-                r"vm[_\s-]?id\s*[:=]\s*([^\s]+)", line, flags=re.IGNORECASE)
-            if id_match:
-                return id_match.group(1).strip()
-
-        return None
+    def _extract_vm_id_from_output(self, vm_job: Job) -> Optional[str]:
+        """Extract VM ID from completed VM creation job result data."""
+        result_data = vm_job.parameters.get("result_data", {})
+        vm_id = result_data.get("vm_id")
+        return str(vm_id).strip() if vm_id else None
 
     async def _execute_agent_command(
         self,

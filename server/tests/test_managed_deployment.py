@@ -349,7 +349,7 @@ class TestManagedDeploymentExecution:
         monkeypatch.setattr(service, "_append_job_output", AsyncMock())
         monkeypatch.setattr(service, "_update_job", AsyncMock())
         monkeypatch.setattr(
-            service, "_extract_vm_id_from_output", lambda output: "vm-123")
+            service, "_extract_vm_id_from_output", lambda job: "vm-123")
         monkeypatch.setattr(
             service,
             "_queue_child_job",

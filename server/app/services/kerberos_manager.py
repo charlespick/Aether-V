@@ -491,7 +491,7 @@ def cleanup_kerberos() -> None:
 
 class PrincipalTokenizer:
     """Centralized token normalization for Kerberos principals and hosts.
-    
+
     This class consolidates scattered token manipulation logic into a single,
     well-tested location, following the principle of centralizing common
     functionality when it doesn't require excessive conditional branching.
@@ -500,7 +500,7 @@ class PrincipalTokenizer:
     @staticmethod
     def normalize_principal(principal: str) -> Set[str]:
         """Return all comparable token variations for a principal.
-        
+
         Handles various principal formats:
         - DOMAIN\\user → extracts user
         - host/service.domain.com → extracts service parts
@@ -548,7 +548,7 @@ class PrincipalTokenizer:
     @staticmethod
     def normalize_host(host: str, realm: Optional[str] = None) -> Set[str]:
         """Return all expected token variations for a Hyper-V host.
-        
+
         Generates common variations:
         - host.domain.com → host.domain.com, host, host$
         - With realm: host$@REALM, host@REALM
@@ -586,7 +586,7 @@ class PrincipalTokenizer:
     @staticmethod
     def extract_domain_from_principal(principal: Optional[str]) -> Optional[str]:
         """Extract DNS domain name from a Kerberos principal.
-        
+
         Examples:
             user@EXAMPLE.COM → example.com
             host/server.ad.local@AD.LOCAL → ad.local
@@ -603,7 +603,7 @@ class PrincipalTokenizer:
     @staticmethod
     def realm_to_base_dn(realm: Optional[str]) -> Optional[str]:
         """Convert Kerberos realm to LDAP base DN.
-        
+
         Examples:
             EXAMPLE.COM → DC=example,DC=com
             AD.CORP → DC=ad,DC=corp
@@ -624,7 +624,7 @@ class PrincipalTokenizer:
     @staticmethod
     def candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
         """Gather potential AD domain names from configuration.
-        
+
         Checks principal, configured realm, and provided realm parameter.
         Returns unique, lowercase domain names in priority order.
         """
