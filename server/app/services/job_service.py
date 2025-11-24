@@ -13,7 +13,6 @@ from datetime import datetime
 from pathlib import PureWindowsPath
 from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
-from xml.etree import ElementTree
 
 from ..core.config import settings
 from ..core.models import Job, JobStatus, VMDeleteRequest, NotificationLevel
@@ -84,134 +83,48 @@ def _redact_sensitive_parameters(
     return sanitized
 
 
-class _PowerShellStreamDecoder:
-    """Stateful normaliser for streamed PowerShell output."""
+class _SimpleLineBuffer:
+    """Stateful line buffer for streamed output.
+    
+    Note: pypsrp handles CLIXML deserialization internally, so we only need
+    simple line buffering for the plain text it returns.
+    """
 
-    _CLIXML_PREFIX = "#< CLIXML"
-    _CLIXML_END_TAG = "</Objs>"
-
-    def __init__(
-        self,
-        parse_clixml: Callable[[str], Optional[str]],
-        strip_clixml: Callable[[str], str],
-        decode_hex: Callable[[str], str],
-    ) -> None:
-        self._parse_clixml = parse_clixml
-        self._strip_clixml = strip_clixml
-        self._decode_hex = decode_hex
-        self._plain_buffer: str = ""
-        self._clixml_buffer: Optional[str] = None
+    def __init__(self) -> None:
+        self._buffer: str = ""
 
     def push(self, chunk: str) -> List[str]:
+        """Add chunk and return complete lines."""
         if not chunk:
             return []
 
-        sanitized = (
-            chunk.replace("\ufeff", "").replace(
-                "\r\n", "\n").replace("\r", "\n")
+        # Normalize line endings and remove BOM
+        normalized = (
+            chunk.replace("\ufeff", "")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
         )
-        if not sanitized:
+        if not normalized:
             return []
 
+        self._buffer += normalized
+
+        # Extract complete lines
         lines: List[str] = []
-
-        if self._clixml_buffer is not None:
-            self._clixml_buffer += sanitized
-            remaining = ""
-        else:
-            remaining = sanitized
-
-        while True:
-            if self._clixml_buffer is not None:
-                closing_index = self._clixml_buffer.find(self._CLIXML_END_TAG)
-                if closing_index == -1:
-                    break
-
-                end_index = closing_index + len(self._CLIXML_END_TAG)
-                payload = self._clixml_buffer[:end_index]
-                leftover = self._clixml_buffer[end_index:]
-
-                decoded = self._parse_clixml(payload)
-                if decoded is None:
-                    decoded = self._strip_clixml(payload)
-                if decoded:
-                    lines.extend(self._append_plain(decoded))
-
-                self._clixml_buffer = None
-                remaining = leftover
-                continue
-
-            if not remaining:
-                break
-
-            tail_length = max(0, len(self._CLIXML_PREFIX) - 1)
-            tail = self._plain_buffer[-tail_length:] if tail_length else ""
-            combined = tail + remaining
-            combined_index = combined.find(self._CLIXML_PREFIX)
-            if combined_index == -1:
-                lines.extend(self._append_plain(remaining))
-                break
-
-            if combined_index < len(tail):
-                sentinel_start_in_plain = (
-                    len(self._plain_buffer) - len(tail) + combined_index
-                )
-                sentinel_plain_part = self._plain_buffer[sentinel_start_in_plain:]
-                self._plain_buffer = self._plain_buffer[:sentinel_start_in_plain]
-                lines.extend(self._drain_plain_lines())
-                self._clixml_buffer = sentinel_plain_part + remaining
-                remaining = ""
-                continue
-
-            sentinel_index = combined_index - len(tail)
-            before = remaining[:sentinel_index]
-            if before:
-                lines.extend(self._append_plain(before))
-
-            self._clixml_buffer = remaining[sentinel_index:]
-            remaining = ""
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.strip():
+                lines.append(line)
 
         return lines
 
     def finalize(self) -> List[str]:
-        lines: List[str] = []
-
-        if self._clixml_buffer:
-            decoded = self._parse_clixml(self._clixml_buffer)
-            if decoded is None:
-                decoded = self._strip_clixml(self._clixml_buffer)
-            if decoded:
-                lines.extend(self._append_plain(decoded))
-            self._clixml_buffer = None
-
-        lines.extend(self._drain_plain_lines(final=True))
-        return lines
-
-    def _append_plain(self, text: str) -> List[str]:
-        if not text:
-            return []
-        normalized = self._decode_hex(text)
-        self._plain_buffer += normalized
-        return self._drain_plain_lines()
-
-    def _drain_plain_lines(self, final: bool = False) -> List[str]:
-        lines: List[str] = []
-        while True:
-            newline_index = self._plain_buffer.find("\n")
-            if newline_index == -1:
-                break
-            line = self._plain_buffer[:newline_index]
-            self._plain_buffer = self._plain_buffer[newline_index + 1:]
-            if line.strip():
-                lines.append(line)
-
-        if final:
-            tail = self._plain_buffer
-            self._plain_buffer = ""
-            if tail.strip():
-                lines.append(tail)
-
-        return lines
+        """Return any remaining buffered content."""
+        if self._buffer.strip():
+            result = [self._buffer]
+            self._buffer = ""
+            return result
+        return []
 
 
 class JobService:
@@ -224,8 +137,7 @@ class JobService:
         self._queue: Optional[asyncio.Queue[Optional[str]]] = None
         self._worker_tasks: List[asyncio.Task[None]] = []
         self._started = False
-        self._stream_decoders: Dict[Tuple[str, str],
-                                    _PowerShellStreamDecoder] = {}
+        self._line_buffers: Dict[Tuple[str, str], _SimpleLineBuffer] = {}
         self._host_running: Dict[str, str] = {}
         self._host_waiters: Dict[str, Deque[Tuple[str, asyncio.Event]]] = {}
 
@@ -1979,16 +1891,12 @@ class JobService:
         if not payload:
             return
 
-        decoder = self._stream_decoders.get((job_id, stream.lower()))
-        if decoder is None:
-            decoder = _PowerShellStreamDecoder(
-                parse_clixml=self._parse_clixml_payload,
-                strip_clixml=self._strip_clixml_markup,
-                decode_hex=self._decode_hex_escapes,
-            )
-            self._stream_decoders[(job_id, stream.lower())] = decoder
+        buffer = self._line_buffers.get((job_id, stream.lower()))
+        if buffer is None:
+            buffer = _SimpleLineBuffer()
+            self._line_buffers[(job_id, stream.lower())] = buffer
 
-        lines = decoder.push(payload)
+        lines = buffer.push(payload)
         if not lines:
             return
 
@@ -2021,10 +1929,10 @@ class JobService:
         line_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         pending_keys = [
-            key for key in self._stream_decoders if key[0] == job_id]
+            key for key in self._line_buffers if key[0] == job_id]
         for key in pending_keys:
-            decoder = self._stream_decoders.pop(key)
-            trailing = decoder.finalize()
+            buffer = self._line_buffers.pop(key)
+            trailing = buffer.finalize()
             if not trailing:
                 continue
             formatted_lines: List[str] = []
@@ -2042,61 +1950,6 @@ class JobService:
                 formatted_lines.append(line)
 
             await self._append_job_output(job_id, *formatted_lines)
-
-    _CLIXML_PREFIX = "#< CLIXML"
-    _CLIXML_TEXT_TAGS = {"S", "AV"}
-    _HEX_ESCAPE_PATTERN = re.compile(r"_x([0-9A-Fa-f]{4})_")
-
-    def _parse_clixml_payload(self, payload: str) -> Optional[str]:
-        """Attempt to decode PowerShell CLI XML output into plain text."""
-
-        trimmed = payload.lstrip()
-        if trimmed.startswith(self._CLIXML_PREFIX):
-            trimmed = trimmed[len(self._CLIXML_PREFIX):].lstrip()
-
-        xml_start = trimmed.find("<Objs")
-        if xml_start == -1:
-            return None
-
-        xml_data = trimmed[xml_start:]
-        try:
-            root = ElementTree.fromstring(xml_data)
-        except ElementTree.ParseError:
-            return None
-
-        fragments: List[str] = []
-        for element in root.iter():
-            tag = element.tag.split("}")[-1]
-            if tag in self._CLIXML_TEXT_TAGS and element.text:
-                fragments.append(element.text)
-
-        if not fragments:
-            return None
-
-        text = "\n".join(fragments)
-        return self._decode_hex_escapes(text)
-
-    def _strip_clixml_markup(self, payload: str) -> str:
-        """Best-effort fallback for CLI XML payloads that cannot be parsed."""
-
-        trimmed = payload
-        xml_start = trimmed.find("<Objs")
-        if xml_start != -1:
-            trimmed = trimmed[xml_start:]
-
-        stripped = re.sub(r"<[^>]+>", "", trimmed)
-        return self._decode_hex_escapes(stripped)
-
-    def _decode_hex_escapes(self, value: str) -> str:
-        """Convert PowerShell _xHHHH_ sequences to their character equivalents."""
-
-        def repl(match: re.Match[str]) -> str:
-            try:
-                return chr(int(match.group(1), 16))
-            except ValueError:
-                return match.group(0)
-
-        return self._HEX_ESCAPE_PATTERN.sub(repl, value)
 
     async def _after_job_update(
         self,
