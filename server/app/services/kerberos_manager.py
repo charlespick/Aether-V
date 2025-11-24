@@ -14,6 +14,8 @@ from dns import resolver as dns_resolver
 import gssapi
 import gssapi.raw as gssapi_raw
 
+from .spn_validator import check_wsman_spn
+
 try:
     from ldap3 import (
         BASE,
@@ -108,17 +110,19 @@ class KerberosManager:
             # Set cache location (also use temp file for security)
             # Use mkstemp to generate a secure random filename and keep the file
             # to prevent symlink attacks (don't delete and recreate)
-            cache_fd, cache_path_str = tempfile.mkstemp(prefix="krb5cc_aetherv_", suffix="")
+            cache_fd, cache_path_str = tempfile.mkstemp(
+                prefix="krb5cc_aetherv_", suffix="")
             self._cache_path = Path(cache_path_str)
-            
+
             # Set restrictive permissions (owner read/write only)
             os.chmod(self._cache_path, 0o600)
-            
+
             # Close the file descriptor but keep the file
             # GSSAPI/kinit will overwrite it, avoiding the symlink race condition
             os.close(cache_fd)
-            
-            logger.debug("Prepared credential cache path: %s", self._cache_path)
+
+            logger.debug("Prepared credential cache path: %s",
+                         self._cache_path)
             os.environ["KRB5CCNAME"] = f"FILE:{self._cache_path}"
             logger.debug("Set KRB5CCNAME=FILE:%s", self._cache_path)
 
@@ -133,12 +137,14 @@ class KerberosManager:
             self._acquire_credentials()
 
             self._initialized = True
-            logger.info("Kerberos credentials acquired successfully for principal: %s", self.principal)
+            logger.info(
+                "Kerberos credentials acquired successfully for principal: %s", self.principal)
 
         except Exception as exc:
             logger.error("Failed to initialize Kerberos manager: %s", exc)
             self.cleanup()
-            raise KerberosManagerError(f"Kerberos initialization failed: {exc}") from exc
+            raise KerberosManagerError(
+                f"Kerberos initialization failed: {exc}") from exc
 
     def _write_keytab(self) -> Path:
         """
@@ -160,15 +166,16 @@ class KerberosManager:
 
             # Create secure temporary file for keytab
             # mkstemp creates the file with O_EXCL, preventing symlink attacks
-            fd, keytab_path_str = tempfile.mkstemp(prefix="aetherv_", suffix=".keytab")
+            fd, keytab_path_str = tempfile.mkstemp(
+                prefix="aetherv_", suffix=".keytab")
             keytab_path = Path(keytab_path_str)
-            
+
             try:
                 # Set restrictive permissions immediately (600 = rw-------)
                 # Do this before writing sensitive data
                 os.fchmod(fd, 0o600)
                 logger.debug("Set keytab permissions to 600")
-                
+
                 # Write keytab data to the file descriptor
                 os.write(fd, keytab_bytes)
             finally:
@@ -179,7 +186,8 @@ class KerberosManager:
 
         except Exception as exc:
             logger.error("Failed to write keytab: %s", exc)
-            raise KerberosManagerError(f"Failed to write keytab: {exc}") from exc
+            raise KerberosManagerError(
+                f"Failed to write keytab: {exc}") from exc
 
     def _validate_keytab_with_klist(self) -> None:
         """
@@ -201,8 +209,10 @@ class KerberosManager:
             )
 
             if result.returncode != 0:
-                logger.error("klist command failed with exit code %d: %s", result.returncode, result.stderr)
-                raise KerberosManagerError(f"Failed to validate keytab with klist: {result.stderr}")
+                logger.error("klist command failed with exit code %d: %s",
+                             result.returncode, result.stderr)
+                raise KerberosManagerError(
+                    f"Failed to validate keytab with klist: {result.stderr}")
 
             # Parse klist output to find principals
             # Output format is typically:
@@ -211,7 +221,7 @@ class KerberosManager:
             # ---- --------------------------------------------------------------------------
             #    2 user@REALM
             #    2 user@realm
-            
+
             output = result.stdout
             logger.debug("klist output:\n%s", output)
 
@@ -222,7 +232,7 @@ class KerberosManager:
                 line = line.strip()
                 if not line or "Keytab name:" in line or "KVNO" in line or "----" in line:
                     continue
-                
+
                 # Extract principal (format: "KVNO principal")
                 parts = line.split(None, 1)
                 if len(parts) == 2:
@@ -233,7 +243,8 @@ class KerberosManager:
 
             # Check if our principal is in the keytab (case-insensitive comparison)
             principal_lower = self.principal.lower()
-            matching_principals = [p for p in principals_found if p.lower() == principal_lower]
+            matching_principals = [
+                p for p in principals_found if p.lower() == principal_lower]
 
             if not matching_principals:
                 logger.error(
@@ -246,13 +257,15 @@ class KerberosManager:
                     f"Found: {', '.join(principals_found)}"
                 )
 
-            logger.info("Validated keytab contains principal: %s", matching_principals[0])
+            logger.info("Validated keytab contains principal: %s",
+                        matching_principals[0])
 
         except subprocess.TimeoutExpired:
             logger.error("klist command timed out")
             raise KerberosManagerError("Keytab validation timed out") from None
         except FileNotFoundError:
-            logger.error("klist command not found - ensure Kerberos tools are installed")
+            logger.error(
+                "klist command not found - ensure Kerberos tools are installed")
             raise KerberosManagerError(
                 "klist command not found. Install krb5-user (Debian/Ubuntu) or krb5-workstation (RHEL/CentOS)"
             ) from None
@@ -260,7 +273,8 @@ class KerberosManager:
             raise
         except Exception as exc:
             logger.error("Failed to validate keytab: %s", exc)
-            raise KerberosManagerError(f"Keytab validation failed: {exc}") from exc
+            raise KerberosManagerError(
+                f"Keytab validation failed: {exc}") from exc
 
     def _configure_kdc_override(self) -> None:
         """Write a temporary krb5 configuration when a KDC override is provided."""
@@ -269,12 +283,14 @@ class KerberosManager:
             return
 
         if not self.realm:
-            raise KerberosManagerError("KDC override requires a Kerberos realm to be set")
+            raise KerberosManagerError(
+                "KDC override requires a Kerberos realm to be set")
 
         conf_path: Optional[Path] = None
 
         try:
-            fd, conf_path_str = tempfile.mkstemp(prefix="krb5_aetherv_", suffix=".conf")
+            fd, conf_path_str = tempfile.mkstemp(
+                prefix="krb5_aetherv_", suffix=".conf")
             os.close(fd)
             conf_path = Path(conf_path_str)
 
@@ -293,7 +309,8 @@ class KerberosManager:
 
             self._krb5_conf_path = conf_path
             os.environ["KRB5_CONFIG"] = str(conf_path)
-            logger.debug("Wrote temporary krb5.conf to %s for KDC override", conf_path)
+            logger.debug(
+                "Wrote temporary krb5.conf to %s for KDC override", conf_path)
         except KerberosManagerError:
             raise
         except Exception as exc:
@@ -302,8 +319,10 @@ class KerberosManager:
                 try:
                     conf_path.unlink()
                 except Exception:
-                    logger.debug("Unable to remove temporary krb5.conf after failure", exc_info=True)
-            raise KerberosManagerError(f"Failed to configure KDC override: {exc}") from exc
+                    logger.debug(
+                        "Unable to remove temporary krb5.conf after failure", exc_info=True)
+            raise KerberosManagerError(
+                f"Failed to configure KDC override: {exc}") from exc
 
     def _acquire_credentials(self) -> None:
         """
@@ -317,7 +336,8 @@ class KerberosManager:
         """
         try:
             # Parse the principal name for gssapi
-            name = gssapi.Name(self.principal, gssapi.NameType.kerberos_principal)
+            name = gssapi.Name(
+                self.principal, gssapi.NameType.kerberos_principal)
             logger.debug("Parsed Kerberos principal: %s", name)
 
             # Acquire credentials from the keytab using the raw API
@@ -325,7 +345,8 @@ class KerberosManager:
             # The high-level gssapi.Credentials() only reads from existing cache
             try:
                 creds_raw = gssapi_raw.acquire_cred_from(
-                    {'client_keytab': str(self._keytab_path), 'ccache': f'FILE:{self._cache_path}'},
+                    {'client_keytab': str(self._keytab_path),
+                     'ccache': f'FILE:{self._cache_path}'},
                     name=name.raw,  # type: ignore[attr-defined]
                     usage='initiate'
                 )
@@ -333,27 +354,31 @@ class KerberosManager:
                 creds = gssapi.Credentials(base=creds_raw.creds)
             except AttributeError:
                 # Fallback: If acquire_cred_from is not available, use kinit
-                logger.warning("gssapi.raw.acquire_cred_from not available, falling back to kinit")
+                logger.warning(
+                    "gssapi.raw.acquire_cred_from not available, falling back to kinit")
                 self._acquire_credentials_via_kinit()
                 # Verify credentials were acquired
                 creds = gssapi.Credentials(name=name, usage='initiate')
-            
-            logger.info("Successfully acquired Kerberos credentials for %s", self.principal)
+
+            logger.info(
+                "Successfully acquired Kerberos credentials for %s", self.principal)
             logger.debug("Credential lifetime: %s seconds", creds.lifetime)
 
         except gssapi.exceptions.GSSError as exc:
             logger.error("GSSAPI error acquiring credentials: %s", exc)
-            raise KerberosManagerError(f"Failed to acquire Kerberos credentials: {exc}") from exc
+            raise KerberosManagerError(
+                f"Failed to acquire Kerberos credentials: {exc}") from exc
         except Exception as exc:
             logger.error("Unexpected error acquiring credentials: %s", exc)
-            raise KerberosManagerError(f"Failed to acquire Kerberos credentials: {exc}") from exc
+            raise KerberosManagerError(
+                f"Failed to acquire Kerberos credentials: {exc}") from exc
 
     def _acquire_credentials_via_kinit(self) -> None:
         """
         Fallback method to acquire credentials using kinit command.
-        
+
         This is used when gssapi.raw.acquire_cred_from is not available.
-        
+
         Raises:
             KerberosManagerError: If kinit fails
         """
@@ -365,7 +390,7 @@ class KerberosManager:
                 '-c', f'FILE:{self._cache_path}',  # Cache file path
                 self.principal
             ]
-            
+
             logger.debug("Running kinit command: %s", ' '.join(cmd))
             result = subprocess.run(
                 cmd,
@@ -373,15 +398,16 @@ class KerberosManager:
                 text=True,
                 check=True
             )
-            
+
             if result.returncode != 0:
                 logger.error("kinit failed: %s", result.stderr)
                 raise KerberosManagerError(f"kinit failed: {result.stderr}")
-                
+
             logger.debug("kinit succeeded: %s", result.stdout)
-            
+
         except FileNotFoundError:
-            raise KerberosManagerError("kinit command not found - ensure Kerberos client tools are installed")
+            raise KerberosManagerError(
+                "kinit command not found - ensure Kerberos client tools are installed")
         except subprocess.CalledProcessError as exc:
             logger.error("kinit command failed: %s", exc.stderr)
             raise KerberosManagerError(f"kinit failed: {exc.stderr}") from exc
@@ -405,7 +431,8 @@ class KerberosManager:
         if self._krb5_conf_path and self._krb5_conf_path.exists():
             try:
                 self._krb5_conf_path.unlink()
-                logger.debug("Removed temporary krb5.conf: %s", self._krb5_conf_path)
+                logger.debug("Removed temporary krb5.conf: %s",
+                             self._krb5_conf_path)
             except Exception as exc:
                 logger.warning("Failed to remove temporary krb5.conf: %s", exc)
 
@@ -464,57 +491,184 @@ def cleanup_kerberos() -> None:
         _kerberos_manager = None
 
 
+class PrincipalTokenizer:
+    """Centralized token normalization for Kerberos principals and hosts.
+
+    This class consolidates scattered token manipulation logic into a single,
+    well-tested location, following the principle of centralizing common
+    functionality when it doesn't require excessive conditional branching.
+    """
+
+    @staticmethod
+    def normalize_principal(principal: str) -> Set[str]:
+        """Return all comparable token variations for a principal.
+
+        Handles various principal formats:
+        - DOMAIN\\user → extracts user
+        - host/service.domain.com → extracts service parts
+        - user@REALM → extracts user and REALM parts
+        - computer$ → extracts computer
+        - CN=...,DC=... → extracts DN components
+        """
+        tokens: Set[str] = set()
+        queue: List[str] = []
+
+        if principal:
+            queue.append(principal.strip().lower())
+
+        while queue:
+            current = queue.pop()
+            if not current or current in tokens:
+                continue
+
+            tokens.add(current)
+
+            # Extract domain\\user → user
+            if "\\" in current:
+                queue.append(current.split("\\", 1)[1])
+            # Extract service/host → host
+            if "/" in current:
+                queue.append(current.split("/", 1)[1])
+            # Extract user@realm → user
+            if "@" in current:
+                queue.append(current.split("@", 1)[0])
+            # Extract computer$ → computer
+            if current.endswith("$"):
+                queue.append(current[:-1])
+            # Extract fqdn.domain.com → fqdn
+            if "." in current:
+                queue.append(current.split(".", 1)[0])
+            # Extract DN components: CN=value,DC=... → value
+            if "=" in current:
+                for part in current.split(","):
+                    part = part.strip()
+                    if "=" in part:
+                        queue.append(part.split("=", 1)[1])
+
+        return tokens
+
+    @staticmethod
+    def normalize_host(host: str, realm: Optional[str] = None) -> Set[str]:
+        """Return all expected token variations for a Hyper-V host.
+
+        Generates common variations:
+        - host.domain.com → host.domain.com, host, host$
+        - With realm: host$@REALM, host@REALM
+        """
+        tokens: Set[str] = set()
+
+        if not host:
+            return tokens
+
+        host_lower = host.strip().lower()
+        if not host_lower:
+            return tokens
+
+        # FQDN and short name
+        short_name = host_lower.split(".", 1)[0]
+        realm_lower = realm.lower() if realm else None
+
+        # Base variations
+        candidates = {
+            host_lower,
+            short_name,
+            f"{short_name}$",
+        }
+
+        # Add realm-qualified variations
+        if realm_lower:
+            candidates.update({
+                f"{short_name}$@{realm_lower}",
+                f"{short_name}@{realm_lower}",
+            })
+
+        tokens.update(candidate for candidate in candidates if candidate)
+        return tokens
+
+    @staticmethod
+    def extract_domain_from_principal(principal: Optional[str]) -> Optional[str]:
+        """Extract DNS domain name from a Kerberos principal.
+
+        Examples:
+            user@EXAMPLE.COM → example.com
+            host/server.ad.local@AD.LOCAL → ad.local
+        """
+        if not principal or "@" not in principal:
+            return None
+
+        realm = principal.split("@", 1)[1].strip().strip(".")
+        if not realm:
+            return None
+
+        return realm.lower()
+
+    @staticmethod
+    def realm_to_base_dn(realm: Optional[str]) -> Optional[str]:
+        """Convert Kerberos realm to LDAP base DN.
+
+        Examples:
+            EXAMPLE.COM → DC=example,DC=com
+            AD.CORP → DC=ad,DC=corp
+        """
+        if not realm:
+            return None
+
+        realm = realm.strip().strip(".")
+        if not realm:
+            return None
+
+        parts = [part.strip() for part in realm.split(".") if part.strip()]
+        if not parts:
+            return None
+
+        return ",".join(f"DC={part.lower()}" for part in parts)
+
+    @staticmethod
+    def candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
+        """Gather potential AD domain names from configuration.
+
+        Checks principal, configured realm, and provided realm parameter.
+        Returns unique, lowercase domain names in priority order.
+        """
+        domains: List[str] = []
+        manager = get_kerberos_manager()
+
+        # Try principal first
+        if manager:
+            principal_domain = PrincipalTokenizer.extract_domain_from_principal(
+                manager.principal
+            )
+            if principal_domain:
+                domains.append(principal_domain)
+
+        # Add configured realms
+        for candidate in (realm, manager.realm if manager else None):
+            if not candidate:
+                continue
+            cleaned = candidate.strip().strip(".")
+            if not cleaned:
+                continue
+            domain = cleaned.lower()
+            if domain not in domains:
+                domains.append(domain)
+
+        return domains
+
+
+# Maintain backward compatibility with old function names
 def _realm_to_base_dn(realm: Optional[str]) -> Optional[str]:
-    """Convert a Kerberos realm (e.g. EXAMPLE.COM) to a base DN."""
-
-    if not realm:
-        return None
-
-    realm = realm.strip().strip(".")
-    if not realm:
-        return None
-
-    parts = [part.strip() for part in realm.split(".") if part.strip()]
-    if not parts:
-        return None
-
-    return ",".join(f"DC={part.lower()}" for part in parts)
+    """Convert a Kerberos realm to a base DN (deprecated - use PrincipalTokenizer)."""
+    return PrincipalTokenizer.realm_to_base_dn(realm)
 
 
 def _extract_domain_from_principal(principal: Optional[str]) -> Optional[str]:
-    """Convert a Kerberos principal into an AD DNS domain name."""
-
-    if not principal or "@" not in principal:
-        return None
-
-    realm = principal.split("@", 1)[1].strip().strip(".")
-    if not realm:
-        return None
-
-    return realm.lower()
+    """Extract domain from principal (deprecated - use PrincipalTokenizer)."""
+    return PrincipalTokenizer.extract_domain_from_principal(principal)
 
 
 def _candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
-    """Gather potential AD domains from configuration hints."""
-
-    domains: List[str] = []
-    manager = get_kerberos_manager()
-
-    principal_domain = _extract_domain_from_principal(manager.principal if manager else None)
-    if principal_domain:
-        domains.append(principal_domain)
-
-    for candidate in (realm, manager.realm if manager else None):
-        if not candidate:
-            continue
-        cleaned = candidate.strip().strip(".")
-        if not cleaned:
-            continue
-        domain = cleaned.lower()
-        if domain not in domains:
-            domains.append(domain)
-
-    return domains
+    """Gather potential AD domains (deprecated - use PrincipalTokenizer)."""
+    return PrincipalTokenizer.candidate_domains_for_ldap(realm)
 
 
 def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
@@ -536,7 +690,7 @@ def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
             kdc_override,
         )
 
-    domains = _candidate_domains_for_ldap(realm)
+    domains = PrincipalTokenizer.candidate_domains_for_ldap(realm)
     hosts: List[str] = []
 
     if not domains:
@@ -600,7 +754,7 @@ def _parse_ldap_server_target(server_host: str) -> Tuple[Optional[str], Optional
         closing = host.find("]")
         if closing != -1:
             bracket_host = host[1:closing].strip()
-            remainder = host[closing + 1 :]
+            remainder = host[closing + 1:]
             if remainder.startswith(":") and remainder[1:].isdigit():
                 port = int(remainder[1:])
             host = bracket_host
@@ -657,7 +811,8 @@ def _establish_ldap_connection(server_host: Optional[str]) -> Optional[Connectio
     host, override_port = _parse_ldap_server_target(server_host)
 
     if not host:
-        logger.warning("Unable to determine LDAP hostname from %r", server_host)
+        logger.warning(
+            "Unable to determine LDAP hostname from %r", server_host)
         return None
 
     server_kwargs = {"get_info": NONE, "use_ssl": True, "port": 636}
@@ -712,7 +867,8 @@ def _lookup_default_naming_context(connection: Connection) -> Optional[str]:
             if value:
                 return str(value)
     except LDAPException as exc:  # pragma: no cover - environment specific
-        logger.debug("Failed to query defaultNamingContext via LDAP: %s", exc, exc_info=True)
+        logger.debug(
+            "Failed to query defaultNamingContext via LDAP: %s", exc, exc_info=True)
 
     return None
 
@@ -862,7 +1018,8 @@ def _ldap_resolve_sids(
             continue
 
         for entry in connection.entries:
-            raw_sid_values = entry.entry_raw_attributes.get("objectSid") if entry.entry_raw_attributes else None
+            raw_sid_values = entry.entry_raw_attributes.get(
+                "objectSid") if entry.entry_raw_attributes else None
             if not raw_sid_values:
                 continue
             raw_sid = raw_sid_values[0]
@@ -873,7 +1030,8 @@ def _ldap_resolve_sids(
                 continue
 
             attr_dict = entry.entry_attributes_as_dict or {}
-            candidate = attr_dict.get("sAMAccountName") or attr_dict.get("cn") or attr_dict.get("name")
+            candidate = attr_dict.get("sAMAccountName") or attr_dict.get(
+                "cn") or attr_dict.get("name")
             if isinstance(candidate, list):
                 candidate = candidate[0] if candidate else None
             display = str(entry.entry_dn) if not candidate else str(candidate)
@@ -953,7 +1111,8 @@ def _ldap_get_computer_delegation_info(
 
     try:
         manager = get_kerberos_manager()
-        base_hint = _realm_to_base_dn(realm or (manager.realm if manager else None))
+        base_hint = _realm_to_base_dn(
+            realm or (manager.realm if manager else None))
         base_dn = base_hint or _lookup_default_naming_context(connection)
         if not base_dn:
             logger.debug("Unable to determine LDAP base DN for '%s'", name)
@@ -1031,7 +1190,8 @@ def _ldap_get_computer_delegation_info(
         raw_attrs = entry.entry_raw_attributes or {}
         attr_dict = entry.entry_attributes_as_dict or {}
 
-        delegation_principals = attr_dict.get("PrincipalsAllowedToDelegateToAccount") or []
+        delegation_principals = attr_dict.get(
+            "PrincipalsAllowedToDelegateToAccount") or []
         if isinstance(delegation_principals, str):
             delegation_principals = [delegation_principals]
         elif isinstance(delegation_principals, (tuple, set)):
@@ -1043,10 +1203,12 @@ def _ldap_get_computer_delegation_info(
             if principal
         ]
 
-        rbcd_values = raw_attrs.get("msDS-AllowedToActOnBehalfOfOtherIdentity") or []
+        rbcd_values = raw_attrs.get(
+            "msDS-AllowedToActOnBehalfOfOtherIdentity") or []
         sid_blobs: List[bytes] = []
         for descriptor in rbcd_values:
-            sid_blobs.extend(_extract_allowed_sids_from_security_descriptor(descriptor))
+            sid_blobs.extend(
+                _extract_allowed_sids_from_security_descriptor(descriptor))
 
         sid_strings = [
             sid_str
@@ -1075,7 +1237,8 @@ def _ldap_get_computer_delegation_info(
 
         delegate_targets = [str(value) for value in delegate_targets if value]
 
-        object_sid_raw = raw_attrs.get("objectSid") or attr_dict.get("objectSid") or None
+        object_sid_raw = raw_attrs.get(
+            "objectSid") or attr_dict.get("objectSid") or None
         object_sid: Optional[str] = None
         if isinstance(object_sid_raw, (list, tuple)) and object_sid_raw:
             object_sid_raw = object_sid_raw[0]
@@ -1106,110 +1269,9 @@ def _ldap_get_computer_delegation_info(
         }
     finally:
         if connection is not None:
-            logger.debug("Unbinding LDAP connection to %s", bound_host or "<unknown>")
+            logger.debug("Unbinding LDAP connection to %s",
+                         bound_host or "<unknown>")
             connection.unbind()
-
-
-def _ldap_resolve_service_principal_tokens(
-    service_principal: str, realm: Optional[str]
-) -> Set[str]:
-    """Resolve additional identifiers for a service principal via LDAP."""
-
-    tokens: Set[str] = set()
-
-    normalized = (service_principal or "").strip()
-    if not normalized or "/" not in normalized:
-        return tokens
-
-    if Connection is None or escape_filter_chars is None:
-        return tokens
-
-    server_hosts = _discover_ldap_server_hosts(realm)
-    if not server_hosts:
-        return tokens
-
-    connection: Optional[Connection] = None
-    bound_host: Optional[str] = None
-
-    for server_host in server_hosts:
-        connection = _establish_ldap_connection(server_host)
-        if connection is not None:
-            bound_host = server_host
-            break
-
-    if connection is None:
-        return tokens
-
-    try:
-        manager = get_kerberos_manager()
-        base_hint = _realm_to_base_dn(realm or (manager.realm if manager else None))
-        base_dn = base_hint or _lookup_default_naming_context(connection)
-        if not base_dn:
-            return tokens
-
-        escaped_spn = escape_filter_chars(normalized)
-        search_filter = (
-            f"(&(objectClass=*)(servicePrincipalName={escaped_spn}))"
-        )
-
-        try:
-            connection.search(
-                base_dn,
-                search_filter,
-                search_scope=SUBTREE,
-                attributes=[
-                    "servicePrincipalName",
-                    "sAMAccountName",
-                    "userPrincipalName",
-                    "cn",
-                    "name",
-                ],
-                size_limit=5,
-            )
-        except LDAPException as exc:  # pragma: no cover - environment specific
-            logger.debug(
-                "LDAP search for service principal '%s' failed: %s",
-                service_principal,
-                exc,
-                exc_info=True,
-            )
-            return tokens
-
-        def _collect(attr: str, value: object) -> None:
-            if value is None:
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    _collect(attr, item)
-                return
-
-            candidate = str(value).strip()
-            if not candidate:
-                return
-
-            candidate_lower = candidate.lower()
-            tokens.add(candidate_lower)
-
-            if attr == "userPrincipalName" and "@" in candidate_lower:
-                tokens.add(candidate_lower.split("@", 1)[0])
-            if attr in {"sAMAccountName", "cn", "name"} and candidate_lower.endswith("$"):
-                tokens.add(candidate_lower[:-1])
-
-        for entry in connection.entries:
-            attr_dict = entry.entry_attributes_as_dict or {}
-
-            _collect("sAMAccountName", attr_dict.get("sAMAccountName"))
-            _collect("userPrincipalName", attr_dict.get("userPrincipalName"))
-            _collect("servicePrincipalName", attr_dict.get("servicePrincipalName"))
-            _collect("cn", attr_dict.get("cn"))
-            _collect("name", attr_dict.get("name"))
-
-    finally:
-        if connection is not None:
-            logger.debug("Unbinding LDAP connection to %s", bound_host or "<unknown>")
-            connection.unbind()
-
-    return tokens
 
 
 def validate_host_kerberos_setup(
@@ -1248,7 +1310,7 @@ def validate_host_kerberos_setup(
 
         # Check WSMAN SPNs for all hosts
         for host in hosts:
-            spn_check = _check_wsman_spn(host, realm)
+            spn_check = check_wsman_spn(host, realm)
             if not spn_check[0]:
                 error_msg = f"Host '{host}': {spn_check[1]}"
                 result["errors"].append(error_msg)
@@ -1269,10 +1331,11 @@ def validate_host_kerberos_setup(
     cluster_names: Set[str] = set(clusters.keys()) if clusters else set()
 
     if delegation_hosts or cluster_names:
-        logger.info("Validating delegation and RBCD for %d host(s)", len(delegation_hosts))
+        logger.info("Validating delegation and RBCD for %d host(s)",
+                    len(delegation_hosts))
 
         host_tokens: Dict[str, Set[str]] = {
-            host: _normalize_host_tokens(host, realm)
+            host: PrincipalTokenizer.normalize_host(host, realm)
             for host in delegation_hosts
         }
         expected_host_tokens: Set[str] = set()
@@ -1304,13 +1367,15 @@ def validate_host_kerberos_setup(
                 result["delegation_errors"].append(error_msg)
                 continue
 
-            delegate_targets_value = directory_info.get("delegate_targets") or []
+            delegate_targets_value = directory_info.get(
+                "delegate_targets") or []
             if isinstance(delegate_targets_value, list):
                 delegate_targets = delegate_targets_value
             else:
                 delegate_targets = []
             if delegate_targets:
-                delegate_targets_str = ', '.join(str(t) for t in delegate_targets)
+                delegate_targets_str = ', '.join(
+                    str(t) for t in delegate_targets)
                 warning_msg = (
                     f"Host '{host}': Legacy constrained delegation is configured "
                     f"(msDS-AllowedToDelegateTo: {delegate_targets_str}). Remove these entries when using RBCD unless explicitly required."
@@ -1334,7 +1399,8 @@ def validate_host_kerberos_setup(
 
         if clusters:
             for cluster_name in sorted(cluster_names):
-                directory_info = _ldap_get_computer_delegation_info(cluster_name, realm)
+                directory_info = _ldap_get_computer_delegation_info(
+                    cluster_name, realm)
                 if directory_info is None:
                     warning_msg = (
                         f"Cluster '{cluster_name}': Delegation check skipped (LDAP connection unavailable)"
@@ -1354,17 +1420,23 @@ def validate_host_kerberos_setup(
                 cluster_hosts = clusters.get(cluster_name, []) or []
                 rbcd_principals = directory_info.get("rbcd_principals", [])
                 rbcd_sid_strings = directory_info.get("rbcd_sid_strings", [])
+                principals_list = (
+                    rbcd_principals
+                    if isinstance(rbcd_principals, list)
+                    else []
+                )
+                sids_list = (
+                    rbcd_sid_strings
+                    if isinstance(rbcd_sid_strings, list)
+                    else []
+                )
                 combined_principals = [
                     str(principal)
-                    for principal in rbcd_principals  # type: ignore[attr-defined]
+                    for principal in principals_list
                     if principal
                 ]
                 combined_principals.extend(
-                    [
-                        str(sid)
-                        for sid in rbcd_sid_strings  # type: ignore[attr-defined]
-                        if sid
-                    ]
+                    [str(sid) for sid in sids_list if sid]
                 )
 
                 allowed_tokens: Set[str] = set()
@@ -1372,18 +1444,29 @@ def validate_host_kerberos_setup(
                     principal_lower = principal.strip().lower()
                     if principal_lower:
                         allowed_tokens.add(principal_lower)
-                        allowed_tokens.update(_normalize_principal_tokens(principal_lower))
+                        tokenizer = PrincipalTokenizer
+                        principal_tokens = tokenizer.normalize_principal(
+                            principal_lower
+                        )
+                        allowed_tokens.update(principal_tokens)
 
                 missing_hosts: List[str] = []
                 for host in sorted(cluster_hosts):
-                    host_token_set = host_tokens.get(host, _normalize_host_tokens(host, realm))
-                    if host_token_set and host_token_set.isdisjoint(allowed_tokens):
+                    tokenizer = PrincipalTokenizer
+                    host_token_set = host_tokens.get(
+                        host, tokenizer.normalize_host(host, realm)
+                    )
+                    is_disjoint = (
+                        host_token_set and
+                        host_token_set.isdisjoint(allowed_tokens)
+                    )
+                    if is_disjoint:
                         missing_hosts.append(host)
 
                 unexpected_principals: List[str] = []
                 expected_token_union = expected_host_tokens
                 for principal in combined_principals:
-                    tokens = _normalize_principal_tokens(principal)
+                    tokens = PrincipalTokenizer.normalize_principal(principal)
                     tokens.add(principal.lower())
                     if tokens.isdisjoint(expected_token_union):
                         unexpected_principals.append(principal)
@@ -1418,260 +1501,6 @@ def validate_host_kerberos_setup(
         logger.debug("No hosts available for delegation validation")
 
     return result
-
-
-def _check_wsman_spn(host: str, realm: Optional[str] = None) -> Tuple[bool, str]:
-    """
-    Check if WSMAN SPN exists for a host.
-
-    Uses 'setspn -Q' to query for WSMAN service principal.
-
-    Args:
-        host: Hostname to check
-        realm: Optional Kerberos realm
-
-    Returns:
-        Tuple of (success: bool, message: str)
-    """
-    try:
-        # Query for WSMAN SPN
-        # Format: WSMAN/hostname or WSMAN/hostname.domain
-        spn_to_check = f"WSMAN/{host}"
-        
-        # Try setspn -Q (Windows AD query)
-        result = subprocess.run(
-            ["setspn", "-Q", spn_to_check],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-
-        # setspn -Q returns 0 if SPN is found
-        if result.returncode == 0:
-            # Parse output to confirm SPN exists
-            if spn_to_check.lower() in result.stdout.lower():
-                return (True, f"WSMAN SPN '{spn_to_check}' found")
-            else:
-                return (False, f"WSMAN SPN '{spn_to_check}' not found in Active Directory")
-        else:
-            return (False, f"WSMAN SPN '{spn_to_check}' not found (setspn exit code: {result.returncode})")
-
-    except FileNotFoundError:
-        # setspn not available (likely not on Windows or not in PATH)
-        # Try alternative: kvno command (attempts to get service ticket)
-        try:
-            kvno_spn = f"WSMAN/{host}"
-            if realm:
-                kvno_spn = f"{kvno_spn}@{realm}"
-            
-            result = subprocess.run(
-                ["kvno", kvno_spn],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-
-            if result.returncode == 0:
-                return (True, "WSMAN SPN validated via kvno")
-            else:
-                return (
-                    False,
-                    f"WSMAN SPN '{kvno_spn}' not found or inaccessible: {result.stderr.strip()}",
-                )
-
-        except FileNotFoundError:
-            logger.warning(
-                "Neither setspn nor kvno available - cannot validate WSMAN SPN for %s",
-                host,
-            )
-            return (False, "Cannot validate WSMAN SPN - setspn and kvno tools not available")
-        except subprocess.TimeoutExpired:
-            return (False, "WSMAN SPN check timed out using kvno")
-        except Exception as exc:
-            return (False, f"WSMAN SPN validation failed: {exc}")
-
-    except subprocess.TimeoutExpired:
-        return (False, "WSMAN SPN check timed out")
-    except Exception as exc:
-        return (False, f"WSMAN SPN check failed: {exc}")
-
-
-def _normalize_principal_tokens(principal: str) -> Set[str]:
-    """Return a set of comparable tokens derived from an allowed principal entry."""
-
-    tokens: Set[str] = set()
-    queue: List[str] = []
-
-    if principal:
-        queue.append(principal.strip().lower())
-
-    while queue:
-        current = queue.pop()
-        if not current or current in tokens:
-            continue
-
-        tokens.add(current)
-
-        if "\\" in current:
-            queue.append(current.split("\\", 1)[1])
-        if "/" in current:
-            queue.append(current.split("/", 1)[1])
-        if "@" in current:
-            queue.append(current.split("@", 1)[0])
-        if current.endswith("$"):
-            queue.append(current[:-1])
-        if "." in current:
-            queue.append(current.split(".", 1)[0])
-        if "=" in current:
-            for part in current.split(","):
-                part = part.strip()
-                if "=" in part:
-                    queue.append(part.split("=", 1)[1])
-
-    return tokens
-
-
-def _service_principal_in_allowed_list(
-    service_principal: str,
-    allowed_principals: List[str],
-    *,
-    resolved_tokens: Optional[Set[str]] = None,
-) -> bool:
-    """Return True when the service principal appears in the allowed principals list."""
-
-    if not service_principal:
-        return False
-
-    service_principal_lower = service_principal.strip().lower()
-    service_tokens = _normalize_principal_tokens(service_principal_lower)
-    if service_principal_lower:
-        service_tokens.add(service_principal_lower)
-    if "@" in service_principal_lower:
-        service_tokens.add(service_principal_lower.split("@", 1)[0])
-
-    combined_tokens = set(service_tokens)
-    if resolved_tokens:
-        for token in resolved_tokens:
-            if token is None:  # Defensive: handle unexpected None in set
-                continue  # type: ignore[unreachable]
-            token_lower = str(token).strip().lower()
-            if not token_lower:
-                continue
-            combined_tokens.add(token_lower)
-            if "@" in token_lower:
-                combined_tokens.add(token_lower.split("@", 1)[0])
-            if token_lower.endswith("$"):
-                combined_tokens.add(token_lower[:-1])
-
-    for principal in allowed_principals:
-        candidate = str(principal).strip()
-        if not candidate:
-            continue
-        candidate_lower = candidate.lower()
-        if candidate_lower == service_principal_lower or candidate_lower in combined_tokens:
-            return True
-        candidate_tokens = _normalize_principal_tokens(candidate)
-        candidate_tokens.add(candidate_lower)
-        if not candidate_tokens.isdisjoint(combined_tokens):
-            return True
-
-    return False
-
-
-def _normalize_host_tokens(host: str, realm: Optional[str]) -> Set[str]:
-    """Return a set of expected tokens for a Hyper-V host entry."""
-
-    tokens: Set[str] = set()
-
-    if not host:
-        return tokens
-
-    host_lower = host.strip().lower()
-    if not host_lower:
-        return tokens
-
-    short_name = host_lower.split(".", 1)[0]
-    realm_lower = realm.lower() if realm else None
-
-    candidates = {
-        host_lower,
-        short_name,
-        f"{short_name}$",
-    }
-
-    if realm_lower:
-        candidates.update(
-            {
-                f"{short_name}$@{realm_lower}",
-                f"{short_name}@{realm_lower}",
-            }
-        )
-
-    tokens.update(candidate for candidate in candidates if candidate)
-
-    return tokens
-
-
-def _check_host_delegation_legacy(
-    host: str,
-    realm: Optional[str] = None,
-    *,
-    directory_info: Optional[Dict[str, object]] = None,
-) -> Tuple[Optional[bool], str]:
-    """
-    Check if delegation is configured for a host (LEGACY - not used for host validation).
-
-    This checks the old-style delegation on individual host objects. Prefer
-    validate_host_kerberos_setup for modern Resource-Based Constrained Delegation checks.
-
-    This is a best-effort check. Returns None if unable to determine.
-
-    Args:
-        host: Hostname to check
-        realm: Optional Kerberos realm
-
-    Returns:
-        Tuple of (success: Optional[bool], message: str)
-        - True: Delegation confirmed
-        - False: Delegation confirmed absent
-        - None: Unable to determine
-    """
-    if directory_info is None:
-        directory_info = _ldap_get_computer_delegation_info(host, realm)
-
-    if directory_info is None:
-        return (
-            None,
-            "Delegation check skipped (LDAP connection unavailable)",
-        )
-
-    if not directory_info.get("exists", True):
-        return (
-            False,
-            f"Computer object '{host}' not found in Active Directory. Ensure the host exists before configuring delegation.",
-        )
-
-    trusted_to_auth = bool(directory_info.get("trusted_to_auth"))
-    trusted_for = bool(directory_info.get("trusted_for_delegation"))
-    delegate_present = bool(directory_info.get("delegate_present"))
-    delegate_targets_raw = directory_info.get("delegate_targets", [])
-    delegate_targets = [
-        str(target)
-        for target in delegate_targets_raw  # type: ignore[attr-defined]
-        if target
-    ]
-
-    if trusted_to_auth or trusted_for or delegate_present:
-        rbcd_info = ""
-        if delegate_present and delegate_targets:
-            rbcd_info = f" (RBCD: {', '.join(delegate_targets)})"
-        return (True, f"Delegation configured{rbcd_info}")
-
-    return (
-        False,
-        "No delegation configured. Set up Resource-Based Constrained Delegation (RBCD) "
-        "for double-hop authentication.",
-    )
 
 
 __all__ = [

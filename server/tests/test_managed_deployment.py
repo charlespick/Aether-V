@@ -302,7 +302,7 @@ class TestManagedDeploymentExecution:
 
         # Mock child job creation and completion for all steps
         job_types_created = []
-        
+
         async def mock_queue_child_job(parent_job, job_type, schema_id, payload):
             job_types_created.append(job_type)
             child_job = Job(
@@ -320,7 +320,7 @@ class TestManagedDeploymentExecution:
         async def mock_wait_for_child_job(parent_job_id, child_job_id):
             # Return completed job with appropriate output based on job type
             job_type = child_job_id.replace("-child", "")
-            
+
             output = []
             if job_type == "create_vm":
                 output = ['{"vm_id": "vm-123"}']
@@ -328,7 +328,7 @@ class TestManagedDeploymentExecution:
                 output = ['{"disk_id": "disk-456"}']
             elif job_type == "create_nic":
                 output = ['{"nic_id": "nic-789"}']
-                
+
             return Job(
                 job_id=child_job_id,
                 job_type=job_type,
@@ -348,7 +348,8 @@ class TestManagedDeploymentExecution:
         )
         monkeypatch.setattr(service, "_append_job_output", AsyncMock())
         monkeypatch.setattr(service, "_update_job", AsyncMock())
-        monkeypatch.setattr(service, "_extract_vm_id_from_output", lambda output: "vm-123")
+        monkeypatch.setattr(
+            service, "_extract_vm_id_from_output", lambda job: "vm-123")
         monkeypatch.setattr(
             service,
             "_queue_child_job",
@@ -370,9 +371,12 @@ class TestManagedDeploymentExecution:
         assert "initialize_vm" in job_types_created
 
         # Verify they were created in the correct order
-        assert job_types_created.index("create_vm") < job_types_created.index("create_disk")
-        assert job_types_created.index("create_disk") < job_types_created.index("create_nic")
-        assert job_types_created.index("create_nic") < job_types_created.index("initialize_vm")
+        assert job_types_created.index(
+            "create_vm") < job_types_created.index("create_disk")
+        assert job_types_created.index(
+            "create_disk") < job_types_created.index("create_nic")
+        assert job_types_created.index(
+            "create_nic") < job_types_created.index("initialize_vm")
 
         # Verify guest config initialization payload
         init_calls = [
@@ -440,15 +444,6 @@ class TestManagedDeploymentExecution:
             service,
             "_validate_job_against_host_config",
             AsyncMock(side_effect=mock_validate),
-        )
-        monkeypatch.setattr(
-            service,
-            "_execute_managed_deployment_protocol_operation",
-            AsyncMock(return_value=JobResultEnvelope(
-                status=JobResultStatus.SUCCESS,
-                message="Success",
-                data={"vm_id": "vm-123"},
-            )),
         )
         monkeypatch.setattr(service, "_append_job_output", AsyncMock())
         monkeypatch.setattr(service, "_update_job", AsyncMock())

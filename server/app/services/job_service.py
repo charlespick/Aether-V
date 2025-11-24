@@ -7,22 +7,17 @@ import base64
 import copy
 import json
 import logging
-import re
 import uuid
 from datetime import datetime
 from pathlib import PureWindowsPath
 from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
-from xml.etree import ElementTree
 
 from ..core.config import settings
 from ..core.models import Job, JobStatus, VMDeleteRequest, NotificationLevel
 from ..core.job_envelope import create_job_request, parse_job_result
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
-    JobRequest,
-    JobResultEnvelope,
-    JobResultStatus,
 )
 from ..core.guest_config_generator import generate_guest_config
 from .host_deployment_service import host_deployment_service
@@ -84,134 +79,48 @@ def _redact_sensitive_parameters(
     return sanitized
 
 
-class _PowerShellStreamDecoder:
-    """Stateful normaliser for streamed PowerShell output."""
+class _SimpleLineBuffer:
+    """Stateful line buffer for streamed output.
 
-    _CLIXML_PREFIX = "#< CLIXML"
-    _CLIXML_END_TAG = "</Objs>"
+    Note: pypsrp handles CLIXML deserialization internally, so we only need
+    simple line buffering for the plain text it returns.
+    """
 
-    def __init__(
-        self,
-        parse_clixml: Callable[[str], Optional[str]],
-        strip_clixml: Callable[[str], str],
-        decode_hex: Callable[[str], str],
-    ) -> None:
-        self._parse_clixml = parse_clixml
-        self._strip_clixml = strip_clixml
-        self._decode_hex = decode_hex
-        self._plain_buffer: str = ""
-        self._clixml_buffer: Optional[str] = None
+    def __init__(self) -> None:
+        self._buffer: str = ""
 
     def push(self, chunk: str) -> List[str]:
+        """Add chunk and return complete lines."""
         if not chunk:
             return []
 
-        sanitized = (
-            chunk.replace("\ufeff", "").replace(
-                "\r\n", "\n").replace("\r", "\n")
+        # Normalize line endings and remove BOM
+        normalized = (
+            chunk.replace("\ufeff", "")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
         )
-        if not sanitized:
+        if not normalized:
             return []
 
+        self._buffer += normalized
+
+        # Extract complete lines
         lines: List[str] = []
-
-        if self._clixml_buffer is not None:
-            self._clixml_buffer += sanitized
-            remaining = ""
-        else:
-            remaining = sanitized
-
-        while True:
-            if self._clixml_buffer is not None:
-                closing_index = self._clixml_buffer.find(self._CLIXML_END_TAG)
-                if closing_index == -1:
-                    break
-
-                end_index = closing_index + len(self._CLIXML_END_TAG)
-                payload = self._clixml_buffer[:end_index]
-                leftover = self._clixml_buffer[end_index:]
-
-                decoded = self._parse_clixml(payload)
-                if decoded is None:
-                    decoded = self._strip_clixml(payload)
-                if decoded:
-                    lines.extend(self._append_plain(decoded))
-
-                self._clixml_buffer = None
-                remaining = leftover
-                continue
-
-            if not remaining:
-                break
-
-            tail_length = max(0, len(self._CLIXML_PREFIX) - 1)
-            tail = self._plain_buffer[-tail_length:] if tail_length else ""
-            combined = tail + remaining
-            combined_index = combined.find(self._CLIXML_PREFIX)
-            if combined_index == -1:
-                lines.extend(self._append_plain(remaining))
-                break
-
-            if combined_index < len(tail):
-                sentinel_start_in_plain = (
-                    len(self._plain_buffer) - len(tail) + combined_index
-                )
-                sentinel_plain_part = self._plain_buffer[sentinel_start_in_plain:]
-                self._plain_buffer = self._plain_buffer[:sentinel_start_in_plain]
-                lines.extend(self._drain_plain_lines())
-                self._clixml_buffer = sentinel_plain_part + remaining
-                remaining = ""
-                continue
-
-            sentinel_index = combined_index - len(tail)
-            before = remaining[:sentinel_index]
-            if before:
-                lines.extend(self._append_plain(before))
-
-            self._clixml_buffer = remaining[sentinel_index:]
-            remaining = ""
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.strip():
+                lines.append(line)
 
         return lines
 
     def finalize(self) -> List[str]:
-        lines: List[str] = []
-
-        if self._clixml_buffer:
-            decoded = self._parse_clixml(self._clixml_buffer)
-            if decoded is None:
-                decoded = self._strip_clixml(self._clixml_buffer)
-            if decoded:
-                lines.extend(self._append_plain(decoded))
-            self._clixml_buffer = None
-
-        lines.extend(self._drain_plain_lines(final=True))
-        return lines
-
-    def _append_plain(self, text: str) -> List[str]:
-        if not text:
-            return []
-        normalized = self._decode_hex(text)
-        self._plain_buffer += normalized
-        return self._drain_plain_lines()
-
-    def _drain_plain_lines(self, final: bool = False) -> List[str]:
-        lines: List[str] = []
-        while True:
-            newline_index = self._plain_buffer.find("\n")
-            if newline_index == -1:
-                break
-            line = self._plain_buffer[:newline_index]
-            self._plain_buffer = self._plain_buffer[newline_index + 1:]
-            if line.strip():
-                lines.append(line)
-
-        if final:
-            tail = self._plain_buffer
-            self._plain_buffer = ""
-            if tail.strip():
-                lines.append(tail)
-
-        return lines
+        """Return any remaining buffered content."""
+        if self._buffer.strip():
+            result = [self._buffer]
+            self._buffer = ""
+            return result
+        return []
 
 
 class JobService:
@@ -224,8 +133,7 @@ class JobService:
         self._queue: Optional[asyncio.Queue[Optional[str]]] = None
         self._worker_tasks: List[asyncio.Task[None]] = []
         self._started = False
-        self._stream_decoders: Dict[Tuple[str, str],
-                                    _PowerShellStreamDecoder] = {}
+        self._line_buffers: Dict[Tuple[str, str], _SimpleLineBuffer] = {}
         self._host_running: Dict[str, str] = {}
         self._host_waiters: Dict[str, Deque[Tuple[str, asyncio.Event]]] = {}
 
@@ -768,441 +676,71 @@ class JobService:
             next_waiter.set()
 
     async def _execute_delete_job(self, job: Job) -> None:
-        """Execute a VM deletion job using new protocol.
-
-        Uses the JobRequest/JobResult envelope protocol.
-        """
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("Delete job is missing a target host")
-
-        # Ensure host is prepared
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for deletion")
-
-        # Extract VM info from job parameters
-        vm_id = job.parameters.get("vm_id")
-        vm_name = job.parameters.get("vm_name")
-
-        # Create resource_spec for the delete operation
-        resource_spec = {
-            "vm_id": vm_id,
-            "vm_name": vm_name,
-        }
-
-        # Create JobRequest envelope using the new protocol
-        job_request = create_job_request(
-            operation="vm.delete",
-            resource_spec=resource_spec,
-            correlation_id=job.job_id,
-            metadata={
-                "job_id": job.job_id,
-                "job_type": job.job_type,
-                "target_host": target_host,
+        """Execute a VM deletion job using new protocol."""
+        def extract_delete_resource_spec(j: Job) -> Dict[str, Any]:
+            return {
+                "vm_id": j.parameters.get("vm_id"),
+                "vm_name": j.parameters.get("vm_name"),
             }
+
+        await self._execute_new_protocol_operation(
+            job, "vm.delete", "VM deletion",
+            extract_resource_spec=extract_delete_resource_spec
         )
-
-        # Serialize the envelope to JSON
-        json_payload = await asyncio.to_thread(
-            job_request.model_dump_json,
-        )
-
-        self._log_agent_request(job.job_id, target_host,
-                                json_payload, "Main-NewProtocol.ps1")
-
-        # Build command to invoke Main-NewProtocol.ps1
-        command = self._build_agent_invocation_command(
-            "Main-NewProtocol.ps1", json_payload
-        )
-
-        # Storage for the result JSON
-        result_json_lines: List[str] = []
-
-        def capture_json_output(line: str) -> None:
-            """Capture JSON output from the host agent."""
-            stripped = line.strip()
-            if stripped.startswith('{'):
-                result_json_lines.append(stripped)
-
-        # Execute the command with JSON capture
-        exit_code = await self._execute_agent_command(
-            job, target_host, command, line_callback=capture_json_output
-        )
-
-        if exit_code != 0:
-            raise RuntimeError(
-                f"VM deletion script exited with code {exit_code}")
-
-        # Parse the JobResult envelope
-        if not result_json_lines:
-            raise RuntimeError(
-                "No JSON result returned from vm.delete operation")
-
-        # Use the first (and should be only) JSON line
-        result_json = result_json_lines[0]
-        envelope, error = parse_job_result(result_json)
-
-        if error:
-            raise RuntimeError(f"Failed to parse job result: {error}")
-
-        if not envelope:
-            raise RuntimeError("Job result envelope is None")
-
-        # Check the result status
-        if envelope.status == "error":
-            error_msg = envelope.message or "Unknown error"
-            error_code = envelope.code or "UNKNOWN"
-            raise RuntimeError(
-                f"VM deletion failed ({error_code}): {error_msg}")
-
-        # Log success with result data
-        await self._append_job_output(
-            job.job_id,
-            f"VM deletion completed: {envelope.message}",
-            f"Result status: {envelope.status}",
-        )
-
-        # Store result data in job parameters for later retrieval
-        job.parameters["result_data"] = envelope.data
-
-        # Append result data as JSON to job output for compatibility
-        if envelope.data:
-            await self._append_job_output(
-                job.job_id,
-                json.dumps(envelope.data),
-            )
 
     async def _execute_create_vm_job(self, job: Job) -> None:
-        """Execute a VM-only creation job using new protocol.
-
-        Uses the JobRequest/JobResult envelope protocol.
-        """
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("VM creation job is missing a target host")
-
-        # Ensure host is prepared
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for VM creation")
-
-        # Extract resource_spec from job parameters
-        # The definition contains the Pydantic VmSpec fields
-        definition = job.parameters.get("definition", {})
-        resource_spec = definition.get("fields", {})
-
-        # Create JobRequest envelope using the new protocol
-        job_request = create_job_request(
-            operation="vm.create",
-            resource_spec=resource_spec,
-            correlation_id=job.job_id,
-            metadata={
-                "job_id": job.job_id,
-                "job_type": job.job_type,
-                "target_host": target_host,
-            }
+        """Execute a VM-only creation job using new protocol."""
+        await self._execute_new_protocol_operation(
+            job, "vm.create", "VM creation"
         )
-
-        # Serialize the envelope to JSON
-        json_payload = await asyncio.to_thread(
-            job_request.model_dump_json,
-        )
-
-        self._log_agent_request(job.job_id, target_host,
-                                json_payload, "Main-NewProtocol.ps1")
-
-        # Build command to invoke Main-NewProtocol.ps1
-        command = self._build_agent_invocation_command(
-            "Main-NewProtocol.ps1", json_payload
-        )
-
-        # Storage for the result JSON
-        result_json_lines: List[str] = []
-
-        def capture_json_output(line: str) -> None:
-            """Capture JSON output from the host agent."""
-            stripped = line.strip()
-            if stripped.startswith('{'):
-                result_json_lines.append(stripped)
-
-        # Execute the command with JSON capture
-        exit_code = await self._execute_agent_command(
-            job, target_host, command, line_callback=capture_json_output
-        )
-
-        if exit_code != 0:
-            raise RuntimeError(
-                f"VM creation script exited with code {exit_code}")
-
-        # Parse the JobResult envelope
-        if not result_json_lines:
-            raise RuntimeError(
-                "No JSON result returned from vm.create operation")
-
-        # Use the first (and should be only) JSON line
-        result_json = result_json_lines[0]
-        envelope, error = parse_job_result(result_json)
-
-        if error:
-            raise RuntimeError(f"Failed to parse job result: {error}")
-
-        if not envelope:
-            raise RuntimeError("Job result envelope is None")
-
-        # Check the result status
-        if envelope.status == "error":
-            error_msg = envelope.message or "Unknown error"
-            error_code = envelope.code or "UNKNOWN"
-            raise RuntimeError(
-                f"VM creation failed ({error_code}): {error_msg}")
-
-        # Log success with result data
-        await self._append_job_output(
-            job.job_id,
-            f"VM creation completed: {envelope.message}",
-            f"Result status: {envelope.status}",
-        )
-
-        # Store result data in job parameters for later retrieval
-        job.parameters["result_data"] = envelope.data
-
-        # Append result data as JSON to job output for managed deployment compatibility
-        # Managed deployments use _extract_vm_id_from_output to parse the vm_id
-        if envelope.data:
-            await self._append_job_output(
-                job.job_id,
-                json.dumps(envelope.data),
-            )
 
     async def _execute_create_disk_job(self, job: Job) -> None:
-        """Execute a disk creation and attachment job using new protocol.
+        """Execute a disk creation and attachment job using new protocol."""
+        def validate_disk_spec(resource_spec: Dict[str, Any]) -> None:
+            if not resource_spec.get("vm_id"):
+                raise RuntimeError("Disk creation requires vm_id")
 
-        Uses the JobRequest/JobResult envelope protocol.
-        """
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("Disk creation job is missing a target host")
-
-        # Ensure host is prepared
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for disk creation")
-
-        # Extract resource_spec from job parameters
-        definition = job.parameters.get("definition", {})
-        resource_spec = definition.get("fields", {})
-
-        # Validate that VM exists
-        vm_id = resource_spec.get("vm_id")
-        if not vm_id:
-            raise RuntimeError("Disk creation requires vm_id")
-
-        # Create JobRequest envelope using the new protocol
-        job_request = create_job_request(
-            operation="disk.create",
-            resource_spec=resource_spec,
-            correlation_id=job.job_id,
-            metadata={
-                "job_id": job.job_id,
-                "job_type": job.job_type,
-                "target_host": target_host,
-            }
+        await self._execute_new_protocol_operation(
+            job, "disk.create", "Disk creation",
+            validate_resource_spec=validate_disk_spec
         )
-
-        # Serialize the envelope to JSON
-        json_payload = await asyncio.to_thread(
-            job_request.model_dump_json,
-        )
-
-        self._log_agent_request(job.job_id, target_host,
-                                json_payload, "Main-NewProtocol.ps1")
-
-        # Build command to invoke Main-NewProtocol.ps1
-        command = self._build_agent_invocation_command(
-            "Main-NewProtocol.ps1", json_payload
-        )
-
-        # Storage for the result JSON
-        result_json_lines: List[str] = []
-
-        def capture_json_output(line: str) -> None:
-            """Capture JSON output from the host agent."""
-            stripped = line.strip()
-            if stripped.startswith('{'):
-                result_json_lines.append(stripped)
-
-        # Execute the command with JSON capture
-        exit_code = await self._execute_agent_command(
-            job, target_host, command, line_callback=capture_json_output
-        )
-
-        if exit_code != 0:
-            raise RuntimeError(
-                f"Disk creation script exited with code {exit_code}")
-
-        # Parse the JobResult envelope
-        if not result_json_lines:
-            raise RuntimeError(
-                "No JSON result returned from disk.create operation")
-
-        # Use the first (and should be only) JSON line
-        result_json = result_json_lines[0]
-        envelope, error = parse_job_result(result_json)
-
-        if error:
-            raise RuntimeError(f"Failed to parse job result: {error}")
-
-        if not envelope:
-            raise RuntimeError("Job result envelope is None")
-
-        # Check the result status
-        if envelope.status == "error":
-            error_msg = envelope.message or "Unknown error"
-            error_code = envelope.code or "UNKNOWN"
-            raise RuntimeError(
-                f"Disk creation failed ({error_code}): {error_msg}")
-
-        # Log success with result data
-        await self._append_job_output(
-            job.job_id,
-            f"Disk creation completed: {envelope.message}",
-            f"Result status: {envelope.status}",
-        )
-
-        # Store result data in job parameters for later retrieval
-        job.parameters["result_data"] = envelope.data
-
-        # Append result data as JSON to job output for managed deployment compatibility
-        if envelope.data:
-            await self._append_job_output(
-                job.job_id,
-                json.dumps(envelope.data),
-            )
 
     async def _execute_create_nic_job(self, job: Job) -> None:
-        """Execute a NIC creation and attachment job using new protocol.
+        """Execute a NIC creation and attachment job using new protocol."""
+        def validate_nic_spec(resource_spec: Dict[str, Any]) -> None:
+            if not resource_spec.get("vm_id"):
+                raise RuntimeError("NIC creation requires vm_id")
 
-        Uses the JobRequest/JobResult envelope protocol.
-        """
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError("NIC creation job is missing a target host")
-
-        # Ensure host is prepared
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for NIC creation")
-
-        # Extract resource_spec from job parameters
-        definition = job.parameters.get("definition", {})
-        resource_spec = definition.get("fields", {})
-
-        # Validate that VM exists
-        vm_id = resource_spec.get("vm_id")
-        if not vm_id:
-            raise RuntimeError("NIC creation requires vm_id")
-
-        # Create JobRequest envelope using the new protocol
-        job_request = create_job_request(
-            operation="nic.create",
-            resource_spec=resource_spec,
-            correlation_id=job.job_id,
-            metadata={
-                "job_id": job.job_id,
-                "job_type": job.job_type,
-                "target_host": target_host,
-            }
+        await self._execute_new_protocol_operation(
+            job, "nic.create", "NIC creation",
+            validate_resource_spec=validate_nic_spec
         )
-
-        # Serialize the envelope to JSON
-        json_payload = await asyncio.to_thread(
-            job_request.model_dump_json,
-        )
-
-        self._log_agent_request(job.job_id, target_host,
-                                json_payload, "Main-NewProtocol.ps1")
-
-        # Build command to invoke Main-NewProtocol.ps1
-        command = self._build_agent_invocation_command(
-            "Main-NewProtocol.ps1", json_payload
-        )
-
-        # Storage for the result JSON
-        result_json_lines: List[str] = []
-
-        def capture_json_output(line: str) -> None:
-            """Capture JSON output from the host agent."""
-            stripped = line.strip()
-            if stripped.startswith('{'):
-                result_json_lines.append(stripped)
-
-        # Execute the command with JSON capture
-        exit_code = await self._execute_agent_command(
-            job, target_host, command, line_callback=capture_json_output
-        )
-
-        if exit_code != 0:
-            raise RuntimeError(
-                f"NIC creation script exited with code {exit_code}")
-
-        # Parse the JobResult envelope
-        if not result_json_lines:
-            raise RuntimeError(
-                "No JSON result returned from nic.create operation")
-
-        # Use the first (and should be only) JSON line
-        result_json = result_json_lines[0]
-        envelope, error = parse_job_result(result_json)
-
-        if error:
-            raise RuntimeError(f"Failed to parse job result: {error}")
-
-        if not envelope:
-            raise RuntimeError("Job result envelope is None")
-
-        # Check the result status
-        if envelope.status == "error":
-            error_msg = envelope.message or "Unknown error"
-            error_code = envelope.code or "UNKNOWN"
-            raise RuntimeError(
-                f"NIC creation failed ({error_code}): {error_msg}")
-
-        # Log success with result data
-        await self._append_job_output(
-            job.job_id,
-            f"NIC creation completed: {envelope.message}",
-            f"Result status: {envelope.status}",
-        )
-
-        # Store result data in job parameters for later retrieval
-        job.parameters["result_data"] = envelope.data
-
-        # Append result data as JSON to job output for managed deployment compatibility
-        if envelope.data:
-            await self._append_job_output(
-                job.job_id,
-                json.dumps(envelope.data),
-            )
 
     async def _execute_new_protocol_operation(
         self,
         job: Job,
         operation: str,
         operation_name: str,
+        extract_resource_spec: Optional[
+            Callable[[Job], Dict[str, Any]]
+        ] = None,
+        validate_resource_spec: Optional[
+            Callable[[Dict[str, Any]], None]
+        ] = None,
     ) -> None:
-        """Execute an operation using the new JobRequest/JobResult protocol.
+        """Execute an operation using new JobRequest/JobResult protocol.
 
         Generic helper for JobRequest/JobResult protocol operations.
 
         Args:
             job: Job object
-            operation: Operation identifier (e.g., 'vm.update', 'disk.delete')
-            operation_name: Human-readable operation name for error messages
+            operation: Operation identifier (e.g., 'vm.update')
+            operation_name: Human-readable name for error messages
+            extract_resource_spec: Optional callback to extract
+                resource_spec. Defaults to extracting from
+                job.parameters['definition']['fields']
+            validate_resource_spec: Optional callback to validate
+                resource_spec before creating the request envelope
         """
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -1216,8 +754,15 @@ class JobService:
                 f"Failed to prepare host {target_host} for {operation_name}")
 
         # Extract resource_spec from job parameters
-        definition = job.parameters.get("definition", {})
-        resource_spec = definition.get("fields", {})
+        if extract_resource_spec:
+            resource_spec = extract_resource_spec(job)
+        else:
+            definition = job.parameters.get("definition", {})
+            resource_spec = definition.get("fields", {})
+
+        # Validate resource_spec if validator provided
+        if validate_resource_spec:
+            validate_resource_spec(resource_spec)
 
         # Create JobRequest envelope using the new protocol
         job_request = create_job_request(
@@ -1303,32 +848,28 @@ class JobService:
             )
 
     async def _execute_update_vm_job(self, job: Job) -> None:
-        """Execute a VM update job using new protocol.
-
-        Uses the JobRequest/JobResult envelope protocol.
-        """
-        await self._execute_new_protocol_operation(job, "vm.update", "VM update")
+        """Execute a VM update job using new protocol."""
+        await self._execute_new_protocol_operation(
+            job, "vm.update", "VM update"
+        )
 
     async def _execute_update_disk_job(self, job: Job) -> None:
-        """Execute a disk update job using new protocol.
-
-        Uses the JobRequest/JobResult envelope protocol.
-        """
-        await self._execute_new_protocol_operation(job, "disk.update", "Disk update")
+        """Execute a disk update job using new protocol."""
+        await self._execute_new_protocol_operation(
+            job, "disk.update", "Disk update"
+        )
 
     async def _execute_update_nic_job(self, job: Job) -> None:
-        """Execute a NIC update job using new protocol.
-
-        Uses the JobRequest/JobResult envelope protocol.
-        """
-        await self._execute_new_protocol_operation(job, "nic.update", "NIC update")
+        """Execute a NIC update job using new protocol."""
+        await self._execute_new_protocol_operation(
+            job, "nic.update", "NIC update"
+        )
 
     async def _execute_delete_disk_job(self, job: Job) -> None:
-        """Execute a disk deletion job using new protocol.
-
-        Uses the JobRequest/JobResult envelope protocol.
-        """
-        await self._execute_new_protocol_operation(job, "disk.delete", "Disk deletion")
+        """Execute a disk deletion job using new protocol."""
+        await self._execute_new_protocol_operation(
+            job, "disk.delete", "Disk deletion"
+        )
 
     async def _execute_delete_nic_job(self, job: Job) -> None:
         """Execute a NIC deletion job using new protocol.
@@ -1338,8 +879,18 @@ class JobService:
         await self._execute_new_protocol_operation(job, "nic.delete", "NIC deletion")
 
     async def _execute_initialize_vm_job(self, job: Job) -> None:
-        """Execute a VM initialization job that applies guest configuration."""
+        """Execute a VM initialization job that applies guest configuration.
 
+        This operation orchestrates the guest OS initialization workflow:
+        1. Mounts provisioning ISO to the VM
+        2. Starts the VM
+        3. Waits for guest readiness signal via KVP
+        4. Publishes encrypted provisioning data via KVP
+        5. Waits for guest provisioning completion
+
+        Uses the JobResult envelope protocol for consistent error handling,
+        though the operation itself is not a standard CRUD resource operation.
+        """
         definition = job.parameters.get("definition", {})
         target_host = (job.target_host or "").strip()
         if not target_host:
@@ -1356,6 +907,7 @@ class JobService:
             raise RuntimeError(
                 f"Failed to prepare host {target_host} for initialization")
 
+        # Serialize fields to JSON for the initialization script
         json_payload = await asyncio.to_thread(
             json.dumps, fields, ensure_ascii=False, separators=(",", ":")
         )
@@ -1365,10 +917,44 @@ class JobService:
             "Invoke-InitializeVmJob.ps1", json_payload
         )
 
-        exit_code = await self._execute_agent_command(job, target_host, command)
-        if exit_code != 0:
+        # Execute and parse JobResult envelope
+        await self._execute_agent_command(job, target_host, command)
+
+        # Parse JobResult from last line of output
+        # job.output is a List[str], so iterate directly
+        result_envelope = None
+
+        # Find the last JSON line (JobResult envelope)
+        for line in reversed(job.output):
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    result_envelope = json.loads(line)
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+        if not result_envelope:
             raise RuntimeError(
-                f"VM initialization script exited with code {exit_code}")
+                "No valid JobResult envelope found in initialization output"
+            )
+
+        # Check status
+        status = result_envelope.get("status")
+        if status != "success":
+            error_msg = result_envelope.get("message", "Unknown error")
+            raise RuntimeError(f"VM initialization failed: {error_msg}")
+
+        # Store result data
+        result_data = result_envelope.get("data", {})
+        if result_data:
+            await self._update_job(job.job_id, result_data=result_data)
+
+        # Append logs from envelope if present
+        logs = result_envelope.get("logs", [])
+        if logs:
+            log_text = "\n".join(logs)
+            await self._append_job_output(job.job_id, log_text)
 
     async def _execute_noop_test_job(self, job: Job) -> None:
         """Execute a noop-test job using the new protocol.
@@ -1481,10 +1067,6 @@ class JobService:
         This completely bypasses schemas and uses Pydantic models throughout.
         """
         from ..core.pydantic_models import (
-            VmSpec,
-            DiskSpec,
-            NicSpec,
-            GuestConfigSpec,
             ManagedDeploymentRequest,
         )
 
@@ -1559,7 +1141,7 @@ class JobService:
             )
 
         # Extract VM ID from result data
-        vm_id = self._extract_vm_id_from_output(vm_job_result.output)
+        vm_id = self._extract_vm_id_from_output(vm_job_result)
         if not vm_id:
             raise RuntimeError(
                 "VM creation completed but no VM ID could be extracted from output"
@@ -1708,87 +1290,6 @@ class JobService:
             f"Managed deployment complete. VM '{request.vm_spec.vm_name}' fully deployed on {target_host}.",
         )
 
-    async def _execute_managed_deployment_protocol_operation(
-        self,
-        job: Job,
-        target_host: str,
-        job_request: JobRequest,
-        operation_description: str,
-    ) -> JobResultEnvelope:
-        """Execute a single operation using the new JobRequest/JobResult protocol.
-
-        This is a helper method for executing individual operations (VM, Disk, NIC)
-        during managed deployment. This provides a simplified interface for orchestration.
-
-        Args:
-            job: The parent job (for logging context)
-            target_host: Target host for execution
-            job_request: JobRequest envelope
-            operation_description: Human-readable description for logging
-
-        Returns:
-            JobResultEnvelope with the operation result
-
-        Raises:
-            RuntimeError: If the operation fails
-        """
-        # Serialize the JobRequest to JSON
-        json_payload = await asyncio.to_thread(
-            job_request.model_dump_json,
-        )
-
-        self._log_agent_request(job.job_id, target_host,
-                                json_payload, "Main-NewProtocol.ps1")
-
-        # Build command to invoke Main-NewProtocol.ps1
-        command = self._build_agent_invocation_command(
-            "Main-NewProtocol.ps1", json_payload
-        )
-
-        # Storage for the result JSON
-        result_json_lines: List[str] = []
-
-        def capture_json_output(line: str) -> None:
-            """Capture JSON output from the host agent."""
-            stripped = line.strip()
-            if stripped.startswith('{'):
-                result_json_lines.append(stripped)
-
-        # Execute the command with JSON capture
-        exit_code = await self._execute_agent_command(
-            job, target_host, command, line_callback=capture_json_output
-        )
-
-        if exit_code != 0:
-            raise RuntimeError(
-                f"{operation_description} script exited with code {exit_code}")
-
-        # Parse the JobResult envelope
-        if not result_json_lines:
-            raise RuntimeError(
-                f"No JSON result returned from {operation_description}")
-
-        # Use the first (and should be only) JSON line
-        result_json = result_json_lines[0]
-        envelope, error = parse_job_result(result_json)
-
-        if error:
-            raise RuntimeError(
-                f"Failed to parse {operation_description} result: {error}")
-
-        if not envelope:
-            raise RuntimeError(
-                f"{operation_description} result envelope is None")
-
-        # Check the result status
-        if envelope.status == JobResultStatus.ERROR:
-            error_msg = envelope.message or "Unknown error"
-            error_code = envelope.code or "UNKNOWN"
-            raise RuntimeError(
-                f"{operation_description} failed ({error_code}): {error_msg}")
-
-        return envelope
-
     async def _queue_child_job(
         self,
         parent_job: Job,
@@ -1887,39 +1388,11 @@ class JobService:
             merged.append(new_child)
         return merged
 
-    def _extract_vm_id_from_output(self, lines: List[str]) -> Optional[str]:
-        """Parse a VM ID from the output of a child VM creation job."""
-
-        for line in lines:
-            parsed: Optional[Dict[str, Any]] = None
-            try:
-                candidate = line[line.index("{"): line.rindex("}") + 1]
-                parsed = json.loads(candidate)
-            except (ValueError, json.JSONDecodeError):
-                try:
-                    parsed = json.loads(line)
-                except Exception:
-                    parsed = None
-
-            if isinstance(parsed, dict):
-                for key in ("vm_id", "vmId", "id", "Id", "ID"):
-                    value = parsed.get(key)
-                    if isinstance(value, str) and value.strip():
-                        return value.strip()
-
-                nested_vm = parsed.get("vm")
-                if isinstance(nested_vm, dict):
-                    for key in ("id", "vm_id", "vmId", "Id", "ID"):
-                        value = nested_vm.get(key)
-                        if isinstance(value, str) and value.strip():
-                            return value.strip()
-
-            id_match = re.search(
-                r"vm[_\s-]?id\s*[:=]\s*([^\s]+)", line, flags=re.IGNORECASE)
-            if id_match:
-                return id_match.group(1).strip()
-
-        return None
+    def _extract_vm_id_from_output(self, vm_job: Job) -> Optional[str]:
+        """Extract VM ID from completed VM creation job result data."""
+        result_data = vm_job.parameters.get("result_data", {})
+        vm_id = result_data.get("vm_id")
+        return str(vm_id).strip() if vm_id else None
 
     async def _execute_agent_command(
         self,
@@ -1979,16 +1452,12 @@ class JobService:
         if not payload:
             return
 
-        decoder = self._stream_decoders.get((job_id, stream.lower()))
-        if decoder is None:
-            decoder = _PowerShellStreamDecoder(
-                parse_clixml=self._parse_clixml_payload,
-                strip_clixml=self._strip_clixml_markup,
-                decode_hex=self._decode_hex_escapes,
-            )
-            self._stream_decoders[(job_id, stream.lower())] = decoder
+        buffer = self._line_buffers.get((job_id, stream.lower()))
+        if buffer is None:
+            buffer = _SimpleLineBuffer()
+            self._line_buffers[(job_id, stream.lower())] = buffer
 
-        lines = decoder.push(payload)
+        lines = buffer.push(payload)
         if not lines:
             return
 
@@ -2021,10 +1490,10 @@ class JobService:
         line_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         pending_keys = [
-            key for key in self._stream_decoders if key[0] == job_id]
+            key for key in self._line_buffers if key[0] == job_id]
         for key in pending_keys:
-            decoder = self._stream_decoders.pop(key)
-            trailing = decoder.finalize()
+            buffer = self._line_buffers.pop(key)
+            trailing = buffer.finalize()
             if not trailing:
                 continue
             formatted_lines: List[str] = []
@@ -2042,61 +1511,6 @@ class JobService:
                 formatted_lines.append(line)
 
             await self._append_job_output(job_id, *formatted_lines)
-
-    _CLIXML_PREFIX = "#< CLIXML"
-    _CLIXML_TEXT_TAGS = {"S", "AV"}
-    _HEX_ESCAPE_PATTERN = re.compile(r"_x([0-9A-Fa-f]{4})_")
-
-    def _parse_clixml_payload(self, payload: str) -> Optional[str]:
-        """Attempt to decode PowerShell CLI XML output into plain text."""
-
-        trimmed = payload.lstrip()
-        if trimmed.startswith(self._CLIXML_PREFIX):
-            trimmed = trimmed[len(self._CLIXML_PREFIX):].lstrip()
-
-        xml_start = trimmed.find("<Objs")
-        if xml_start == -1:
-            return None
-
-        xml_data = trimmed[xml_start:]
-        try:
-            root = ElementTree.fromstring(xml_data)
-        except ElementTree.ParseError:
-            return None
-
-        fragments: List[str] = []
-        for element in root.iter():
-            tag = element.tag.split("}")[-1]
-            if tag in self._CLIXML_TEXT_TAGS and element.text:
-                fragments.append(element.text)
-
-        if not fragments:
-            return None
-
-        text = "\n".join(fragments)
-        return self._decode_hex_escapes(text)
-
-    def _strip_clixml_markup(self, payload: str) -> str:
-        """Best-effort fallback for CLI XML payloads that cannot be parsed."""
-
-        trimmed = payload
-        xml_start = trimmed.find("<Objs")
-        if xml_start != -1:
-            trimmed = trimmed[xml_start:]
-
-        stripped = re.sub(r"<[^>]+>", "", trimmed)
-        return self._decode_hex_escapes(stripped)
-
-    def _decode_hex_escapes(self, value: str) -> str:
-        """Convert PowerShell _xHHHH_ sequences to their character equivalents."""
-
-        def repl(match: re.Match[str]) -> str:
-            try:
-                return chr(int(match.group(1), 16))
-            except ValueError:
-                return match.group(0)
-
-        return self._HEX_ESCAPE_PATTERN.sub(repl, value)
 
     async def _after_job_update(
         self,
@@ -2190,7 +1604,7 @@ class JobService:
 
         # Format resource name for display
         resource_label = resource_name if resource_name else job.job_id[:8]
-        
+
         # For managed deployment, always treat as VM deployment
         if job.job_type == "managed_deployment":
             resource_type = "VM"

@@ -1,7 +1,6 @@
 """Unit tests for Kerberos manager service."""
 
 import base64
-import copy
 import os
 import struct
 import subprocess
@@ -15,8 +14,6 @@ import pytest
 from app.services.kerberos_manager import (
     KerberosManager,
     KerberosManagerError,
-    _check_host_delegation_legacy,
-    _check_wsman_spn,
     _extract_allowed_sids_from_security_descriptor,
     _format_ldap_server_target,
     _normalize_ldap_boolean,
@@ -27,6 +24,7 @@ from app.services.kerberos_manager import (
     initialize_kerberos,
     validate_host_kerberos_setup,
 )
+from app.services.spn_validator import check_wsman_spn
 
 
 @pytest.fixture(autouse=True)
@@ -39,17 +37,17 @@ def mock_gssapi_components():
                 mock_name = MagicMock()
                 mock_name.raw = MagicMock()
                 mock_name_cls.return_value = mock_name
-                
+
                 # Mock acquire_cred_from to return mock credentials
                 mock_raw_creds = MagicMock()
                 mock_raw_creds.creds = MagicMock()
                 mock_acquire.return_value = mock_raw_creds
-                
+
                 # Mock gssapi.Credentials wrapper
                 mock_creds_instance = MagicMock()
                 mock_creds_instance.lifetime = 86400
                 mock_creds_cls.return_value = mock_creds_instance
-                
+
                 yield
 
 
@@ -83,7 +81,8 @@ def _build_security_descriptor_with_object_ace(sid_blob: bytes) -> bytes:
     header = bytearray(20)
     header[0] = 1  # Revision
     struct.pack_into("<H", header, 2, 0x0004)  # SE_DACL_PRESENT
-    struct.pack_into("<I", header, 16, 20)  # DACL offset immediately after header
+    # DACL offset immediately after header
+    struct.pack_into("<I", header, 16, 20)
 
     # ACCESS_ALLOWED_OBJECT_ACE: header (4) + mask (4) + flags (4) + SID
     ace_size = 12 + len(sid_blob)
@@ -187,12 +186,12 @@ def test_extract_allowed_sids_handles_object_ace():
 def test_kerberos_manager_initialization(kerberos_manager, sample_keytab_b64):
     """Test that KerberosManager initializes correctly."""
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write"), \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod"), \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write"), \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod"), \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
         # Mock subprocess for klist with correct principal
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -200,7 +199,8 @@ def test_kerberos_manager_initialization(kerberos_manager, sample_keytab_b64):
         )
 
         # Mock tempfile.mkstemp for keytab and cache
-        mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
 
         # Mock Path instances
         mock_keytab_path = MagicMock()
@@ -217,12 +217,12 @@ def test_kerberos_manager_initialization(kerberos_manager, sample_keytab_b64):
 def test_kerberos_manager_writes_keytab(kerberos_manager):
     """Test that keytab is written with correct permissions."""
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write") as mock_write, \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod") as mock_fchmod, \
-         patch("app.services.kerberos_manager.os.chmod") as mock_chmod, \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write") as mock_write, \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod") as mock_fchmod, \
+            patch("app.services.kerberos_manager.os.chmod") as mock_chmod, \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
         # Mock subprocess for klist with correct principal
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -230,7 +230,8 @@ def test_kerberos_manager_writes_keytab(kerberos_manager):
         )
 
         # Mock tempfile.mkstemp
-        mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
 
         # Mock Path instances
         mock_keytab_path = MagicMock()
@@ -251,7 +252,7 @@ def test_kerberos_manager_invalid_base64():
         principal="test-user@EXAMPLE.COM",
         keytab_b64="invalid-base64-!!!",
     )
-    
+
     with pytest.raises(KerberosManagerError, match="Failed to write keytab"):
         manager.initialize()
 
@@ -308,15 +309,15 @@ def test_acquire_credentials_falls_back_to_kinit(kerberos_manager):
     """When acquire_cred_from is missing we should fall back to kinit."""
 
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write"), \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod"), \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls, \
-         patch("app.services.kerberos_manager.gssapi_raw.acquire_cred_from", side_effect=AttributeError), \
-         patch.object(KerberosManager, "_acquire_credentials_via_kinit") as mock_kinit, \
-         patch("app.services.kerberos_manager.gssapi.Credentials") as mock_creds:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write"), \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod"), \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls, \
+            patch("app.services.kerberos_manager.gssapi_raw.acquire_cred_from", side_effect=AttributeError), \
+            patch.object(KerberosManager, "_acquire_credentials_via_kinit") as mock_kinit, \
+            patch("app.services.kerberos_manager.gssapi.Credentials") as mock_creds:
 
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -351,7 +352,8 @@ def test_acquire_credentials_via_kinit_success(monkeypatch):
         called_commands.append(cmd)
         return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
-    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run", fake_run)
 
     manager._acquire_credentials_via_kinit()
 
@@ -365,7 +367,8 @@ def test_acquire_credentials_via_kinit_failure(monkeypatch):
     manager._keytab_path = Path("/tmp/test.keytab")
     manager._cache_path = Path("/tmp/test.cache")
 
-    error = subprocess.CalledProcessError(returncode=1, cmd=["kinit"], stderr="bad keytab")
+    error = subprocess.CalledProcessError(
+        returncode=1, cmd=["kinit"], stderr="bad keytab")
 
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run",
@@ -385,9 +388,10 @@ def test_check_wsman_spn_uses_kvno_when_setspn_missing(monkeypatch):
         assert cmd[0] == "kvno"
         return SimpleNamespace(returncode=0, stdout="ticket", stderr="")
 
-    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run", fake_run)
 
-    success, message = _check_wsman_spn("hyperv01", realm="EXAMPLE.COM")
+    success, message = check_wsman_spn("hyperv01", realm="EXAMPLE.COM")
 
     assert success
     assert "kvno" in message.lower()
@@ -399,9 +403,10 @@ def test_check_wsman_spn_reports_missing_tools(monkeypatch):
     def fake_run(cmd, capture_output=True, text=True, timeout=15):
         raise FileNotFoundError
 
-    monkeypatch.setattr("app.services.kerberos_manager.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.subprocess.run", fake_run)
 
-    success, message = _check_wsman_spn("hyperv02")
+    success, message = check_wsman_spn("hyperv02")
 
     assert not success
     assert "not available" in message.lower()
@@ -441,7 +446,7 @@ def test_validate_host_kerberos_setup_detects_missing_rbcd_entries(monkeypatch):
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -494,7 +499,7 @@ def test_validate_host_kerberos_setup_validates_cluster_members(monkeypatch):
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -511,7 +516,8 @@ def test_validate_host_kerberos_setup_validates_cluster_members(monkeypatch):
     }
     assert len(result["delegation_errors"]) == 1
     message = result["delegation_errors"][0]
-    assert message.startswith("Cluster 'ClusterA': Resource-based constrained delegation is not configured")
+    assert message.startswith(
+        "Cluster 'ClusterA': Resource-based constrained delegation is not configured")
 
 
 def test_validate_host_kerberos_setup_success_when_cluster_allows_hosts(monkeypatch):
@@ -551,7 +557,7 @@ def test_validate_host_kerberos_setup_success_when_cluster_allows_hosts(monkeypa
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -601,7 +607,7 @@ def test_validate_host_kerberos_setup_warns_on_unexpected_principals(monkeypatch
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -652,7 +658,7 @@ def test_validate_host_kerberos_setup_accepts_host_sid_entries(monkeypatch):
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -663,7 +669,8 @@ def test_validate_host_kerberos_setup_accepts_host_sid_entries(monkeypatch):
     )
 
     assert not result["delegation_errors"]
-    assert not any("unexpected principals" in warning for warning in result["warnings"])
+    assert not any(
+        "unexpected principals" in warning for warning in result["warnings"])
 
 
 def test_validate_host_kerberos_setup_reports_host_legacy_delegation(monkeypatch):
@@ -699,7 +706,7 @@ def test_validate_host_kerberos_setup_reports_host_legacy_delegation(monkeypatch
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -709,46 +716,21 @@ def test_validate_host_kerberos_setup_reports_host_legacy_delegation(monkeypatch
         clusters={"ClusterOK": ["hyperv09"]},
     )
 
-    assert any("Unconstrained delegation" in msg for msg in result["delegation_errors"])
-    assert any("Legacy constrained delegation" in msg for msg in result["warnings"])
+    assert any(
+        "Unconstrained delegation" in msg for msg in result["delegation_errors"])
+    assert any(
+        "Legacy constrained delegation" in msg for msg in result["warnings"])
 
 
-def test_check_host_delegation_legacy_reports_missing(monkeypatch):
-    """Legacy host delegation should report when delegation is absent."""
-
-    info = {
-        "exists": True,
-        "rbcd_present": False,
-        "rbcd_principals": [],
-        "rbcd_sid_strings": [],
-        "delegate_targets": [],
-        "delegate_present": False,
-        "trusted_to_auth": False,
-        "trusted_for_delegation": False,
-    }
-
-    monkeypatch.setattr(
-        "app.services.kerberos_manager._ldap_get_computer_delegation_info",
-        lambda name, realm=None: copy.deepcopy(info),
-    )
-    monkeypatch.setattr(
-        "app.services.kerberos_manager.subprocess.run",
-        MagicMock(side_effect=AssertionError("PowerShell should not be invoked")),
-    )
-
-    success, message = _check_host_delegation_legacy("hyperv01")
-
-    assert success is False
-    assert "No delegation" in message
 def test_kerberos_manager_cleanup(kerberos_manager):
     """Test that cleanup removes keytab file."""
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write"), \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod"), \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write"), \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod"), \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
         # Mock subprocess for klist with correct principal
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -756,7 +738,8 @@ def test_kerberos_manager_cleanup(kerberos_manager):
         )
 
         # Mock tempfile.mkstemp
-        mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
 
         # Mock Path instances
         mock_keytab_path = MagicMock()
@@ -778,12 +761,12 @@ def test_kerberos_manager_cleanup(kerberos_manager):
 def test_kerberos_manager_double_initialization(kerberos_manager):
     """Test that double initialization is handled correctly."""
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write"), \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod"), \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write"), \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod"), \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
         # Mock subprocess for klist with correct principal
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -791,7 +774,8 @@ def test_kerberos_manager_double_initialization(kerberos_manager):
         )
 
         # Mock tempfile.mkstemp
-        mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
 
         # Mock Path instances
         mock_keytab_path = MagicMock()
@@ -810,12 +794,12 @@ def test_kerberos_manager_double_initialization(kerberos_manager):
 def test_global_kerberos_manager_initialize(sample_keytab_b64):
     """Test global Kerberos manager initialization."""
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write"), \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod"), \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write"), \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod"), \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
         # Mock subprocess for klist with correct principal
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -823,7 +807,8 @@ def test_global_kerberos_manager_initialize(sample_keytab_b64):
         )
 
         # Mock tempfile.mkstemp
-        mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
 
         # Mock Path instances
         mock_keytab_path = MagicMock()
@@ -848,16 +833,18 @@ def test_global_kerberos_manager_initialize(sample_keytab_b64):
 def test_global_kerberos_manager_reinitialize(sample_keytab_b64):
     """Test that reinitializing global manager cleans up previous instance."""
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write"), \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod"), \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write"), \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod"), \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
         # Mock subprocess for klist - different principals for each init
         mock_subprocess.side_effect = [
-            MagicMock(returncode=0, stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 first@EXAMPLE.COM\n"),
-            MagicMock(returncode=0, stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 second@EXAMPLE.COM\n"),
+            MagicMock(
+                returncode=0, stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 first@EXAMPLE.COM\n"),
+            MagicMock(
+                returncode=0, stdout="Keytab name: FILE:/tmp/test.keytab\nKVNO Principal\n---- ----\n   2 second@EXAMPLE.COM\n"),
         ]
 
         # Mock tempfile.mkstemp - will be called twice (2 files per init, 2 inits)
@@ -871,7 +858,8 @@ def test_global_kerberos_manager_reinitialize(sample_keytab_b64):
         mock_cache_path1 = MagicMock()
         mock_keytab_path2 = MagicMock()
         mock_cache_path2 = MagicMock()
-        mock_path_cls.side_effect = [mock_keytab_path1, mock_cache_path1, mock_keytab_path2, mock_cache_path2]
+        mock_path_cls.side_effect = [
+            mock_keytab_path1, mock_cache_path1, mock_keytab_path2, mock_cache_path2]
 
         # First initialization
         initialize_kerberos(
@@ -898,17 +886,17 @@ def test_keytab_bytes_decoding(sample_keytab_b64):
         principal="test@EXAMPLE.COM",
         keytab_b64=sample_keytab_b64,
     )
-    
+
     # Decode manually to compare
     expected_bytes = base64.b64decode(sample_keytab_b64)
-    
+
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write") as mock_write, \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod"), \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write") as mock_write, \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod"), \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
         # Mock subprocess for klist with correct principal
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -916,7 +904,8 @@ def test_keytab_bytes_decoding(sample_keytab_b64):
         )
 
         # Mock tempfile.mkstemp
-        mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
 
         # Mock Path instances
         mock_keytab_path = MagicMock()
@@ -936,13 +925,13 @@ def test_keytab_bytes_decoding(sample_keytab_b64):
 def test_credential_acquisition_failure(kerberos_manager):
     """Test that credential acquisition failure is handled properly."""
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.gssapi_raw.acquire_cred_from") as mock_acquire, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write"), \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod"), \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.gssapi_raw.acquire_cred_from") as mock_acquire, \
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write"), \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod"), \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
         # Mock subprocess for klist with correct principal
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -950,7 +939,8 @@ def test_credential_acquisition_failure(kerberos_manager):
         )
 
         # Mock tempfile.mkstemp
-        mock_mkstemp.side_effect = [(1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
+        mock_mkstemp.side_effect = [
+            (1, "/tmp/aetherv_test.keytab"), (2, "/tmp/krb5cc_test")]
 
         # Mock Path instances
         mock_keytab_path = MagicMock()
@@ -983,12 +973,14 @@ def test_establish_ldap_connection_ignores_kdc_port(monkeypatch):
             captured["connection_kwargs"] = kwargs
 
     monkeypatch.setattr("app.services.kerberos_manager.Server", DummyServer)
-    monkeypatch.setattr("app.services.kerberos_manager.Connection", DummyConnection)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.Connection", DummyConnection)
     monkeypatch.setattr("app.services.kerberos_manager.SASL", object())
     monkeypatch.setattr("app.services.kerberos_manager.KERBEROS", object())
     monkeypatch.setattr("app.services.kerberos_manager.BASE", object())
     monkeypatch.setattr("app.services.kerberos_manager.SUBTREE", object())
-    monkeypatch.setattr("app.services.kerberos_manager.escape_filter_chars", lambda value: value)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.escape_filter_chars", lambda value: value)
     monkeypatch.setattr("app.services.kerberos_manager.NONE", object())
 
     from app.services.kerberos_manager import _establish_ldap_connection
@@ -1018,12 +1010,14 @@ def test_establish_ldap_connection_respects_ldaps_port(monkeypatch):
             captured["connection_kwargs"] = kwargs
 
     monkeypatch.setattr("app.services.kerberos_manager.Server", DummyServer)
-    monkeypatch.setattr("app.services.kerberos_manager.Connection", DummyConnection)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.Connection", DummyConnection)
     monkeypatch.setattr("app.services.kerberos_manager.SASL", object())
     monkeypatch.setattr("app.services.kerberos_manager.KERBEROS", object())
     monkeypatch.setattr("app.services.kerberos_manager.BASE", object())
     monkeypatch.setattr("app.services.kerberos_manager.SUBTREE", object())
-    monkeypatch.setattr("app.services.kerberos_manager.escape_filter_chars", lambda value: value)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.escape_filter_chars", lambda value: value)
     monkeypatch.setattr("app.services.kerberos_manager.NONE", object())
 
     from app.services.kerberos_manager import _establish_ldap_connection
@@ -1053,12 +1047,14 @@ def test_establish_ldap_connection_respects_global_catalog_ldaps_port(monkeypatc
             captured["connection_kwargs"] = kwargs
 
     monkeypatch.setattr("app.services.kerberos_manager.Server", DummyServer)
-    monkeypatch.setattr("app.services.kerberos_manager.Connection", DummyConnection)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.Connection", DummyConnection)
     monkeypatch.setattr("app.services.kerberos_manager.SASL", object())
     monkeypatch.setattr("app.services.kerberos_manager.KERBEROS", object())
     monkeypatch.setattr("app.services.kerberos_manager.BASE", object())
     monkeypatch.setattr("app.services.kerberos_manager.SUBTREE", object())
-    monkeypatch.setattr("app.services.kerberos_manager.escape_filter_chars", lambda value: value)
+    monkeypatch.setattr(
+        "app.services.kerberos_manager.escape_filter_chars", lambda value: value)
     monkeypatch.setattr("app.services.kerberos_manager.NONE", object())
 
     from app.services.kerberos_manager import _establish_ldap_connection
@@ -1077,7 +1073,8 @@ def test_extract_domain_from_principal_lowercases_realm():
 
     from app.services.kerberos_manager import _extract_domain_from_principal
 
-    assert _extract_domain_from_principal("svc-account@EXAMPLE.COM") == "example.com"
+    assert _extract_domain_from_principal(
+        "svc-account@EXAMPLE.COM") == "example.com"
     assert _extract_domain_from_principal("invalid") is None
 
 
@@ -1105,7 +1102,8 @@ def test_discover_ldap_server_hosts_uses_dns(monkeypatch):
     monkeypatch.setattr(
         km,
         "get_kerberos_manager",
-        lambda: SimpleNamespace(principal="svc-account@EXAMPLE.COM", realm=None, kdc=None),
+        lambda: SimpleNamespace(
+            principal="svc-account@EXAMPLE.COM", realm=None, kdc=None),
     )
 
     hosts = km._discover_ldap_server_hosts("EXAMPLE.COM")
@@ -1144,7 +1142,8 @@ def test_discover_ldap_server_hosts_uses_override_without_domain(monkeypatch):
     monkeypatch.setattr(
         km,
         "get_kerberos_manager",
-        lambda: SimpleNamespace(principal=None, realm=None, kdc="dc4.example.com"),
+        lambda: SimpleNamespace(
+            principal=None, realm=None, kdc="dc4.example.com"),
     )
 
     hosts = km._discover_ldap_server_hosts(None)
@@ -1165,12 +1164,12 @@ def test_kdc_override_sets_krb5_config(monkeypatch, sample_keytab_b64):
     monkeypatch.delenv("KRB5_CONFIG", raising=False)
 
     with patch("app.services.kerberos_manager.subprocess.run") as mock_subprocess, \
-         patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
-         patch("app.services.kerberos_manager.os.write"), \
-         patch("app.services.kerberos_manager.os.close"), \
-         patch("app.services.kerberos_manager.os.fchmod"), \
-         patch("app.services.kerberos_manager.os.chmod") as mock_chmod, \
-         patch("app.services.kerberos_manager.Path") as mock_path_cls:
+            patch("app.services.kerberos_manager.tempfile.mkstemp") as mock_mkstemp, \
+            patch("app.services.kerberos_manager.os.write"), \
+            patch("app.services.kerberos_manager.os.close"), \
+            patch("app.services.kerberos_manager.os.fchmod"), \
+            patch("app.services.kerberos_manager.os.chmod") as mock_chmod, \
+            patch("app.services.kerberos_manager.Path") as mock_path_cls:
 
         mock_subprocess.return_value = MagicMock(
             returncode=0,
@@ -1191,14 +1190,16 @@ def test_kdc_override_sets_krb5_config(monkeypatch, sample_keytab_b64):
         mock_conf_path.__str__.return_value = "/tmp/krb5_override.conf"
         mock_conf_path.exists.return_value = True
 
-        mock_path_cls.side_effect = [mock_keytab_path, mock_cache_path, mock_conf_path]
+        mock_path_cls.side_effect = [
+            mock_keytab_path, mock_cache_path, mock_conf_path]
 
         manager.initialize()
 
         mock_conf_path.write_text.assert_called_once()
         written_conf = mock_conf_path.write_text.call_args[0][0]
         assert "kdc = kdc.example.com" in written_conf
-        assert mock_conf_path.write_text.call_args[1].get("encoding") == "utf-8"
+        assert mock_conf_path.write_text.call_args[1].get(
+            "encoding") == "utf-8"
         mock_chmod.assert_any_call(mock_conf_path, 0o600)
         assert os.environ.get("KRB5_CONFIG") == "/tmp/krb5_override.conf"
 

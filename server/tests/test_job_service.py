@@ -207,7 +207,12 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_stream_decoder_handles_split_clixml_payloads(self):
+    async def test_line_buffer_handles_plain_text_across_chunks(self):
+        """Test that line buffering works across chunk boundaries.
+        
+        Since pypsrp handles CLIXML deserialization internally, we receive
+        plain text that just needs line buffering.
+        """
         job = Job(
             job_id="job-stream-xml",
             job_type="create_vm",
@@ -228,14 +233,17 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         # type: ignore[assignment]
         self.job_service._broadcast_job_output = fake_broadcast
 
-        chunk1 = "#< CLIXML\r\n"
-        chunk2 = (
-            "<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\">"
-            "<Obj><S>Line one</S><S>Line two</S></Obj></Objs>\r\nAfter XML line\n"
-        )
+        # Simulate plain text arriving in chunks
+        # (pypsrp already deserialized CLIXML)
+        chunk1 = "Line one\n"
+        chunk2 = "Line two\nAfter XML line\n"
 
-        await self.job_service._handle_stream_chunk(job.job_id, "stdout", chunk1)
-        await self.job_service._handle_stream_chunk(job.job_id, "stdout", chunk2)
+        await self.job_service._handle_stream_chunk(
+            job.job_id, "stdout", chunk1
+        )
+        await self.job_service._handle_stream_chunk(
+            job.job_id, "stdout", chunk2
+        )
         await self.job_service._finalize_job_streams(job.job_id)
 
         async with self.job_service._lock:
@@ -246,12 +254,21 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             ["Line one", "Line two", "After XML line"],
         )
 
+        # Lines are broadcast as they arrive (one broadcast per chunk)
         self.assertEqual(
             captured,
-            [(job.job_id, ["Line one", "Line two", "After XML line"])],
+            [
+                (job.job_id, ["Line one"]),
+                (job.job_id, ["Line two", "After XML line"]),
+            ],
         )
 
-    async def test_stream_decoder_handles_split_sentinel_across_chunks(self):
+    async def test_line_buffer_handles_incomplete_lines_across_chunks(self):
+        """Test that incomplete lines are buffered until newline arrives.
+        
+        This verifies line buffering works when a line is split across
+        multiple chunks without a newline.
+        """
         job = Job(
             job_id="job-stream-split",
             job_type="create_vm",
@@ -273,21 +290,23 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         # type: ignore[assignment]
         self.job_service._broadcast_job_output = fake_broadcast
 
-        chunk1 = "#< CLI"
-        chunk2 = (
-            "XML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\">"
-            "<Obj><S>Split payload</S></Obj></Objs>\n"
-        )
+        # Simulate incomplete line split across chunks
+        chunk1 = "Split pay"
+        chunk2 = "load line\n"
 
-        await self.job_service._handle_stream_chunk(job.job_id, "stdout", chunk1)
-        await self.job_service._handle_stream_chunk(job.job_id, "stdout", chunk2)
+        await self.job_service._handle_stream_chunk(
+            job.job_id, "stdout", chunk1
+        )
+        await self.job_service._handle_stream_chunk(
+            job.job_id, "stdout", chunk2
+        )
         await self.job_service._finalize_job_streams(job.job_id)
 
         async with self.job_service._lock:
             stored_output = list(self.job_service.jobs[job.job_id].output)
 
-        self.assertEqual(stored_output, ["Split payload"])
-        self.assertEqual(captured, [(job.job_id, ["Split payload"])])
+        self.assertEqual(stored_output, ["Split payload line"])
+        self.assertEqual(captured, [(job.job_id, ["Split payload line"])])
 
     async def test_get_job_redacts_sensitive_parameters(self):
         job = Job(
