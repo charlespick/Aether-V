@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     job_worker_concurrency: int = 6  # Maximum concurrent provisioning jobs
     job_long_timeout_seconds: float = 900.0  # 15 minutes for provisioning/deletion
     job_short_timeout_seconds: float = 60.0  # 1 minute for quick power actions
+    job_disk_timeout_seconds: float = 900.0  # 15 minutes for disk operations (copy/create)
 
     # Remote task execution settings
     remote_task_min_concurrency: int = 6
