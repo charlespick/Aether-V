@@ -17,24 +17,30 @@
 #>
 
 [CmdletBinding()]
-param()
+param(
+    [Parameter(ValueFromPipeline = $true)]
+    [string]$InputJson
+)
 
 $ErrorActionPreference = 'Stop'
 
-# Read JSON input from stdin
-$inputJson = @()
-while ($null -ne ($line = [Console]::ReadLine())) {
-    $inputJson += $line
+# Handle pipeline input - collect all input if coming from pipeline
+if (-not $InputJson) {
+    # Read from stdin if not provided via pipeline
+    $inputLines = @()
+    while ($null -ne ($line = [Console]::ReadLine())) {
+        $inputLines += $line
+    }
+    
+    if ($inputLines.Count -eq 0) {
+        throw "No JSON input received"
+    }
+    
+    $InputJson = $inputLines -join "`n"
 }
-
-if (-not $inputJson) {
-    throw "No JSON input received from stdin"
-}
-
-$jsonString = $inputJson -join "`n"
 
 try {
-    $config = ConvertFrom-Json -InputObject $jsonString -ErrorAction Stop
+    $config = ConvertFrom-Json -InputObject $InputJson -ErrorAction Stop
 }
 catch {
     throw "Failed to parse JSON input: $_"
@@ -62,6 +68,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Source the provisioning function scripts
 $waitForKeyScript = Join-Path -Path $scriptDir -ChildPath "Provisioning.WaitForProvisioningKey.ps1"
 $publishDataScript = Join-Path -Path $scriptDir -ChildPath "Provisioning.PublishProvisioningData.ps1"
+$copyIsoScript = Join-Path -Path $scriptDir -ChildPath "Provisioning.CopyProvisioningISO.ps1"
 
 if (-not (Test-Path -LiteralPath $waitForKeyScript)) {
     throw "Required script not found: $waitForKeyScript"
@@ -71,13 +78,75 @@ if (-not (Test-Path -LiteralPath $publishDataScript)) {
     throw "Required script not found: $publishDataScript"
 }
 
+if (-not (Test-Path -LiteralPath $copyIsoScript)) {
+    throw "Required script not found: $copyIsoScript"
+}
+
 Write-Host "Sourcing provisioning functions..."
 . $waitForKeyScript
 . $publishDataScript
+. $copyIsoScript
 
-# Step 1: Wait for guest provisioning readiness
+# Step 1: Copy and mount provisioning ISO
 Write-Host ""
-Write-Host "Step 1: Waiting for guest to signal provisioning readiness..."
+Write-Host "Step 1: Preparing provisioning ISO..."
+
+# Get VM object to determine storage location and OS family
+$vm = Get-VM -Id $vmId -ErrorAction Stop
+if (-not $vm) {
+    throw "VM with ID '$vmId' not found"
+}
+
+# Get the VM's configuration path to determine storage location
+$vmConfigPath = $vm.ConfigurationLocation
+if ([string]::IsNullOrWhiteSpace($vmConfigPath)) {
+    throw "Unable to determine VM configuration location for VM '$vmName'"
+}
+
+# Use the VM's parent folder for ISO storage
+$vmFolder = Split-Path -Parent $vmConfigPath
+$storagePath = $vmFolder
+
+# Determine OS family - default to Windows
+$osFamily = 'windows'
+
+# Copy provisioning ISO to VM's storage location
+Write-Host "Copying provisioning ISO for $osFamily guest..."
+try {
+    $isoPath = Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -StoragePath $storagePath -VMName $vmName
+    Write-Host "Provisioning ISO copied to: $isoPath"
+}
+catch {
+    Write-Error "Failed to copy provisioning ISO: $_"
+    throw
+}
+
+# Mount the provisioning ISO
+Write-Host "Mounting provisioning ISO to VM..."
+try {
+    Add-VMDvdDrive -VM $vm -Path $isoPath -ErrorAction Stop
+    Write-Host "Provisioning ISO mounted successfully"
+}
+catch {
+    Write-Error "Failed to mount provisioning ISO: $_"
+    throw
+}
+
+# Step 2: Start the VM
+Write-Host ""
+Write-Host "Step 2: Starting VM..."
+try {
+    Start-VM -VM $vm -ErrorAction Stop
+    Write-Host "VM started successfully"
+}
+catch {
+    Write-Error "Failed to start VM: $_"
+    throw
+}
+
+# Step 3: Wait for guest provisioning readiness
+Write-Host ""
+Write-Host "Step 3: Waiting for guest to signal provisioning readiness..."
 try {
     $ready = Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName -TimeoutSeconds 300
     if (-not $ready) {
@@ -89,9 +158,9 @@ catch {
     throw
 }
 
-# Step 2: Publish provisioning data to guest
+# Step 4: Publish provisioning data to guest
 Write-Host ""
-Write-Host "Step 2: Publishing provisioning data to guest..."
+Write-Host "Step 4: Publishing provisioning data to guest..."
 
 # Build parameters for Invoke-ProvisioningPublishProvisioningData
 $publishParams = @{
@@ -127,9 +196,9 @@ catch {
     throw
 }
 
-# Step 3: Wait for guest to complete provisioning
+# Step 5: Wait for guest to complete provisioning
 Write-Host ""
-Write-Host "Step 3: Waiting for guest to complete provisioning..."
+Write-Host "Step 5: Waiting for guest to complete provisioning..."
 try {
     Invoke-ProvisioningWaitForProvisioningCompletion -VMName $vmName -TimeoutSeconds 1800 -PollIntervalSeconds 5
 }

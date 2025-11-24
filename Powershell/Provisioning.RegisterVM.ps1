@@ -18,15 +18,7 @@ function Invoke-ProvisioningRegisterVm {
 
         [Parameter(Mandatory = $false)]
         [AllowNull()]
-        [string]$VhdxPath,
-
-        [Parameter(Mandatory = $true)]
-        [string]$IsoPath,
-
-        [Parameter()]
-        [string]$VirtualSwitch,
-
-        [Nullable[int]]$VLANId
+        [string]$VhdxPath
     )
 
     # VMDataFolder is now the base path where all VMs are created
@@ -82,53 +74,17 @@ function Invoke-ProvisioningRegisterVm {
         }
     }
 
-    # Use specified virtual switch or fallback to first available
-    $networkSwitch = $null
-    if (-not [string]::IsNullOrWhiteSpace($VirtualSwitch)) {
-        $networkSwitch = Get-VMSwitch -Name $VirtualSwitch -ErrorAction SilentlyContinue
-        if (-not $networkSwitch) {
-            throw "Virtual switch '$VirtualSwitch' not found on this host."
-        }
-    }
-    else {
-        $networkSwitch = Get-VMSwitch | Select-Object -First 1
-        if (-not $networkSwitch) {
-            throw "No virtual switch is available to attach VM '$vmName'."
-        }
-    }
-
-    $adapter = Get-VMNetworkAdapter -VM $vm | Select-Object -First 1
-    if (-not $adapter) {
-        throw "No network adapter found on VM '$vmName'."
-    }
-
-    try {
-        Connect-VMNetworkAdapter -VMNetworkAdapter $adapter -VMSwitch $networkSwitch
-    }
-    catch {
-        throw "Failed to connect VM '$vmName' to switch '$($networkSwitch.Name)': $_"
-    }
-
-    if ($VLANId -ne $null) {
+    # Remove the default network adapter that PowerShell creates automatically
+    # Network adapters will be added via the NIC create operation
+    $defaultAdapter = Get-VMNetworkAdapter -VM $vm | Select-Object -First 1
+    if ($defaultAdapter) {
         try {
-            Set-VMNetworkAdapterVlan -VMNetworkAdapter $adapter -Access -VlanId $VLANId
+            Remove-VMNetworkAdapter -VMNetworkAdapter $defaultAdapter -ErrorAction Stop
+            Write-Host "Removed default network adapter (will be added via NIC create operation)" -ForegroundColor Green
         }
         catch {
-            throw "Failed to assign VLAN $VLANId to VM '$vmName': $_"
+            Write-Warning "Failed to remove default network adapter: $_"
         }
-    }
-
-    # Mount the provisioning ISO from the storage path
-    if (-not (Test-Path -LiteralPath $IsoPath -PathType Leaf)) {
-        throw "Provisioning ISO not found at '$IsoPath'."
-    }
-
-    try {
-        Add-VMDvdDrive -VM $vm -Path $IsoPath
-        Write-Host "Mounted provisioning ISO: $IsoPath" -ForegroundColor Green
-    }
-    catch {
-        throw "Failed to mount provisioning ISO '$IsoPath' to VM '$vmName': $_"
     }
 
     # Set boot order to boot from the first hard disk (if one is attached)
@@ -145,6 +101,7 @@ function Invoke-ProvisioningRegisterVm {
 
     # Note: In split component model, VM is created but NOT started
     # The initialization job will start the VM after disk and NIC are attached
+    # Network adapters and provisioning ISO are added during the initialization phase
     Write-Host "VM '$vmName' created successfully (not started - will be started during initialization)" -ForegroundColor Green
 
     return $vm

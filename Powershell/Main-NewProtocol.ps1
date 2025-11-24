@@ -244,7 +244,9 @@ end {
             $storageClass = $resourceSpec['storage_class']
             $vmClustered = if ($resourceSpec.ContainsKey('vm_clustered')) { [bool]$resourceSpec['vm_clustered'] } else { $false }
             
-            $logs += "Creating VM: $vmName (RAM: ${gbRam}GB, CPUs: $cpuCores)"
+            $currentHost = $env:COMPUTERNAME
+            $logs += "Creating VM: $vmName (RAM: ${gbRam}GB, CPUs: $cpuCores, Storage Class: $storageClass)"
+            $logs += "Host: $currentHost"
             
             # Load host resources configuration
             $configPath = "C:\ProgramData\Aether-V\hostresources.json"
@@ -270,7 +272,7 @@ end {
 
             $hostConfig = ConvertTo-Hashtable -InputObject $hostConfig
 
-            # Resolve storage path
+            # Resolve storage path from storage_class for VM configuration files
             $storagePath = $null
             if ($storageClass) {
                 $storageClasses = $hostConfig['storage_classes']
@@ -294,26 +296,13 @@ end {
                 }
             }
 
-            # Resolve VM path
-            $vmBasePath = $hostConfig['virtual_machines_path']
-            if ([string]::IsNullOrWhiteSpace($vmBasePath)) {
-                throw "No virtual_machines_path defined in host configuration"
-            }
-
-            $currentHost = $env:COMPUTERNAME
-            $logs += "Creating VM '$vmName' on host '$currentHost'"
-
-            # Resolve VM configuration path
-            $vmDataFolder = Join-Path -Path $vmBasePath -ChildPath $vmName
+            # Resolve VM configuration path - stored in the storage class location
+            $vmDataFolder = Join-Path -Path $storagePath -ChildPath $vmName
 
             # Determine OS family - default to Windows for Phase 4
             $osFamily = 'windows'
 
-            # Create provisioning ISO for guest configuration
-            $isoPath = Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -StoragePath $storagePath -VMName $vmName
-            $logs += "Provisioning ISO created at: $isoPath"
-
-            # Register VM with Hyper-V (without disk or network adapter - those will be added separately)
+            # Register VM with Hyper-V (without disk, network adapter, or ISO - those will be added separately)
             $registerParams = @{
                 VMName       = $vmName
                 OSFamily     = $osFamily
@@ -321,7 +310,6 @@ end {
                 CPUcores     = $cpuCores
                 VMDataFolder = $vmDataFolder
                 VhdxPath     = $null  # No disk attached during VM creation
-                IsoPath      = $isoPath
             }
 
             Invoke-ProvisioningRegisterVm @registerParams | Out-Null
@@ -446,38 +434,17 @@ end {
             $vmName = $vm.Name
             $logs += "Creating disk for VM '$vmName' (ID: $vmId)"
             
-            # Load host configuration and resolve storage path (similar to vm.create)
-            $configPath = "C:\ProgramData\Aether-V\hostresources.json"
-            if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-                $configPath = "C:\ProgramData\Aether-V\hostresources.yaml"
+            # Get the VM's configuration path - this is where disks should be stored
+            # to keep VM config files and disks together
+            $vmConfigPath = $vm.ConfigurationLocation
+            if ([string]::IsNullOrWhiteSpace($vmConfigPath)) {
+                throw "Unable to determine VM configuration location for VM '$vmName'"
             }
             
-            $rawConfig = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
-            $hostConfig = $null
-            if ($configPath.EndsWith('.json')) {
-                $hostConfig = $rawConfig | ConvertFrom-Json -ErrorAction Stop
-            }
-            else {
-                if (-not (Get-Command -Name ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
-                    Import-Module -Name powershell-yaml -ErrorAction Stop | Out-Null
-                }
-                $hostConfig = ConvertFrom-Yaml -Yaml $rawConfig -ErrorAction Stop
-            }
-            $hostConfig = ConvertTo-Hashtable -InputObject $hostConfig
-            
-            # Resolve storage path
-            $storagePath = $null
-            if ($storageClass) {
-                foreach ($sc in $hostConfig['storage_classes']) {
-                    if ($sc['name'] -eq $storageClass) {
-                        $storagePath = $sc['path']
-                        break
-                    }
-                }
-            }
-            if (-not $storagePath) {
-                $storagePath = $hostConfig['storage_classes'][0]['path']
-            }
+            # Use the VM's parent folder (where the VM and its Virtual Hard Disks folder are located)
+            $vmFolder = Split-Path -Parent $vmConfigPath
+            $storagePath = $vmFolder
+            $logs += "Using VM's folder for disk storage: $storagePath"
             
             # Create or clone disk
             $vhdxPath = $null
