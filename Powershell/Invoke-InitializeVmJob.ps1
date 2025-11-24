@@ -100,7 +100,7 @@ if (-not $vm) {
 # Get the VM's configuration path to determine storage location
 $vmConfigPath = $vm.ConfigurationLocation
 if ([string]::IsNullOrWhiteSpace($vmConfigPath)) {
-    throw "Unable to determine VM configuration location for VM '$vmName'"
+    throw "Unable to determine VM configuration location for VM '$($vm.Name)'"
 }
 
 # Use the VM's parent folder for ISO storage

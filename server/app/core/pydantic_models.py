@@ -89,7 +89,7 @@ class DiskSpec(BaseModel):
     storage_class: Optional[str] = Field(
         None,
         deprecated=True,
-        description="[Deprecated] Storage class is now determined by the VM's location. This field is ignored.",
+        description="[Deprecated in v0.5.0] Storage class is now determined by the VM's location. Disks are stored in the same folder as the VM configuration files. This field is ignored and will be removed in v1.0.0.",
     )
     disk_type: str = Field(
         "Dynamic",
