@@ -81,10 +81,11 @@ if (-not (Test-Path -LiteralPath $versionFilePath)) {
 
 $versionRaw = Get-Content -Path $versionFilePath -Raw -ErrorAction Stop
 if ([string]::IsNullOrWhiteSpace($versionRaw)) {
-    throw "Version file at $versionFilePath is empty. Cannot validate provisioning system version."
+    throw "Version file at $versionFilePath is empty or contains only whitespace. The file should contain a valid version string (e.g., 2.4.000)."
 }
 
 # Normalize version: trim whitespace and remove null characters
+# (null character removal matches pattern used in guest provisioning service)
 $global:ProvisioningScriptsVersion = ($versionRaw -replace "`0", "").Trim()
 Write-Host "Provisioning scripts version: $global:ProvisioningScriptsVersion"
 
