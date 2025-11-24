@@ -14,7 +14,6 @@ import pytest
 from app.services.kerberos_manager import (
     KerberosManager,
     KerberosManagerError,
-    _check_wsman_spn,
     _extract_allowed_sids_from_security_descriptor,
     _format_ldap_server_target,
     _normalize_ldap_boolean,
@@ -25,6 +24,7 @@ from app.services.kerberos_manager import (
     initialize_kerberos,
     validate_host_kerberos_setup,
 )
+from app.services.spn_validator import check_wsman_spn
 
 
 @pytest.fixture(autouse=True)
@@ -391,7 +391,7 @@ def test_check_wsman_spn_uses_kvno_when_setspn_missing(monkeypatch):
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run", fake_run)
 
-    success, message = _check_wsman_spn("hyperv01", realm="EXAMPLE.COM")
+    success, message = check_wsman_spn("hyperv01", realm="EXAMPLE.COM")
 
     assert success
     assert "kvno" in message.lower()
@@ -406,7 +406,7 @@ def test_check_wsman_spn_reports_missing_tools(monkeypatch):
     monkeypatch.setattr(
         "app.services.kerberos_manager.subprocess.run", fake_run)
 
-    success, message = _check_wsman_spn("hyperv02")
+    success, message = check_wsman_spn("hyperv02")
 
     assert not success
     assert "not available" in message.lower()
@@ -446,7 +446,7 @@ def test_validate_host_kerberos_setup_detects_missing_rbcd_entries(monkeypatch):
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -499,7 +499,7 @@ def test_validate_host_kerberos_setup_validates_cluster_members(monkeypatch):
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -557,7 +557,7 @@ def test_validate_host_kerberos_setup_success_when_cluster_allows_hosts(monkeypa
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -607,7 +607,7 @@ def test_validate_host_kerberos_setup_warns_on_unexpected_principals(monkeypatch
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -658,7 +658,7 @@ def test_validate_host_kerberos_setup_accepts_host_sid_entries(monkeypatch):
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 
@@ -706,7 +706,7 @@ def test_validate_host_kerberos_setup_reports_host_legacy_delegation(monkeypatch
         fake_ldap,
     )
     monkeypatch.setattr(
-        "app.services.kerberos_manager._check_wsman_spn",
+        "app.services.spn_validator.check_wsman_spn",
         lambda host, realm=None: (True, "WSMAN SPN validated"),
     )
 

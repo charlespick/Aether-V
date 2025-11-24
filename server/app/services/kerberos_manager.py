@@ -14,6 +14,8 @@ from dns import resolver as dns_resolver
 import gssapi
 import gssapi.raw as gssapi_raw
 
+from .spn_validator import check_wsman_spn
+
 try:
     from ldap3 import (
         BASE,
@@ -1272,111 +1274,6 @@ def _ldap_get_computer_delegation_info(
             connection.unbind()
 
 
-def _ldap_resolve_service_principal_tokens(
-    service_principal: str, realm: Optional[str]
-) -> Set[str]:
-    """Resolve additional identifiers for a service principal via LDAP."""
-
-    tokens: Set[str] = set()
-
-    normalized = (service_principal or "").strip()
-    if not normalized or "/" not in normalized:
-        return tokens
-
-    if Connection is None or escape_filter_chars is None:
-        return tokens
-
-    server_hosts = _discover_ldap_server_hosts(realm)
-    if not server_hosts:
-        return tokens
-
-    connection: Optional[Connection] = None
-    bound_host: Optional[str] = None
-
-    for server_host in server_hosts:
-        connection = _establish_ldap_connection(server_host)
-        if connection is not None:
-            bound_host = server_host
-            break
-
-    if connection is None:
-        return tokens
-
-    try:
-        manager = get_kerberos_manager()
-        base_hint = _realm_to_base_dn(
-            realm or (manager.realm if manager else None))
-        base_dn = base_hint or _lookup_default_naming_context(connection)
-        if not base_dn:
-            return tokens
-
-        escaped_spn = escape_filter_chars(normalized)
-        search_filter = (
-            f"(&(objectClass=*)(servicePrincipalName={escaped_spn}))"
-        )
-
-        try:
-            connection.search(
-                base_dn,
-                search_filter,
-                search_scope=SUBTREE,
-                attributes=[
-                    "servicePrincipalName",
-                    "sAMAccountName",
-                    "userPrincipalName",
-                    "cn",
-                    "name",
-                ],
-                size_limit=5,
-            )
-        except LDAPException as exc:  # pragma: no cover - environment specific
-            logger.debug(
-                "LDAP search for service principal '%s' failed: %s",
-                service_principal,
-                exc,
-                exc_info=True,
-            )
-            return tokens
-
-        def _collect(attr: str, value: object) -> None:
-            if value is None:
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    _collect(attr, item)
-                return
-
-            candidate = str(value).strip()
-            if not candidate:
-                return
-
-            candidate_lower = candidate.lower()
-            tokens.add(candidate_lower)
-
-            if attr == "userPrincipalName" and "@" in candidate_lower:
-                tokens.add(candidate_lower.split("@", 1)[0])
-            if attr in {"sAMAccountName", "cn", "name"} and candidate_lower.endswith("$"):
-                tokens.add(candidate_lower[:-1])
-
-        for entry in connection.entries:
-            attr_dict = entry.entry_attributes_as_dict or {}
-
-            _collect("sAMAccountName", attr_dict.get("sAMAccountName"))
-            _collect("userPrincipalName", attr_dict.get("userPrincipalName"))
-            _collect("servicePrincipalName",
-                     attr_dict.get("servicePrincipalName"))
-            _collect("cn", attr_dict.get("cn"))
-            _collect("name", attr_dict.get("name"))
-
-    finally:
-        if connection is not None:
-            logger.debug("Unbinding LDAP connection to %s",
-                         bound_host or "<unknown>")
-            connection.unbind()
-
-    return tokens
-
-
 def validate_host_kerberos_setup(
     hosts: List[str],
     realm: Optional[str] = None,
@@ -1413,7 +1310,7 @@ def validate_host_kerberos_setup(
 
         # Check WSMAN SPNs for all hosts
         for host in hosts:
-            spn_check = _check_wsman_spn(host, realm)
+            spn_check = check_wsman_spn(host, realm)
             if not spn_check[0]:
                 error_msg = f"Host '{host}': {spn_check[1]}"
                 result["errors"].append(error_msg)
@@ -1438,7 +1335,7 @@ def validate_host_kerberos_setup(
                     len(delegation_hosts))
 
         host_tokens: Dict[str, Set[str]] = {
-            host: _normalize_host_tokens(host, realm)
+            host: PrincipalTokenizer.normalize_host(host, realm)
             for host in delegation_hosts
         }
         expected_host_tokens: Set[str] = set()
@@ -1547,20 +1444,29 @@ def validate_host_kerberos_setup(
                     principal_lower = principal.strip().lower()
                     if principal_lower:
                         allowed_tokens.add(principal_lower)
-                        allowed_tokens.update(
-                            _normalize_principal_tokens(principal_lower))
+                        tokenizer = PrincipalTokenizer
+                        principal_tokens = tokenizer.normalize_principal(
+                            principal_lower
+                        )
+                        allowed_tokens.update(principal_tokens)
 
                 missing_hosts: List[str] = []
                 for host in sorted(cluster_hosts):
+                    tokenizer = PrincipalTokenizer
                     host_token_set = host_tokens.get(
-                        host, _normalize_host_tokens(host, realm))
-                    if host_token_set and host_token_set.isdisjoint(allowed_tokens):
+                        host, tokenizer.normalize_host(host, realm)
+                    )
+                    is_disjoint = (
+                        host_token_set and
+                        host_token_set.isdisjoint(allowed_tokens)
+                    )
+                    if is_disjoint:
                         missing_hosts.append(host)
 
                 unexpected_principals: List[str] = []
                 expected_token_union = expected_host_tokens
                 for principal in combined_principals:
-                    tokens = _normalize_principal_tokens(principal)
+                    tokens = PrincipalTokenizer.normalize_principal(principal)
                     tokens.add(principal.lower())
                     if tokens.isdisjoint(expected_token_union):
                         unexpected_principals.append(principal)
@@ -1595,93 +1501,6 @@ def validate_host_kerberos_setup(
         logger.debug("No hosts available for delegation validation")
 
     return result
-
-
-def _check_wsman_spn(host: str, realm: Optional[str] = None) -> Tuple[bool, str]:
-    """
-    Check if WSMAN SPN exists for a host.
-
-    Uses 'setspn -Q' to query for WSMAN service principal.
-
-    Args:
-        host: Hostname to check
-        realm: Optional Kerberos realm
-
-    Returns:
-        Tuple of (success: bool, message: str)
-    """
-    try:
-        # Query for WSMAN SPN
-        # Format: WSMAN/hostname or WSMAN/hostname.domain
-        spn_to_check = f"WSMAN/{host}"
-
-        # Try setspn -Q (Windows AD query)
-        result = subprocess.run(
-            ["setspn", "-Q", spn_to_check],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-
-        # setspn -Q returns 0 if SPN is found
-        if result.returncode == 0:
-            # Parse output to confirm SPN exists
-            if spn_to_check.lower() in result.stdout.lower():
-                return (True, f"WSMAN SPN '{spn_to_check}' found")
-            else:
-                return (False, f"WSMAN SPN '{spn_to_check}' not found in Active Directory")
-        else:
-            return (False, f"WSMAN SPN '{spn_to_check}' not found (setspn exit code: {result.returncode})")
-
-    except FileNotFoundError:
-        # setspn not available (likely not on Windows or not in PATH)
-        # Try alternative: kvno command (attempts to get service ticket)
-        try:
-            kvno_spn = f"WSMAN/{host}"
-            if realm:
-                kvno_spn = f"{kvno_spn}@{realm}"
-
-            result = subprocess.run(
-                ["kvno", kvno_spn],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-
-            if result.returncode == 0:
-                return (True, "WSMAN SPN validated via kvno")
-            else:
-                return (
-                    False,
-                    f"WSMAN SPN '{kvno_spn}' not found or inaccessible: {result.stderr.strip()}",
-                )
-
-        except FileNotFoundError:
-            logger.warning(
-                "Neither setspn nor kvno available - cannot validate WSMAN SPN for %s",
-                host,
-            )
-            return (False, "Cannot validate WSMAN SPN - setspn and kvno tools not available")
-        except subprocess.TimeoutExpired:
-            return (False, "WSMAN SPN check timed out using kvno")
-        except Exception as exc:
-            return (False, f"WSMAN SPN validation failed: {exc}")
-
-    except subprocess.TimeoutExpired:
-        return (False, "WSMAN SPN check timed out")
-    except Exception as exc:
-        return (False, f"WSMAN SPN check failed: {exc}")
-
-
-# Backward compatibility wrappers for existing call sites
-def _normalize_principal_tokens(principal: str) -> Set[str]:
-    """Return token variations for a principal (deprecated - use PrincipalTokenizer)."""
-    return PrincipalTokenizer.normalize_principal(principal)
-
-
-def _normalize_host_tokens(host: str, realm: Optional[str]) -> Set[str]:
-    """Return token variations for a host (deprecated - use PrincipalTokenizer)."""
-    return PrincipalTokenizer.normalize_host(host, realm)
 
 
 __all__ = [
