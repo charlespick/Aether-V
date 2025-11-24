@@ -625,7 +625,8 @@ class JobService:
                 vm = inventory_service.get_vm_by_id(vm_id)
                 if vm:
                     metadata["vm_name"] = vm.name
-                    metadata["vm_id"] = vm.id
+                    if vm.id:
+                        metadata["vm_id"] = vm.id
 
                     if job.job_type in nic_jobs:
                         metadata["resource_type"] = "Network Adapter"
@@ -2214,7 +2215,7 @@ class JobService:
                 f"completed successfully on {location_phrase}."
             )
             level = NotificationLevel.SUCCESS
-        elif job.status == JobStatus.FAILED:
+        else:  # JobStatus.FAILED
             title = f"{action} {resource_type} failed"
             detail = f" Error: {job.error}" if job.error else ""
             message = (
@@ -2222,12 +2223,6 @@ class JobService:
                 f"failed on {location_phrase}.{detail}"
             )
             level = NotificationLevel.ERROR
-        else:
-            title = f"{action} {resource_type} update"
-            message = (
-                f"{action} {resource_type} '{resource_label}' updated."
-            )
-            level = NotificationLevel.INFO
 
         # For notification metadata, use vm_name from enriched data
         notification_metadata = {
@@ -2305,6 +2300,29 @@ class JobService:
         if job.job_type == "initialize_vm":
             return "Initialize VM"
         return job.job_type.replace("_", " ").title()
+
+    def _extract_vm_name(self, job: Job) -> Optional[str]:
+        """Extract VM name from job parameters.
+
+        Attempts to get vm_name from enriched metadata first, then falls back
+        to various parameter locations depending on job type.
+        """
+        # Try enriched metadata first (from _enrich_job_metadata)
+        metadata = job.parameters.get("_metadata", {})
+        vm_name = metadata.get("vm_name") or metadata.get("resource_name")
+        if vm_name:
+            return str(vm_name) if vm_name else None
+
+        # Fallback for delete_vm jobs
+        if job.job_type == "delete_vm":
+            vm_name_param = job.parameters.get("vm_name")
+            return str(vm_name_param) if vm_name_param else None
+
+        # Fallback for other job types - check definition.fields
+        definition = job.parameters.get("definition") or {}
+        fields = definition.get("fields") or {}
+        vm_name_field = fields.get("vm_name")
+        return str(vm_name_field) if vm_name_field else None
 
     def _log_agent_request(self, job_id: str, target_host: str, payload: str, script_name: str) -> None:
         """Log raw JSON being sent to host agent.

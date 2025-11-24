@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from pathlib import PureWindowsPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import yaml
 
@@ -103,7 +103,7 @@ class HostResourcesService:
                         config_path,
                         host,
                     )
-                    return config
+                    return cast(Dict[str, Any], config)
                 else:
                     last_error = f"Invalid configuration at {config_path}"
                     logger.warning(

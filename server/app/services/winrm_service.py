@@ -21,6 +21,18 @@ from ..core.config import settings
 logger = logging.getLogger(__name__)
 
 
+# PSInvocationState integer values to string names mapping
+_PS_INVOCATION_STATE_MAP = {
+    getattr(PSInvocationState, "NOT_STARTED", 0): "not_started",
+    getattr(PSInvocationState, "RUNNING", 1): "running",
+    getattr(PSInvocationState, "STOPPING", 2): "stopping",
+    getattr(PSInvocationState, "STOPPED", 3): "stopped",
+    getattr(PSInvocationState, "COMPLETED", 4): "completed",
+    getattr(PSInvocationState, "FAILED", 5): "failed",
+    getattr(PSInvocationState, "DISCONNECTED", 6): "disconnected",
+}
+
+
 class WinRMServiceError(RuntimeError):
     """Base exception for WinRM service failures."""
 
@@ -138,7 +150,7 @@ class _PSRPStreamCursor:
                 try:
                     text = formatter()
                     if text:
-                        return text
+                        return str(text)
                 except Exception:  # pragma: no cover - defensive logging
                     logger.debug("Failed to format PSRP object via to_string", exc_info=True)
 
@@ -150,8 +162,10 @@ class _PSRPStreamCursor:
             if isinstance(textual, str) and textual.strip():
                 return textual
 
-            if hasattr(item, "value") and isinstance(getattr(item, "value"), str):
-                return getattr(item, "value")
+            if hasattr(item, "value"):
+                value = getattr(item, "value")
+                if isinstance(value, str):
+                    return value
 
             return str(item)
         finally:
@@ -171,7 +185,7 @@ class _PSRPStreamCursor:
             try:
                 text = formatter()
                 if text:
-                    return text
+                    return str(text)
             except Exception:  # pragma: no cover - defensive logging
                 logger.debug("Failed to format information record", exc_info=True)
 
@@ -649,8 +663,9 @@ class WinRMService:
     def _normalize_state(state: object) -> str:
         """Return a normalized string representation of a PS invocation state."""
 
-        if isinstance(state, PSInvocationState):
-            return state.name.lower()
+        if isinstance(state, int):
+            # PSInvocationState values are integers, need to map them to names
+            return _PS_INVOCATION_STATE_MAP.get(state, str(state).lower())
         if state is None:
             return "unknown"
         return str(state).lower()

@@ -36,6 +36,10 @@ from ..core.models import (
     VMInitializationRequest,
     NoopTestRequest,
     JobResult,
+    RemoteTaskMetrics,
+    JobServiceMetrics,
+    InventoryServiceMetrics,
+    HostDeploymentMetrics,
 )
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
@@ -398,10 +402,10 @@ async def get_service_diagnostics(
     host_metrics = await host_deployment_service.get_metrics()
 
     return ServiceDiagnosticsResponse(
-        remote_tasks=remote_metrics,
-        jobs=job_metrics,
-        inventory=inventory_metrics,
-        host_deployment=host_metrics,
+        remote_tasks=RemoteTaskMetrics(**remote_metrics),
+        jobs=JobServiceMetrics(**job_metrics),
+        inventory=InventoryServiceMetrics(**inventory_metrics),
+        host_deployment=HostDeploymentMetrics(**host_metrics),
     )
 
 

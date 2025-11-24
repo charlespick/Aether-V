@@ -1034,8 +1034,8 @@ class InventoryService:
             )
             readiness = InventoryReadiness(ready=False, preparing=False, error=str(exc))
 
-        if readiness is None:
-            readiness = InventoryReadiness(ready=True, preparing=False, error=None)
+        if readiness is None:  # Defensive: should not happen
+            readiness = InventoryReadiness(ready=True, preparing=False, error=None)  # type: ignore[unreachable]
 
         return readiness
 
@@ -1348,8 +1348,8 @@ class InventoryService:
 
         vms: List[VM] = []
         for vm_data in records:
-            if not isinstance(vm_data, dict):
-                logger.warning(
+            if not isinstance(vm_data, dict):  # Defensive: ensure dict type
+                logger.warning(  # type: ignore[unreachable]
                     "Skipping VM entry from %s because it is not a dictionary: %r",
                     hostname,
                     vm_data,
@@ -1380,6 +1380,12 @@ class InventoryService:
                 memory_gb = memory_startup_gb
 
             cpu_cores = self._coerce_int(vm_data.get("ProcessorCount", 0), default=0)
+            # Ensure values are never None (VM model requires non-optional int/float)
+            if cpu_cores is None:
+                cpu_cores = 0
+            if memory_gb is None:
+                memory_gb = 0.0
+            
             vm_id = self._coerce_str(vm_data.get("Id"))
             os_name = self._coerce_str(
                 vm_data.get("OperatingSystem") or vm_data.get("OsName")
@@ -1581,8 +1587,8 @@ class InventoryService:
 
         ips = []
         for candidate in candidates:
-            if candidate is None:
-                continue
+            if candidate is None:  # Defensive: handle None in list
+                continue  # type: ignore[unreachable]
             try:
                 text = str(candidate).strip()
             except Exception:  # pragma: no cover - defensive
