@@ -489,58 +489,184 @@ def cleanup_kerberos() -> None:
         _kerberos_manager = None
 
 
+class PrincipalTokenizer:
+    """Centralized token normalization for Kerberos principals and hosts.
+    
+    This class consolidates scattered token manipulation logic into a single,
+    well-tested location, following the principle of centralizing common
+    functionality when it doesn't require excessive conditional branching.
+    """
+
+    @staticmethod
+    def normalize_principal(principal: str) -> Set[str]:
+        """Return all comparable token variations for a principal.
+        
+        Handles various principal formats:
+        - DOMAIN\\user → extracts user
+        - host/service.domain.com → extracts service parts
+        - user@REALM → extracts user and REALM parts
+        - computer$ → extracts computer
+        - CN=...,DC=... → extracts DN components
+        """
+        tokens: Set[str] = set()
+        queue: List[str] = []
+
+        if principal:
+            queue.append(principal.strip().lower())
+
+        while queue:
+            current = queue.pop()
+            if not current or current in tokens:
+                continue
+
+            tokens.add(current)
+
+            # Extract domain\\user → user
+            if "\\" in current:
+                queue.append(current.split("\\", 1)[1])
+            # Extract service/host → host
+            if "/" in current:
+                queue.append(current.split("/", 1)[1])
+            # Extract user@realm → user
+            if "@" in current:
+                queue.append(current.split("@", 1)[0])
+            # Extract computer$ → computer
+            if current.endswith("$"):
+                queue.append(current[:-1])
+            # Extract fqdn.domain.com → fqdn
+            if "." in current:
+                queue.append(current.split(".", 1)[0])
+            # Extract DN components: CN=value,DC=... → value
+            if "=" in current:
+                for part in current.split(","):
+                    part = part.strip()
+                    if "=" in part:
+                        queue.append(part.split("=", 1)[1])
+
+        return tokens
+
+    @staticmethod
+    def normalize_host(host: str, realm: Optional[str] = None) -> Set[str]:
+        """Return all expected token variations for a Hyper-V host.
+        
+        Generates common variations:
+        - host.domain.com → host.domain.com, host, host$
+        - With realm: host$@REALM, host@REALM
+        """
+        tokens: Set[str] = set()
+
+        if not host:
+            return tokens
+
+        host_lower = host.strip().lower()
+        if not host_lower:
+            return tokens
+
+        # FQDN and short name
+        short_name = host_lower.split(".", 1)[0]
+        realm_lower = realm.lower() if realm else None
+
+        # Base variations
+        candidates = {
+            host_lower,
+            short_name,
+            f"{short_name}$",
+        }
+
+        # Add realm-qualified variations
+        if realm_lower:
+            candidates.update({
+                f"{short_name}$@{realm_lower}",
+                f"{short_name}@{realm_lower}",
+            })
+
+        tokens.update(candidate for candidate in candidates if candidate)
+        return tokens
+
+    @staticmethod
+    def extract_domain_from_principal(principal: Optional[str]) -> Optional[str]:
+        """Extract DNS domain name from a Kerberos principal.
+        
+        Examples:
+            user@EXAMPLE.COM → example.com
+            host/server.ad.local@AD.LOCAL → ad.local
+        """
+        if not principal or "@" not in principal:
+            return None
+
+        realm = principal.split("@", 1)[1].strip().strip(".")
+        if not realm:
+            return None
+
+        return realm.lower()
+
+    @staticmethod
+    def realm_to_base_dn(realm: Optional[str]) -> Optional[str]:
+        """Convert Kerberos realm to LDAP base DN.
+        
+        Examples:
+            EXAMPLE.COM → DC=example,DC=com
+            AD.CORP → DC=ad,DC=corp
+        """
+        if not realm:
+            return None
+
+        realm = realm.strip().strip(".")
+        if not realm:
+            return None
+
+        parts = [part.strip() for part in realm.split(".") if part.strip()]
+        if not parts:
+            return None
+
+        return ",".join(f"DC={part.lower()}" for part in parts)
+
+    @staticmethod
+    def candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
+        """Gather potential AD domain names from configuration.
+        
+        Checks principal, configured realm, and provided realm parameter.
+        Returns unique, lowercase domain names in priority order.
+        """
+        domains: List[str] = []
+        manager = get_kerberos_manager()
+
+        # Try principal first
+        if manager:
+            principal_domain = PrincipalTokenizer.extract_domain_from_principal(
+                manager.principal
+            )
+            if principal_domain:
+                domains.append(principal_domain)
+
+        # Add configured realms
+        for candidate in (realm, manager.realm if manager else None):
+            if not candidate:
+                continue
+            cleaned = candidate.strip().strip(".")
+            if not cleaned:
+                continue
+            domain = cleaned.lower()
+            if domain not in domains:
+                domains.append(domain)
+
+        return domains
+
+
+# Maintain backward compatibility with old function names
 def _realm_to_base_dn(realm: Optional[str]) -> Optional[str]:
-    """Convert a Kerberos realm (e.g. EXAMPLE.COM) to a base DN."""
-
-    if not realm:
-        return None
-
-    realm = realm.strip().strip(".")
-    if not realm:
-        return None
-
-    parts = [part.strip() for part in realm.split(".") if part.strip()]
-    if not parts:
-        return None
-
-    return ",".join(f"DC={part.lower()}" for part in parts)
+    """Convert a Kerberos realm to a base DN (deprecated - use PrincipalTokenizer)."""
+    return PrincipalTokenizer.realm_to_base_dn(realm)
 
 
 def _extract_domain_from_principal(principal: Optional[str]) -> Optional[str]:
-    """Convert a Kerberos principal into an AD DNS domain name."""
-
-    if not principal or "@" not in principal:
-        return None
-
-    realm = principal.split("@", 1)[1].strip().strip(".")
-    if not realm:
-        return None
-
-    return realm.lower()
+    """Extract domain from principal (deprecated - use PrincipalTokenizer)."""
+    return PrincipalTokenizer.extract_domain_from_principal(principal)
 
 
 def _candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
-    """Gather potential AD domains from configuration hints."""
-
-    domains: List[str] = []
-    manager = get_kerberos_manager()
-
-    principal_domain = _extract_domain_from_principal(
-        manager.principal if manager else None)
-    if principal_domain:
-        domains.append(principal_domain)
-
-    for candidate in (realm, manager.realm if manager else None):
-        if not candidate:
-            continue
-        cleaned = candidate.strip().strip(".")
-        if not cleaned:
-            continue
-        domain = cleaned.lower()
-        if domain not in domains:
-            domains.append(domain)
-
-    return domains
+    """Gather potential AD domains (deprecated - use PrincipalTokenizer)."""
+    return PrincipalTokenizer.candidate_domains_for_ldap(realm)
 
 
 def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
@@ -562,7 +688,7 @@ def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
             kdc_override,
         )
 
-    domains = _candidate_domains_for_ldap(realm)
+    domains = PrincipalTokenizer.candidate_domains_for_ldap(realm)
     hosts: List[str] = []
 
     if not domains:
@@ -1397,19 +1523,23 @@ def validate_host_kerberos_setup(
                 cluster_hosts = clusters.get(cluster_name, []) or []
                 rbcd_principals = directory_info.get("rbcd_principals", [])
                 rbcd_sid_strings = directory_info.get("rbcd_sid_strings", [])
+                principals_list = (
+                    rbcd_principals
+                    if isinstance(rbcd_principals, list)
+                    else []
+                )
+                sids_list = (
+                    rbcd_sid_strings
+                    if isinstance(rbcd_sid_strings, list)
+                    else []
+                )
                 combined_principals = [
                     str(principal)
-                    # type: ignore[attr-defined]
-                    for principal in rbcd_principals
+                    for principal in principals_list
                     if principal
                 ]
                 combined_principals.extend(
-                    [
-                        str(sid)
-                        # type: ignore[attr-defined]
-                        for sid in rbcd_sid_strings
-                        if sid
-                    ]
+                    [str(sid) for sid in sids_list if sid]
                 )
 
                 allowed_tokens: Set[str] = set()
@@ -1543,120 +1673,15 @@ def _check_wsman_spn(host: str, realm: Optional[str] = None) -> Tuple[bool, str]
         return (False, f"WSMAN SPN check failed: {exc}")
 
 
+# Backward compatibility wrappers for existing call sites
 def _normalize_principal_tokens(principal: str) -> Set[str]:
-    """Return a set of comparable tokens derived from an allowed principal entry."""
-
-    tokens: Set[str] = set()
-    queue: List[str] = []
-
-    if principal:
-        queue.append(principal.strip().lower())
-
-    while queue:
-        current = queue.pop()
-        if not current or current in tokens:
-            continue
-
-        tokens.add(current)
-
-        if "\\" in current:
-            queue.append(current.split("\\", 1)[1])
-        if "/" in current:
-            queue.append(current.split("/", 1)[1])
-        if "@" in current:
-            queue.append(current.split("@", 1)[0])
-        if current.endswith("$"):
-            queue.append(current[:-1])
-        if "." in current:
-            queue.append(current.split(".", 1)[0])
-        if "=" in current:
-            for part in current.split(","):
-                part = part.strip()
-                if "=" in part:
-                    queue.append(part.split("=", 1)[1])
-
-    return tokens
-
-
-def _service_principal_in_allowed_list(
-    service_principal: str,
-    allowed_principals: List[str],
-    *,
-    resolved_tokens: Optional[Set[str]] = None,
-) -> bool:
-    """Return True when the service principal appears in the allowed principals list."""
-
-    if not service_principal:
-        return False
-
-    service_principal_lower = service_principal.strip().lower()
-    service_tokens = _normalize_principal_tokens(service_principal_lower)
-    if service_principal_lower:
-        service_tokens.add(service_principal_lower)
-    if "@" in service_principal_lower:
-        service_tokens.add(service_principal_lower.split("@", 1)[0])
-
-    combined_tokens = set(service_tokens)
-    if resolved_tokens:
-        for token in resolved_tokens:
-            if token is None:  # Defensive: handle unexpected None in set
-                continue  # type: ignore[unreachable]
-            token_lower = str(token).strip().lower()
-            if not token_lower:
-                continue
-            combined_tokens.add(token_lower)
-            if "@" in token_lower:
-                combined_tokens.add(token_lower.split("@", 1)[0])
-            if token_lower.endswith("$"):
-                combined_tokens.add(token_lower[:-1])
-
-    for principal in allowed_principals:
-        candidate = str(principal).strip()
-        if not candidate:
-            continue
-        candidate_lower = candidate.lower()
-        if candidate_lower == service_principal_lower or candidate_lower in combined_tokens:
-            return True
-        candidate_tokens = _normalize_principal_tokens(candidate)
-        candidate_tokens.add(candidate_lower)
-        if not candidate_tokens.isdisjoint(combined_tokens):
-            return True
-
-    return False
+    """Return token variations for a principal (deprecated - use PrincipalTokenizer)."""
+    return PrincipalTokenizer.normalize_principal(principal)
 
 
 def _normalize_host_tokens(host: str, realm: Optional[str]) -> Set[str]:
-    """Return a set of expected tokens for a Hyper-V host entry."""
-
-    tokens: Set[str] = set()
-
-    if not host:
-        return tokens
-
-    host_lower = host.strip().lower()
-    if not host_lower:
-        return tokens
-
-    short_name = host_lower.split(".", 1)[0]
-    realm_lower = realm.lower() if realm else None
-
-    candidates = {
-        host_lower,
-        short_name,
-        f"{short_name}$",
-    }
-
-    if realm_lower:
-        candidates.update(
-            {
-                f"{short_name}$@{realm_lower}",
-                f"{short_name}@{realm_lower}",
-            }
-        )
-
-    tokens.update(candidate for candidate in candidates if candidate)
-
-    return tokens
+    """Return token variations for a host (deprecated - use PrincipalTokenizer)."""
+    return PrincipalTokenizer.normalize_host(host, realm)
 
 
 __all__ = [
