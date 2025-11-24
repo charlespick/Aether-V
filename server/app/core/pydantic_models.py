@@ -44,7 +44,7 @@ class VmSpec(BaseModel):
     )
     storage_class: Optional[str] = Field(
         None,
-        description="Name of the storage class where VM configuration will be stored",
+        description="Name of the storage class where VM configuration files and disks will be stored",
     )
     vm_clustered: bool = Field(
         False,
@@ -88,7 +88,8 @@ class DiskSpec(BaseModel):
     )
     storage_class: Optional[str] = Field(
         None,
-        description="Name of the storage class where the disk will be stored",
+        deprecated=True,
+        description="[Deprecated in v0.5.0] Storage class is now determined by the VM's location. Disks are stored in the same folder as the VM configuration files. This field is ignored and will be removed in v1.0.0.",
     )
     disk_type: str = Field(
         "Dynamic",
@@ -104,7 +105,6 @@ class DiskSpec(BaseModel):
             "example": {
                 "vm_id": "12345678-1234-1234-1234-123456789abc",
                 "image_name": "Windows Server 2022",
-                "storage_class": "fast-ssd",
                 "disk_type": "Dynamic",
                 "controller_type": "SCSI",
             }
