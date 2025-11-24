@@ -62,8 +62,24 @@ Write-Host "=== VM Guest Initialization ==="
 Write-Host "VM ID: $vmId"
 Write-Host "VM Name: $vmName"
 
-# Get the script directory to locate provisioning functions
+# Get the script directory to locate provisioning functions and version file
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Load and validate provisioning scripts version
+# This version must match the server version and the guest agent version
+$versionFilePath = Join-Path -Path $scriptDir -ChildPath "version"
+if (-not (Test-Path -LiteralPath $versionFilePath)) {
+    throw "Version file not found at $versionFilePath. Cannot validate provisioning system version."
+}
+
+$versionRaw = Get-Content -Path $versionFilePath -Raw -ErrorAction Stop
+if ([string]::IsNullOrWhiteSpace($versionRaw)) {
+    throw "Version file at $versionFilePath is empty. Cannot validate provisioning system version."
+}
+
+# Normalize version: trim whitespace and remove null characters
+$global:ProvisioningScriptsVersion = ($versionRaw -replace "`0", "").Trim()
+Write-Host "Provisioning scripts version: $global:ProvisioningScriptsVersion"
 
 # Source the provisioning function scripts
 $waitForKeyScript = Join-Path -Path $scriptDir -ChildPath "Provisioning.WaitForProvisioningKey.ps1"
