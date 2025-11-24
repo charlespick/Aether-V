@@ -27,16 +27,16 @@ try:
     from ldap3.core.exceptions import LDAPException
     from ldap3.utils.conv import escape_bytes, escape_filter_chars
 except ImportError:  # pragma: no cover - optional dependency safeguard
-    BASE = None  # type: ignore[assignment]
-    KERBEROS = None  # type: ignore[assignment]
-    SASL = None  # type: ignore[assignment]
-    SUBTREE = None  # type: ignore[assignment]
-    Connection = None  # type: ignore[assignment]
-    Server = None  # type: ignore[assignment]
-    NONE = None  # type: ignore[assignment]
-    LDAPException = Exception  # type: ignore[assignment]
-    escape_bytes = None  # type: ignore[assignment]
-    escape_filter_chars = None  # type: ignore[assignment]
+    BASE = None
+    KERBEROS = None
+    SASL = None
+    SUBTREE = None
+    Connection = None
+    Server = None
+    NONE = None
+    LDAPException = Exception
+    escape_bytes = None
+    escape_filter_chars = None
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ class KerberosManager:
         self.principal = principal
         self.keytab_b64 = keytab_b64
         # Auto-detect realm from principal if not explicitly provided
+        self.realm: Optional[str]
         if realm:
             self.realm = realm
         elif "@" in principal:

@@ -38,6 +38,7 @@ module = [
     "krb5.*",
     "pyspnego.*",
     "ldap3.*",
+    "authlib.*",
 ]
 ignore_missing_imports = true
 
