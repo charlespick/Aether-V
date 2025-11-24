@@ -14,7 +14,7 @@ import hashlib
 import base64
 import json
 from enum import Enum
-from typing import Optional, Dict, Any, List, Set, Iterable
+from typing import Any, cast, Dict, Iterable, List, Optional, Set
 from functools import lru_cache
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -79,13 +79,13 @@ class JWKSCache:
     def __init__(self, jwks_uri: str, ttl: int = 300):
         self.jwks_uri = jwks_uri
         self.ttl = ttl
-        self._keys = None
-        self._fetched_at = 0
+        self._keys: Optional[Dict[str, Any]] = None
+        self._fetched_at: float = 0.0
 
     async def get_keys(self) -> Dict[str, Any]:
         """Get JWKS keys with TTL-based caching and fallback."""
         now = time.time()
-        if self._keys and now - self._fetched_at < self.ttl:
+        if self._keys is not None and now - self._fetched_at < self.ttl:
             return self._keys
             
         try:
@@ -107,11 +107,11 @@ class JWKSCache:
                     
                 self._keys = new_keys
                 self._fetched_at = now
-                logger.info(f"Successfully fetched JWKS (keys: {len(self._keys.get('keys', []))})")
-                return self._keys
+                logger.info(f"Successfully fetched JWKS (keys: {len(new_keys.get('keys', []))})")
+                return cast(Dict[str, Any], new_keys)
         except Exception as e:
             logger.error(f"JWKS fetch failed from {self.jwks_uri}: {e}")
-            if self._keys:
+            if self._keys is not None:
                 logger.warning("Using stale JWKS cache due to fetch failure - security risk if keys rotated")
                 return self._keys
             raise HTTPException(503, "Unable to validate tokens - JWKS unavailable")
@@ -133,7 +133,7 @@ def discover_oidc_metadata(issuer: str) -> Dict[str, str]:
         response.raise_for_status()
         metadata = response.json()
         logger.info(f"Discovered OIDC metadata from {issuer}")
-        return metadata
+        return cast(Dict[str, str], metadata)
     except Exception as e:
         logger.error(f"Failed to discover OIDC metadata: {e}")
         raise
@@ -206,7 +206,7 @@ def jwt_header_unverified(token: str) -> Optional[Dict]:
             header_b64 += "=" * (4 - rem)
         header_bytes = base64.urlsafe_b64decode(header_b64.encode("utf-8"))
         header = json.loads(header_bytes)
-        return header
+        return cast(Dict[Any, Any], header)
     except Exception:
         return None
 
@@ -225,7 +225,7 @@ def jwt_payload_unverified(token: str) -> Optional[Dict]:
             payload_b64 += "=" * (4 - rem)
         payload_bytes = base64.urlsafe_b64decode(payload_b64.encode("utf-8"))
         payload = json.loads(payload_bytes)
-        return payload
+        return cast(Dict[Any, Any], payload)
     except Exception:
         return None
 
@@ -627,7 +627,7 @@ def _require_session_permissions(
 
     permissions = session_data.get("permissions")
     if permissions:
-        return permissions
+        return cast(List[str], permissions)
 
     logger.warning(warning_message, client_ip)
     return None
@@ -786,7 +786,7 @@ def has_permission(user: Optional[dict], permission: Permission) -> bool:
     if permission == Permission.ADMIN:
         return Permission.ADMIN.value in normalized
 
-    return False
+    return False  # type: ignore[unreachable]  # Defensive: handle future enum additions
 
 
 def require_permission(permission: Permission):

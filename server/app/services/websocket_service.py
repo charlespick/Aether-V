@@ -1,7 +1,7 @@
 """WebSocket service for real-time updates."""
 import logging
 import asyncio
-from typing import Dict, Set, Optional
+from typing import Any, Dict, Set, Optional
 from datetime import datetime
 from fastapi import WebSocket
 
@@ -108,7 +108,7 @@ class ConnectionManager:
         async with self._lock:
             return len(self.active_connections)
 
-    async def handle_client_message(self, client_id: str, message: dict):
+    async def handle_client_message(self, client_id: str, message: Any):
         """Handle incoming messages from clients with validation."""
         # Validate message structure
         if not isinstance(message, dict):
