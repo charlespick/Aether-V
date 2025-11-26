@@ -1743,6 +1743,26 @@ class VMView extends BaseView {
         return null;
     }
 
+    enhanceShutdownError(errorMessage) {
+        if (!errorMessage) {
+            return errorMessage;
+        }
+
+        const message = String(errorMessage).toLowerCase();
+        
+        // Check if this looks like a graceful shutdown failure
+        if (message.includes('stop-vm') || message.includes('shutdown')) {
+            if (message.includes('unspecified') || 
+                message.includes('failed') || 
+                message.includes('timeout') ||
+                message.includes('not respond')) {
+                return `${errorMessage}\n\nℹ️ Graceful shutdown requires the guest OS to be responsive and have working Hyper-V Integration Services. If the VM is unresponsive, use "Turn Off" instead.`;
+            }
+        }
+
+        return errorMessage;
+    }
+
     getDefaultSuccessMessage(action, vmName) {
         const name = vmName || (this.vmData && this.vmData.name) || 'virtual machine';
         switch (action) {
@@ -1840,7 +1860,13 @@ class VMView extends BaseView {
                     }, { skipHistory: true });
                 }, 400);
             } else {
-                const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
+                let detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
+                
+                // Enhance shutdown error messages with helpful guidance
+                if (action === 'shutdown') {
+                    detail = this.enhanceShutdownError(detail);
+                }
+                
                 this.setActionFeedback(`Unable to ${actionLabel} VM: ${detail}`, 'error', {
                     title: 'VM action failed',
                 });
