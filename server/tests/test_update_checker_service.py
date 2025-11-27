@@ -1,6 +1,5 @@
 """Tests for the update checker service."""
 
-import sys
 from unittest import IsolatedAsyncioTestCase, skipIf
 from unittest.mock import AsyncMock, MagicMock, patch
 
