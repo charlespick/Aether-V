@@ -922,6 +922,10 @@ end {
             # Step 5: Publish provisioning data
             $logs += "Publishing provisioning data to guest..."
             
+            if (-not $resourceSpec['guest_la_uid']) {
+                throw "guest_la_uid is required for guest initialization"
+            }
+            
             # Build parameters for provisioning
             $publishParams = @{
                 GuestHostName = $vmName
