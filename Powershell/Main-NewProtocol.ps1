@@ -313,8 +313,14 @@ end {
             # Resolve VM configuration path - stored in the storage class location
             $vmDataFolder = Join-Path -Path $storagePath -ChildPath $vmName
 
-            # Determine OS family - default to Windows for Phase 4
+            # Determine OS family from resource_spec or default to Windows
+            # The managed deployment service parses the image name and sets os_family
+            # for Linux distributions to ensure secure boot is configured correctly
             $osFamily = 'windows'
+            if ($resourceSpec.ContainsKey('os_family') -and -not [string]::IsNullOrWhiteSpace($resourceSpec['os_family'])) {
+                $osFamily = $resourceSpec['os_family'].ToLowerInvariant()
+            }
+            $logs += "OS Family: $osFamily"
 
             # Register VM with Hyper-V (without disk, network adapter, or ISO - those will be added separately)
             $registerParams = @{
@@ -905,8 +911,13 @@ end {
             $vmFolder = Split-Path -Parent $vmConfigPath
             $storagePath = $vmFolder
             
-            # Determine OS family - default to Windows
+            # Determine OS family from resource_spec or default to Windows
+            # The managed deployment service sets os_family based on the image name
             $osFamily = 'windows'
+            if ($resourceSpec.ContainsKey('os_family') -and -not [string]::IsNullOrWhiteSpace($resourceSpec['os_family'])) {
+                $osFamily = $resourceSpec['os_family'].ToLowerInvariant()
+            }
+            $logs += "OS Family: $osFamily"
             
             # Step 1: Copy provisioning ISO
             $logs += "Copying provisioning ISO for $osFamily guest..."

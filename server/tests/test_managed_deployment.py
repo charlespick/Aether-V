@@ -600,5 +600,147 @@ class TestNewProtocolOperations:
         assert job_request.resource_spec["network"] == "Production"
 
 
+class TestOSFamilyDetection:
+    """Test OS family detection from image names for secure boot configuration."""
+
+    def test_detect_windows_image_names(self):
+        """Test detection of Windows images."""
+        from app.services.job_service import detect_os_family_from_image_name
+        from app.core.pydantic_models import OSFamily
+
+        windows_images = [
+            "Windows Server 2022",
+            "Windows Server 2019 Datacenter",
+            "Windows 11 Pro",
+            "Windows 10 Enterprise",
+            "Win2022",
+            "win-server-2016",
+        ]
+
+        for image_name in windows_images:
+            result = detect_os_family_from_image_name(image_name)
+            assert result == OSFamily.WINDOWS, f"Expected WINDOWS for '{image_name}'"
+
+    def test_detect_ubuntu_image_names(self):
+        """Test detection of Ubuntu images."""
+        from app.services.job_service import detect_os_family_from_image_name
+        from app.core.pydantic_models import OSFamily
+
+        ubuntu_images = [
+            "Ubuntu 22.04",
+            "Ubuntu Server 20.04",
+            "ubuntu-22.04-lts",
+            "Ubuntu Desktop",
+        ]
+
+        for image_name in ubuntu_images:
+            result = detect_os_family_from_image_name(image_name)
+            assert result == OSFamily.LINUX, f"Expected LINUX for '{image_name}'"
+
+    def test_detect_rhel_centos_image_names(self):
+        """Test detection of RHEL and CentOS images."""
+        from app.services.job_service import detect_os_family_from_image_name
+        from app.core.pydantic_models import OSFamily
+
+        rhel_centos_images = [
+            "RHEL 8.5",
+            "Red Hat Enterprise Linux 9",
+            "CentOS 7",
+            "CentOS Stream 9",
+            "RedHat-8",
+        ]
+
+        for image_name in rhel_centos_images:
+            result = detect_os_family_from_image_name(image_name)
+            assert result == OSFamily.LINUX, f"Expected LINUX for '{image_name}'"
+
+    def test_detect_other_linux_image_names(self):
+        """Test detection of other Linux distribution images."""
+        from app.services.job_service import detect_os_family_from_image_name
+        from app.core.pydantic_models import OSFamily
+
+        linux_images = [
+            "Debian 12",
+            "Fedora 39",
+            "openSUSE Leap 15.5",
+            "SUSE Linux Enterprise",
+            "Arch Linux",
+            "Alpine Linux 3.18",
+            "Rocky Linux 9",
+            "AlmaLinux 9",
+            "Oracle Linux 8",
+            "Amazon Linux 2023",
+            "Kali Linux",
+            "Linux Mint 21",
+            "generic-linux-image",
+        ]
+
+        for image_name in linux_images:
+            result = detect_os_family_from_image_name(image_name)
+            assert result == OSFamily.LINUX, f"Expected LINUX for '{image_name}'"
+
+    def test_detect_none_or_empty_image_name(self):
+        """Test detection defaults to Windows for None or empty image names."""
+        from app.services.job_service import detect_os_family_from_image_name
+        from app.core.pydantic_models import OSFamily
+
+        assert detect_os_family_from_image_name(None) == OSFamily.WINDOWS
+        assert detect_os_family_from_image_name("") == OSFamily.WINDOWS
+        assert detect_os_family_from_image_name("   ") == OSFamily.WINDOWS
+
+    def test_case_insensitive_detection(self):
+        """Test that detection is case-insensitive."""
+        from app.services.job_service import detect_os_family_from_image_name
+        from app.core.pydantic_models import OSFamily
+
+        assert detect_os_family_from_image_name("UBUNTU 22.04") == OSFamily.LINUX
+        assert detect_os_family_from_image_name("ubuntu 22.04") == OSFamily.LINUX
+        assert detect_os_family_from_image_name("Ubuntu 22.04") == OSFamily.LINUX
+        assert detect_os_family_from_image_name("LINUX Server") == OSFamily.LINUX
+
+
+class TestVmSpecWithOSFamily:
+    """Test VmSpec model with os_family field."""
+
+    def test_vm_spec_with_os_family(self):
+        """Test VmSpec accepts os_family field."""
+        from app.core.pydantic_models import VmSpec, OSFamily
+
+        vm_spec = VmSpec(
+            vm_name="linux-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            os_family=OSFamily.LINUX,
+        )
+
+        assert vm_spec.os_family == OSFamily.LINUX
+
+    def test_vm_spec_os_family_defaults_to_none(self):
+        """Test VmSpec defaults os_family to None."""
+        from app.core.pydantic_models import VmSpec
+
+        vm_spec = VmSpec(
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+        )
+
+        assert vm_spec.os_family is None
+
+    def test_vm_spec_os_family_in_model_dump(self):
+        """Test os_family is included in model_dump output."""
+        from app.core.pydantic_models import VmSpec, OSFamily
+
+        vm_spec = VmSpec(
+            vm_name="linux-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            os_family=OSFamily.LINUX,
+        )
+
+        dumped = vm_spec.model_dump()
+        assert dumped["os_family"] == "linux"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

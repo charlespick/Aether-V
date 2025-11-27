@@ -19,6 +19,7 @@ from ..core.models import Job, JobStatus, VMDeleteRequest, NotificationLevel
 from ..core.job_envelope import create_job_request, parse_job_result
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
+    OSFamily,
 )
 from ..core.guest_config_generator import generate_guest_config
 from .host_deployment_service import host_deployment_service
@@ -42,6 +43,50 @@ SERIALIZED_JOB_TYPES = {
     "update_nic", "delete_disk", "delete_nic", "initialize_vm",
     "managed_deployment"
 }
+
+# Common Linux distribution keywords for OS family detection
+LINUX_IMAGE_KEYWORDS = frozenset({
+    "linux",
+    "ubuntu",
+    "debian",
+    "centos",
+    "rhel",
+    "redhat",
+    "fedora",
+    "suse",
+    "opensuse",
+    "arch",
+    "alpine",
+    "rocky",
+    "alma",
+    "oracle linux",
+    "amazon linux",
+    "kali",
+    "mint",
+})
+
+
+def detect_os_family_from_image_name(image_name: Optional[str]) -> OSFamily:
+    """Detect the OS family from an image name.
+
+    Parses the image name for common Linux distribution keywords and returns
+    the appropriate OS family. Defaults to Windows if no Linux keywords are found.
+
+    Args:
+        image_name: The name of the golden image to clone (e.g., "Ubuntu 22.04", "Windows Server 2022")
+
+    Returns:
+        OSFamily.LINUX if a Linux distribution is detected, otherwise OSFamily.WINDOWS
+    """
+    if not image_name or not image_name.strip():
+        return OSFamily.WINDOWS
+
+    image_name_lower = image_name.lower()
+    for keyword in LINUX_IMAGE_KEYWORDS:
+        if keyword in image_name_lower:
+            return OSFamily.LINUX
+
+    return OSFamily.WINDOWS
 
 
 def _redact_sensitive_parameters(
@@ -1051,15 +1096,34 @@ class JobService:
             {"fields": validation_fields}, target_host
         )
 
+        # Detect OS family from image name for secure boot configuration
+        # The managed deployment service is responsible for parsing the image name
+        # and setting the os_family field so the host agent can configure secure boot correctly
+        image_name = (
+            request.disk_spec.image_name
+            if request.disk_spec
+            else None
+        )
+        detected_os_family = detect_os_family_from_image_name(image_name)
+        if image_name:
+            await self._append_job_output(
+                job.job_id,
+                f"Detected OS family '{detected_os_family.value}' from image '{image_name}'",
+            )
+
         # Step 1: Create VM as a child job
         await self._append_job_output(
             job.job_id,
             f"Creating VM '{request.vm_spec.vm_name}'...",
         )
 
+        # Build VM spec with OS family for secure boot configuration
+        vm_spec_dict = request.vm_spec.model_dump()
+        vm_spec_dict["os_family"] = detected_os_family.value
+
         vm_job_definition = {
             "schema": {"id": "vm.create", "version": 1},
-            "fields": request.vm_spec.model_dump(),
+            "fields": vm_spec_dict,
         }
 
         vm_job = await self._queue_child_job(
@@ -1196,6 +1260,9 @@ class JobService:
                     "vm_name": request.vm_spec.vm_name,
                     **guest_config_dict,
                 }
+
+                # Pass OS family to initialize job for correct provisioning ISO
+                init_fields["os_family"] = detected_os_family.value
 
                 init_job_definition = {
                     "schema": {"id": "initialize-vm", "version": 1},
