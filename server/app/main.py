@@ -30,6 +30,7 @@ from .services.host_deployment_service import host_deployment_service
 from .services.job_service import job_service
 from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
+from .services.update_checker_service import update_checker_service
 from .services.websocket_service import websocket_manager
 from .services.kerberos_manager import (
     initialize_kerberos,
@@ -192,6 +193,7 @@ async def lifespan(app: FastAPI):
 
     remote_started = False
     notifications_started = False
+    update_checker_started = False
     job_started = False
     inventory_started = False
 
@@ -210,6 +212,10 @@ async def lifespan(app: FastAPI):
     notification_service.set_websocket_manager(websocket_manager)
 
     notification_service.publish_startup_configuration_result(config_result)
+
+    # Start update checker service (checks GitHub for new releases)
+    await update_checker_service.start()
+    update_checker_started = True
 
     if not kerberos_failed and not config_result.has_errors:
         await host_deployment_service.start_startup_deployment(
@@ -340,6 +346,8 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("Shutting down application")
         await host_deployment_service.stop()
+        if update_checker_started:
+            await update_checker_service.stop()
         if inventory_started:
             await inventory_service.stop()
         if job_started:
