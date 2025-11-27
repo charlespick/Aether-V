@@ -1728,6 +1728,50 @@ class JobService:
         await self._broadcast_job_output(job_id, lines)
         return lines
 
+    async def get_running_jobs_count(self) -> int:
+        """Return the number of currently running jobs."""
+        async with self._lock:
+            return sum(
+                1 for job in self.jobs.values()
+                if job.status == JobStatus.RUNNING
+            )
+
+    async def wait_for_running_jobs(
+        self,
+        timeout: float = 300.0,
+        poll_interval: float = 1.0,
+    ) -> bool:
+        """Wait for all running jobs to complete.
+
+        Args:
+            timeout: Maximum time to wait in seconds (default 5 minutes)
+            poll_interval: Time between polling checks in seconds
+
+        Returns:
+            True if all jobs completed within timeout, False otherwise
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        while loop.time() < deadline:
+            running_count = await self.get_running_jobs_count()
+            if running_count == 0:
+                logger.info("All running jobs have completed")
+                return True
+
+            logger.debug(
+                "Waiting for %d running job(s) to complete",
+                running_count,
+            )
+            await asyncio.sleep(poll_interval)
+
+        running_count = await self.get_running_jobs_count()
+        logger.warning(
+            "Timed out waiting for jobs to complete; %d job(s) still running",
+            running_count,
+        )
+        return False
+
     async def get_metrics(self) -> Dict[str, Any]:
         """Return diagnostic information about the job service."""
 

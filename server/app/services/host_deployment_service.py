@@ -1213,6 +1213,61 @@ exit 0
             "startup": progress_snapshot.as_dict(),
         }
 
+    async def force_redeploy_all_hosts(self, hostnames: Sequence[str]) -> None:
+        """Force redeploy scripts to all hosts, skipping version checks.
+
+        This method clears verified host versions so the next deployment
+        will unconditionally push scripts to all hosts. It then triggers
+        a full startup-style deployment sequence.
+
+        Args:
+            hostnames: List of host FQDNs to redeploy to
+        """
+        if not self._deployment_enabled:
+            logger.warning(
+                "Host deployment service is disabled; cannot force redeploy"
+            )
+            raise RuntimeError(
+                "Host deployment service is disabled because AGENT_DOWNLOAD_BASE_URL is not configured"
+            )
+
+        host_list = [host for host in hostnames if host]
+        if not host_list:
+            logger.info("No hosts provided for force redeploy")
+            return
+
+        logger.info(
+            "Force redeploy requested for %d host(s); clearing cached versions",
+            len(host_list),
+        )
+
+        # Clear all cached host versions to force redeployment
+        self._verified_host_versions.clear()
+        self._host_setup_status.clear()
+
+        # Reset startup progress tracking
+        async with self._progress_lock:
+            self._startup_progress = StartupDeploymentProgress(
+                status="running",
+                total_hosts=len(host_list),
+                provisioning_available=False,
+                per_host={host: "pending" for host in host_list},
+            )
+            snapshot = self._startup_progress.copy()
+
+        self._publish_startup_notification(snapshot)
+
+        # Create a new event if needed
+        if not self._startup_event:
+            self._startup_event = asyncio.Event()
+        else:
+            self._startup_event.clear()
+
+        # Run deployment (blocking until complete)
+        await self._run_startup_deployment(host_list)
+
+        logger.info("Force redeploy completed for %d host(s)", len(host_list))
+
 
 # Global host deployment service instance
 host_deployment_service = HostDeploymentService()
