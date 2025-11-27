@@ -470,6 +470,112 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         self.assertIn((job.job_id, "db-server", "hyperv02",
                       False), self.inventory_stub.finalised)
 
+    async def test_submit_delete_job_with_delete_disks_true(self):
+        """Test that delete_disks=True is properly enqueued in job parameters."""
+        await self.job_service.start()
+
+        original_process = self.job_service._process_job
+        processed: List[str] = []
+
+        async def fake_process(job_id: str) -> None:
+            processed.append(job_id)
+
+        self.job_service._process_job = fake_process
+
+        request = VMDeleteRequest(
+            vm_name="vm-with-disks",
+            hyperv_host="hyperv01",
+            force=False,
+            delete_disks=True
+        )
+        try:
+            job = await self.job_service.submit_delete_job(request)
+            await asyncio.wait_for(asyncio.sleep(0), timeout=1)
+
+            self.assertIn(job.job_id, processed)
+            async with self.job_service._lock:
+                stored = self.job_service.jobs[job.job_id]
+                self.assertEqual(stored.job_type, "delete_vm")
+                self.assertEqual(stored.target_host, "hyperv01")
+                # Verify delete_disks is in parameters
+                self.assertTrue(stored.parameters.get("delete_disks"))
+        finally:
+            self.job_service._process_job = original_process
+
+    async def test_submit_delete_job_with_delete_disks_false(self):
+        """Test that delete_disks=False is properly enqueued in job parameters."""
+        await self.job_service.start()
+
+        original_process = self.job_service._process_job
+        processed: List[str] = []
+
+        async def fake_process(job_id: str) -> None:
+            processed.append(job_id)
+
+        self.job_service._process_job = fake_process
+
+        request = VMDeleteRequest(
+            vm_name="vm-keep-disks",
+            hyperv_host="hyperv01",
+            force=False,
+            delete_disks=False
+        )
+        try:
+            job = await self.job_service.submit_delete_job(request)
+            await asyncio.wait_for(asyncio.sleep(0), timeout=1)
+
+            self.assertIn(job.job_id, processed)
+            async with self.job_service._lock:
+                stored = self.job_service.jobs[job.job_id]
+                self.assertEqual(stored.job_type, "delete_vm")
+                # Verify delete_disks is False
+                self.assertFalse(stored.parameters.get("delete_disks"))
+        finally:
+            self.job_service._process_job = original_process
+
+    async def test_submit_initialize_vm_job_enqueues_job(self):
+        """Test that initialize_vm jobs are properly enqueued with resource_spec."""
+        await self.job_service.start()
+
+        original_process = self.job_service._process_job
+        processed: List[str] = []
+
+        async def fake_process(job_id: str) -> None:
+            processed.append(job_id)
+
+        self.job_service._process_job = fake_process
+
+        job_definition = {
+            "schema": {"id": "initialize-vm"},
+            "fields": {
+                "vm_id": "12345678-1234-1234-1234-123456789abc",
+                "vm_name": "test-vm",
+                "guest_la_pw": "SecurePassword123!",
+            },
+        }
+
+        try:
+            job = await self.job_service.submit_resource_job(
+                job_type="initialize_vm",
+                schema_id="initialize-vm",
+                payload=job_definition,
+                target_host="hyperv01",
+            )
+            await asyncio.wait_for(asyncio.sleep(0), timeout=1)
+
+            self.assertIn(job.job_id, processed)
+            async with self.job_service._lock:
+                stored = self.job_service.jobs[job.job_id]
+                self.assertEqual(stored.job_type, "initialize_vm")
+                self.assertEqual(stored.target_host, "hyperv01")
+                # Verify definition is stored in parameters
+                self.assertIn("definition", stored.parameters)
+                definition = stored.parameters["definition"]
+                self.assertEqual(definition["fields"]["vm_id"], "12345678-1234-1234-1234-123456789abc")
+                self.assertEqual(definition["fields"]["vm_name"], "test-vm")
+        finally:
+            self.job_service._process_job = original_process
+
     async def test_only_one_provisioning_job_runs_per_host(self):
         await self.job_service.start()
 

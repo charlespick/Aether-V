@@ -426,3 +426,148 @@ Describe 'Main-NewProtocol.ps1 - Windows PowerShell 5.1 Compatibility' {
         $scriptContent | Should -Match 'ConvertTo-Hashtable\s+-InputObject'
     }
 }
+
+Describe 'Main-NewProtocol.ps1 - VM Delete Operation' {
+    
+    BeforeAll {
+        # Mock VM object
+        $script:mockVM = [PSCustomObject]@{
+            Name = 'test-vm'
+            Id = '12345678-1234-1234-1234-123456789abc'
+            State = 'Off'
+        }
+        
+        # Mock disk objects
+        $script:mockDisks = @(
+            [PSCustomObject]@{
+                Path = 'C:\VMs\test-vm\disk1.vhdx'
+                ControllerType = 'SCSI'
+                ControllerNumber = 0
+                ControllerLocation = 0
+            },
+            [PSCustomObject]@{
+                Path = 'C:\VMs\test-vm\disk2.vhdx'
+                ControllerType = 'SCSI'
+                ControllerNumber = 0
+                ControllerLocation = 1
+            }
+        )
+    }
+    
+    It 'recognizes vm.delete operation' {
+        $resourceSpec = @{
+            vm_id = '12345678-1234-1234-1234-123456789abc'
+            vm_name = 'test-vm'
+            delete_disks = $false
+        }
+        
+        $json = New-JobRequest -Operation 'vm.delete' -ResourceSpec $resourceSpec
+        $output = Invoke-MainProtocolScript -JsonInput $json
+        $result = ConvertFrom-JobResult -JsonOutput $output
+        
+        # Will fail due to missing Hyper-V but should recognize the operation
+        if ($result.status -eq 'error') {
+            $result.message | Should -Not -Match 'Unsupported operation'
+        }
+    }
+    
+    It 'includes delete_disks parameter in resource_spec' {
+        $resourceSpec = @{
+            vm_id = '12345678-1234-1234-1234-123456789abc'
+            vm_name = 'test-vm'
+            delete_disks = $true
+        }
+        
+        $json = New-JobRequest -Operation 'vm.delete' -ResourceSpec $resourceSpec
+        
+        # Verify JSON contains delete_disks
+        $json | Should -Match '"delete_disks":\s*true'
+    }
+    
+    It 'defaults delete_disks to false when not specified' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should have logic to handle missing delete_disks
+        $scriptContent | Should -Match '\$deleteDisk.*=.*\$resourceSpec'
+    }
+}
+
+Describe 'Main-NewProtocol.ps1 - VM Delete Disk Cleanup Logic' {
+    
+    It 'has logic to retrieve VM hard disks' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should call Get-VMHardDiskDrive for vm.delete
+        $scriptContent | Should -Match 'Get-VMHardDiskDrive.*-VM'
+    }
+    
+    It 'has logic to check for shared disks' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should call Get-VHD to check Attached property
+        $scriptContent | Should -Match 'Get-VHD.*-Path'
+    }
+    
+    It 'validates no shared disks before deletion' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should have error handling for shared disks
+        $scriptContent | Should -Match 'Attached.*-gt.*1|shared.*disk'
+    }
+    
+    It 'removes disks from VM before deletion' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should call Remove-VMHardDiskDrive
+        $scriptContent | Should -Match 'Remove-VMHardDiskDrive'
+    }
+    
+    It 'deletes disk files when delete_disks is true' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should have conditional file deletion logic
+        $scriptContent | Should -Match 'Remove-Item.*\.Path|Remove-Item.*diskPath'
+    }
+    
+    It 'has logging for disk cleanup operations' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should log disk operations
+        $scriptContent | Should -Match 'Detaching disk|Deleting disk file'
+    }
+}
+
+Describe 'Main-NewProtocol.ps1 - VM Initialize Operation' {
+    
+    It 'recognizes vm.initialize operation' {
+        $resourceSpec = @{
+            vm_id = '12345678-1234-1234-1234-123456789abc'
+            vm_name = 'test-vm'
+            guest_la_pw = 'SecurePassword123!'
+        }
+        
+        $json = New-JobRequest -Operation 'vm.initialize' -ResourceSpec $resourceSpec
+        $output = Invoke-MainProtocolScript -JsonInput $json
+        $result = ConvertFrom-JobResult -JsonOutput $output
+        
+        # Will fail due to missing provisioning infrastructure but should recognize the operation
+        if ($result.status -eq 'error') {
+            $result.message | Should -Not -Match 'Unsupported operation'
+        }
+    }
+    
+    It 'has vm.initialize operation handler' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should have vm.initialize case handler
+        $scriptContent | Should -Match "'vm\.initialize'|`"vm\.initialize`""
+    }
+    
+    It 'sources provisioning helper functions for vm.initialize' {
+        $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
+        
+        # Should source provisioning scripts
+        $scriptContent | Should -Match '\.\s+.*Provisioning\.'
+    }
+}
+

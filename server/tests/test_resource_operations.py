@@ -115,6 +115,20 @@ class TestVmOperations:
         assert request.operation == "vm.delete"
         assert request.resource_spec["vm_id"] == "12345678-1234-1234-1234-123456789abc"
         assert request.resource_spec["vm_name"] == "test-vm"
+        assert request.resource_spec["delete_disks"] is False  # default value
+
+    def test_vm_delete_with_delete_disks_true(self):
+        """Test that vm.delete includes delete_disks parameter."""
+        request = create_vm_delete_request(
+            vm_id="12345678-1234-1234-1234-123456789abc",
+            vm_name="test-vm",
+            delete_disks=True,
+        )
+        
+        assert request.operation == "vm.delete"
+        assert request.resource_spec["vm_id"] == "12345678-1234-1234-1234-123456789abc"
+        assert request.resource_spec["vm_name"] == "test-vm"
+        assert request.resource_spec["delete_disks"] is True
 
 
 class TestDiskOperations:
