@@ -46,9 +46,9 @@ begin {
     # Initialize provisioning scripts version from version file if available
     # This is required for KVP version exchange with guest agents during vm.initialize
     # but is optional for other operations (vm.create, disk.create, etc.)
-    $versionFilePath = Join-Path $scriptRoot 'version'
-    if (Test-Path -LiteralPath $versionFilePath -PathType Leaf) {
-        $rawVersion = Get-Content -LiteralPath $versionFilePath -Raw -ErrorAction SilentlyContinue
+    $script:VersionFilePath = Join-Path $scriptRoot 'version'
+    if (Test-Path -LiteralPath $script:VersionFilePath -PathType Leaf) {
+        $rawVersion = Get-Content -LiteralPath $script:VersionFilePath -Raw -ErrorAction SilentlyContinue
         if (-not [string]::IsNullOrWhiteSpace($rawVersion)) {
             $global:ProvisioningScriptsVersion = $rawVersion.Trim()
         }
@@ -871,8 +871,7 @@ end {
             # Validate provisioning scripts version is available
             # This is required for KVP version exchange with guest agents
             if ([string]::IsNullOrWhiteSpace($global:ProvisioningScriptsVersion)) {
-                $versionFilePath = Join-Path $scriptRoot 'version'
-                throw "Provisioning scripts version not initialized. Ensure the version file is deployed at '$versionFilePath' with the agent scripts."
+                throw "Provisioning scripts version not initialized. Ensure the version file is deployed at '$($script:VersionFilePath)' with the agent scripts."
             }
             $logs += "Provisioning scripts version: $global:ProvisioningScriptsVersion"
             
