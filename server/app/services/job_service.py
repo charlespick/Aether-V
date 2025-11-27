@@ -681,6 +681,7 @@ class JobService:
             return {
                 "vm_id": j.parameters.get("vm_id"),
                 "vm_name": j.parameters.get("vm_name"),
+                "delete_disks": j.parameters.get("delete_disks", False),
             }
 
         await self._execute_new_protocol_operation(
@@ -879,82 +880,10 @@ class JobService:
         await self._execute_new_protocol_operation(job, "nic.delete", "NIC deletion")
 
     async def _execute_initialize_vm_job(self, job: Job) -> None:
-        """Execute a VM initialization job that applies guest configuration.
-
-        This operation orchestrates the guest OS initialization workflow:
-        1. Mounts provisioning ISO to the VM
-        2. Starts the VM
-        3. Waits for guest readiness signal via KVP
-        4. Publishes encrypted provisioning data via KVP
-        5. Waits for guest provisioning completion
-
-        Uses the JobResult envelope protocol for consistent error handling,
-        though the operation itself is not a standard CRUD resource operation.
-        """
-        definition = job.parameters.get("definition", {})
-        target_host = (job.target_host or "").strip()
-        if not target_host:
-            raise RuntimeError(
-                "VM initialization job is missing a target host")
-
-        fields = definition.get("fields", {})
-        vm_id = fields.get("vm_id")
-        if not vm_id:
-            raise RuntimeError("VM initialization requires vm_id")
-
-        prepared = await host_deployment_service.ensure_host_setup(target_host)
-        if not prepared:
-            raise RuntimeError(
-                f"Failed to prepare host {target_host} for initialization")
-
-        # Serialize fields to JSON for the initialization script
-        json_payload = await asyncio.to_thread(
-            json.dumps, fields, ensure_ascii=False, separators=(",", ":")
+        """Execute a VM initialization job using new protocol."""
+        await self._execute_new_protocol_operation(
+            job, "vm.initialize", "VM initialization"
         )
-        self._log_agent_request(job.job_id, target_host,
-                                json_payload, "Invoke-InitializeVmJob.ps1")
-        command = self._build_agent_invocation_command(
-            "Invoke-InitializeVmJob.ps1", json_payload
-        )
-
-        # Execute and parse JobResult envelope
-        await self._execute_agent_command(job, target_host, command)
-
-        # Parse JobResult from last line of output
-        # job.output is a List[str], so iterate directly
-        result_envelope = None
-
-        # Find the last JSON line (JobResult envelope)
-        for line in reversed(job.output):
-            line = line.strip()
-            if line.startswith("{") and line.endswith("}"):
-                try:
-                    result_envelope = json.loads(line)
-                    break
-                except json.JSONDecodeError:
-                    continue
-
-        if not result_envelope:
-            raise RuntimeError(
-                "No valid JobResult envelope found in initialization output"
-            )
-
-        # Check status
-        status = result_envelope.get("status")
-        if status != "success":
-            error_msg = result_envelope.get("message", "Unknown error")
-            raise RuntimeError(f"VM initialization failed: {error_msg}")
-
-        # Store result data
-        result_data = result_envelope.get("data", {})
-        if result_data:
-            await self._update_job(job.job_id, result_data=result_data)
-
-        # Append logs from envelope if present
-        logs = result_envelope.get("logs", [])
-        if logs:
-            log_text = "\n".join(logs)
-            await self._append_job_output(job.job_id, log_text)
 
     async def _execute_noop_test_job(self, job: Job) -> None:
         """Execute a noop-test job using the new protocol.

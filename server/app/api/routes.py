@@ -204,20 +204,12 @@ def _find_vm_nic(vm: VM, nic_id: str) -> Optional[VMNetworkAdapter]:
 
 
 async def _handle_vm_action(
-    action: str, hostname: str, vm_name: str
+    action: str, vm_id: str
 ) -> Dict[str, str]:
     """Execute a lifecycle action for the specified VM."""
 
     rule = VM_ACTION_RULES[action]
-    vm = inventory_service.get_vm(hostname, vm_name)
-
-    if not vm:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "message": f"VM {vm_name} not found on host {hostname}",
-            },
-        )
+    vm = _get_vm_or_404(vm_id)
 
     current_state = _normalize_vm_state(vm.state)
     if current_state not in rule.allowed_states:
@@ -233,7 +225,7 @@ async def _handle_vm_action(
         )
 
     try:
-        await rule.executor(hostname, vm_name)
+        await rule.executor(vm.host, vm.name)
     except VMControlError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -474,106 +466,61 @@ async def list_vms(user: dict = Depends(require_permission(Permission.READER))):
 
 
 @router.post(
-    "/api/v1/vms/{hostname}/{vm_name}/start",
+    "/api/v1/resources/vms/{vm_id}/start",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["VMs"],
+    tags=["Resources"],
 )
 async def start_vm_action(
-    hostname: str,
-    vm_name: str,
+    vm_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Start a powered-off virtual machine."""
 
-    return await _handle_vm_action("start", hostname, vm_name)
+    return await _handle_vm_action("start", vm_id)
 
 
 @router.post(
-    "/api/v1/vms/{hostname}/{vm_name}/shutdown",
+    "/api/v1/resources/vms/{vm_id}/shutdown",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["VMs"],
+    tags=["Resources"],
 )
 async def shutdown_vm_action(
-    hostname: str,
-    vm_name: str,
+    vm_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Shut down a running virtual machine via guest OS request."""
 
-    return await _handle_vm_action("shutdown", hostname, vm_name)
+    return await _handle_vm_action("shutdown", vm_id)
 
 
 @router.post(
-    "/api/v1/vms/{hostname}/{vm_name}/stop",
+    "/api/v1/resources/vms/{vm_id}/stop",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["VMs"],
+    tags=["Resources"],
 )
 async def stop_vm_action(
-    hostname: str,
-    vm_name: str,
+    vm_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Immediately turn off a virtual machine."""
 
-    return await _handle_vm_action("stop", hostname, vm_name)
+    return await _handle_vm_action("stop", vm_id)
 
 
 @router.post(
-    "/api/v1/vms/{hostname}/{vm_name}/reset",
+    "/api/v1/resources/vms/{vm_id}/reset",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["VMs"],
+    tags=["Resources"],
 )
 async def reset_vm_action(
-    hostname: str,
-    vm_name: str,
+    vm_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Reset (power cycle) a running virtual machine."""
 
-    return await _handle_vm_action("reset", hostname, vm_name)
+    return await _handle_vm_action("reset", vm_id)
 
 
-@router.post("/api/v1/vms/delete", response_model=Job, tags=["VMs"])
-async def delete_vm(
-    request: VMDeleteRequest,
-    user: dict = Depends(require_permission(Permission.WRITER)),
-):
-    """Delete a VM."""
-    # Check if VM exists
-    vm = inventory_service.get_vm(request.hyperv_host, request.vm_name)
-    if not vm:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"VM {request.vm_name} not found on host {request.hyperv_host}"
-        )
-
-    if vm.host != request.hyperv_host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"VM {request.vm_name} is tracked on host {vm.host}, not {request.hyperv_host}"
-            ),
-        )
-
-    host_record = inventory_service.hosts.get(request.hyperv_host)
-    if not host_record or not host_record.connected:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Host {request.hyperv_host} is not currently connected",
-        )
-
-    if vm.state != VMState.OFF and not request.force:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Virtual machine must be turned off before deletion. "
-                "Set force=true to override when using the API."
-            ),
-        )
-
-    # Create job
-    job = await job_service.submit_delete_job(request)
-    return job
 
 
 @router.get("/api/v1/jobs", response_model=List[Job], tags=["Jobs"])
@@ -761,6 +708,7 @@ async def update_vm_resource(
 async def delete_vm_resource(
     vm_id: str,
     force: bool = False,
+    delete_disks: bool = True,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Delete a VM by ID using the job queue."""
@@ -778,8 +726,18 @@ async def delete_vm_resource(
             ),
         )
 
+    # Validate disk handling
+    if vm.disks and len(vm.disks) > 0 and not delete_disks:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"VM {vm.name} has {len(vm.disks)} disk(s) attached. "
+                "Set delete_disks=true to delete them with the VM, or manually detach them first."
+            ),
+        )
+
     delete_request = VMDeleteRequest(
-        vm_name=vm.name, hyperv_host=vm.host, force=force
+        vm_name=vm.name, hyperv_host=vm.host, force=force, delete_disks=delete_disks
     )
     job = await job_service.submit_delete_job(delete_request)
 
