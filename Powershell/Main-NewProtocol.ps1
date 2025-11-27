@@ -43,18 +43,15 @@ begin {
     . (Join-Path $scriptRoot 'Provisioning.RegisterVM.ps1')
     . (Join-Path $scriptRoot 'Provisioning.WaitForProvisioningKey.ps1')
     
-    # Initialize provisioning scripts version from version file
-    # This is required for KVP version exchange with guest agents
+    # Initialize provisioning scripts version from version file if available
+    # This is required for KVP version exchange with guest agents during vm.initialize
+    # but is optional for other operations (vm.create, disk.create, etc.)
     $versionFilePath = Join-Path $scriptRoot 'version'
     if (Test-Path -LiteralPath $versionFilePath -PathType Leaf) {
         $rawVersion = Get-Content -LiteralPath $versionFilePath -Raw -ErrorAction SilentlyContinue
         if (-not [string]::IsNullOrWhiteSpace($rawVersion)) {
             $global:ProvisioningScriptsVersion = $rawVersion.Trim()
         }
-    }
-    
-    if ([string]::IsNullOrWhiteSpace($global:ProvisioningScriptsVersion)) {
-        throw "FATAL: Could not read provisioning scripts version from '$versionFilePath'. Ensure the version file is deployed with the agent scripts and contains a valid version string."
     }
 }
 
@@ -870,6 +867,14 @@ end {
         elseif ($operation -eq 'vm.initialize') {
             $logs += 'Executing vm.initialize operation'
             $logs += "Correlation ID: $correlationId"
+            
+            # Validate provisioning scripts version is available
+            # This is required for KVP version exchange with guest agents
+            if ([string]::IsNullOrWhiteSpace($global:ProvisioningScriptsVersion)) {
+                $versionFilePath = Join-Path $scriptRoot 'version'
+                throw "Provisioning scripts version not initialized. Ensure the version file is deployed at '$versionFilePath' with the agent scripts."
+            }
+            $logs += "Provisioning scripts version: $global:ProvisioningScriptsVersion"
             
             # Extract required fields
             $vmId = $resourceSpec['vm_id']
