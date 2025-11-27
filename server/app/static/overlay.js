@@ -400,6 +400,7 @@ class SettingsOverlay extends BaseOverlay {
                 overlayManager.open('oss-attributions');
             };
             ossAttributionsBtn.addEventListener('click', this.ossAttributionsHandler);
+        }
         // Setup redeploy button handler
         const redeployBtn = document.getElementById('redeploy-scripts-btn');
         if (redeployBtn) {
