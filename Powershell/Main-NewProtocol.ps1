@@ -36,9 +36,12 @@ begin {
     
     # Source common provisioning functions
     $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-    Get-ChildItem -Path (Join-Path $scriptRoot 'Provisioning.*.ps1') -File |
-    Sort-Object Name |
-    ForEach-Object { . $_.FullName }
+    . (Join-Path $scriptRoot 'Provisioning.CleanupISO.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.CopyImage.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.CopyProvisioningISO.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.PublishProvisioningData.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.RegisterVM.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.WaitForProvisioningKey.ps1')
 }
 
 process {
@@ -369,8 +372,10 @@ end {
             # Extract VM identifier
             $vmName = $resourceSpec['vm_name']
             $vmId = $resourceSpec['vm_id']
+            $deleteDisks = if ($resourceSpec.ContainsKey('delete_disks')) { [bool]$resourceSpec['delete_disks'] } else { $false }
             
             $logs += "Deleting VM: $vmName (ID: $vmId)"
+            $logs += "Delete disks: $deleteDisks"
             
             # Get VM
             $vm = $null
@@ -391,16 +396,79 @@ end {
                 Stop-VM -VM $vm -Force -ErrorAction Stop
             }
             
+            # Handle disk cleanup if requested
+            $diskPaths = @()
+            if ($deleteDisks) {
+                $hardDisks = @(Get-VMHardDiskDrive -VM $vm -ErrorAction SilentlyContinue)
+                
+                if ($hardDisks.Count -gt 0) {
+                    $logs += "Checking for shared disks before deletion..."
+                    
+                    # Validate no shared disks using SupportPersistentReservations property
+                    foreach ($disk in $hardDisks) {
+                        if (-not $disk.Path) {
+                            continue
+                        }
+                        
+                        # Check if this is a shared disk (cluster shared volume)
+                        if ($disk.SupportPersistentReservations) {
+                            throw "Cannot delete VM with delete_disks=true: Disk '$($disk.Path)' is a shared disk (SupportPersistentReservations=True). Detach shared disks manually or set delete_disks=false."
+                        }
+                        
+                        # Verify the disk file exists
+                        if (-not (Test-Path -LiteralPath $disk.Path -PathType Leaf)) {
+                            $logs += "WARNING: Disk file '$($disk.Path)' not found; will skip deletion."
+                        }
+                    }
+                    
+                    $logs += "No shared disks detected. Detaching and collecting disk paths..."
+                    
+                    # Collect disk paths and detach
+                    foreach ($disk in $hardDisks) {
+                        if ($disk.Path) {
+                            $diskPaths += $disk.Path
+                        }
+                        $logs += "Detaching disk: $($disk.Path)"
+                        Remove-VMHardDiskDrive -VMHardDiskDrive $disk -Confirm:$false -ErrorAction Stop
+                    }
+                }
+            }
+            
             # Remove VM
-            $logs += "Removing VM..."
+            $logs += "Removing VM from Hyper-V..."
             Remove-VM -VM $vm -Force -ErrorAction Stop
+            
+            # Delete disk files if requested
+            if ($deleteDisks -and $diskPaths.Count -gt 0) {
+                $logs += "Deleting $($diskPaths.Count) disk file(s)..."
+                foreach ($diskPath in $diskPaths) {
+                    if (Test-Path -LiteralPath $diskPath -PathType Leaf) {
+                        $logs += "Deleting disk: $diskPath"
+                        Remove-Item -LiteralPath $diskPath -Force -ErrorAction Stop
+                        Start-Sleep -Milliseconds 200
+                        
+                        if (Test-Path -LiteralPath $diskPath) {
+                            throw "Failed to delete disk file: $diskPath"
+                        }
+                    }
+                    else {
+                        $logs += "WARNING: Disk file not found (already deleted?): $diskPath"
+                    }
+                }
+                $logs += "All disk files deleted successfully"
+            }
+            elseif (-not $deleteDisks) {
+                $logs += "Disk deletion not requested (delete_disks=false)"
+            }
             
             $logs += "VM deleted successfully"
             
             $resultData = @{
-                vm_id   = $vmId
-                vm_name = $vmName
-                status  = "deleted"
+                vm_id         = $vmId
+                vm_name       = $vmName
+                status        = "deleted"
+                disks_deleted = $deleteDisks
+                disk_count    = $diskPaths.Count
             }
 
             Write-JobResult `
@@ -778,6 +846,144 @@ end {
             Write-JobResult `
                 -Status 'success' `
                 -Message "Network adapter deleted successfully" `
+                -Data $resultData `
+                -CorrelationId $correlationId `
+                -Logs $logs
+        }
+        #
+        # vm.initialize operation (Guest OS initialization via KVP)
+        #
+        elseif ($operation -eq 'vm.initialize') {
+            $logs += 'Executing vm.initialize operation'
+            $logs += "Correlation ID: $correlationId"
+            
+            # Extract required fields
+            $vmId = $resourceSpec['vm_id']
+            $vmName = $resourceSpec['vm_name']
+            
+            if (-not $vmId) {
+                throw "vm_id is required for guest initialization"
+            }
+            
+            if (-not $vmName) {
+                throw "vm_name is required for guest initialization"
+            }
+            
+            $logs += "VM ID: $vmId"
+            $logs += "VM Name: $vmName"
+            
+            # Get VM object
+            $vm = Get-VM -Id $vmId -ErrorAction Stop
+            if (-not $vm) {
+                throw "VM with ID '$vmId' not found"
+            }
+            
+            # Determine storage location for ISO
+            $vmConfigPath = $vm.ConfigurationLocation
+            if ([string]::IsNullOrWhiteSpace($vmConfigPath)) {
+                throw "Unable to determine VM configuration location for VM '$($vm.Name)'"
+            }
+            
+            $vmFolder = Split-Path -Parent $vmConfigPath
+            $storagePath = $vmFolder
+            
+            # Determine OS family - default to Windows
+            $osFamily = 'windows'
+            
+            # Step 1: Copy provisioning ISO
+            $logs += "Copying provisioning ISO for $osFamily guest..."
+            $isoPath = Invoke-ProvisioningCopyProvisioningIso -OSFamily $osFamily -StoragePath $storagePath -VMName $vmName
+            $logs += "Provisioning ISO copied to: $isoPath"
+            
+            # Step 2: Mount provisioning ISO
+            $logs += "Mounting provisioning ISO to VM..."
+            Add-VMDvdDrive -VM $vm -Path $isoPath -ErrorAction Stop
+            $logs += "Provisioning ISO mounted successfully"
+            
+            # Step 3: Start VM
+            $logs += "Starting VM..."
+            Start-VM -VM $vm -ErrorAction Stop
+            $logs += "VM started successfully"
+            
+            # Step 4: Wait for guest readiness
+            $logs += "Waiting for guest to signal provisioning readiness..."
+            $ready = Invoke-ProvisioningWaitForProvisioningKey -VMName $vmName -TimeoutSeconds 300
+            if (-not $ready) {
+                throw "Guest did not signal readiness for provisioning"
+            }
+            $logs += "Guest is ready for provisioning"
+            
+            # Step 5: Publish provisioning data
+            $logs += "Publishing provisioning data to guest..."
+            
+            if (-not $resourceSpec['guest_la_uid']) {
+                throw "guest_la_uid is required for guest initialization"
+            }
+            
+            # Build parameters for provisioning
+            $publishParams = @{
+                GuestHostName = $vmName
+                GuestLaUid    = $resourceSpec['guest_la_uid']
+            }
+            
+            # Optional networking configuration
+            if ($resourceSpec.ContainsKey('guest_v4_ip_addr') -and $resourceSpec['guest_v4_ip_addr']) {
+                $publishParams['GuestV4IpAddr'] = $resourceSpec['guest_v4_ip_addr']
+            }
+            if ($resourceSpec.ContainsKey('guest_v4_cidr_prefix') -and $resourceSpec['guest_v4_cidr_prefix']) {
+                $publishParams['GuestV4CidrPrefix'] = $resourceSpec['guest_v4_cidr_prefix']
+            }
+            if ($resourceSpec.ContainsKey('guest_v4_default_gw') -and $resourceSpec['guest_v4_default_gw']) {
+                $publishParams['GuestV4DefaultGw'] = $resourceSpec['guest_v4_default_gw']
+            }
+            if ($resourceSpec.ContainsKey('guest_v4_dns1') -and $resourceSpec['guest_v4_dns1']) {
+                $publishParams['GuestV4Dns1'] = $resourceSpec['guest_v4_dns1']
+            }
+            if ($resourceSpec.ContainsKey('guest_v4_dns2') -and $resourceSpec['guest_v4_dns2']) {
+                $publishParams['GuestV4Dns2'] = $resourceSpec['guest_v4_dns2']
+            }
+            if ($resourceSpec.ContainsKey('guest_net_dns_suffix') -and $resourceSpec['guest_net_dns_suffix']) {
+                $publishParams['GuestNetDnsSuffix'] = $resourceSpec['guest_net_dns_suffix']
+            }
+            
+            # Optional domain join configuration
+            if ($resourceSpec.ContainsKey('guest_domain_join_target') -and $resourceSpec['guest_domain_join_target']) {
+                $publishParams['GuestDomainJoinTarget'] = $resourceSpec['guest_domain_join_target']
+            }
+            if ($resourceSpec.ContainsKey('guest_domain_join_uid') -and $resourceSpec['guest_domain_join_uid']) {
+                $publishParams['GuestDomainJoinUid'] = $resourceSpec['guest_domain_join_uid']
+            }
+            if ($resourceSpec.ContainsKey('guest_domain_join_ou') -and $resourceSpec['guest_domain_join_ou']) {
+                $publishParams['GuestDomainJoinOU'] = $resourceSpec['guest_domain_join_ou']
+            }
+            
+            # Optional Ansible SSH configuration
+            if ($resourceSpec.ContainsKey('cnf_ansible_ssh_user') -and $resourceSpec['cnf_ansible_ssh_user']) {
+                $publishParams['AnsibleSshUser'] = $resourceSpec['cnf_ansible_ssh_user']
+            }
+            if ($resourceSpec.ContainsKey('cnf_ansible_ssh_key') -and $resourceSpec['cnf_ansible_ssh_key']) {
+                $publishParams['AnsibleSshKey'] = $resourceSpec['cnf_ansible_ssh_key']
+            }
+            
+            # Publish data to guest
+            Invoke-ProvisioningPublishProvisioningData @publishParams
+            $logs += "Provisioning data published successfully"
+            
+            # Step 6: Wait for guest to complete provisioning
+            $logs += "Waiting for guest to complete provisioning..."
+            Invoke-ProvisioningWaitForProvisioningCompletion -VMName $vmName -TimeoutSeconds 1800 -PollIntervalSeconds 5
+            $logs += "Guest provisioning completed successfully"
+            
+            $resultData = @{
+                vm_id                 = $vmId
+                vm_name               = $vmName
+                status                = "initialized"
+                provisioning_iso_path = $isoPath
+            }
+            
+            Write-JobResult `
+                -Status 'success' `
+                -Message "VM '$vmName' guest initialization completed successfully" `
                 -Data $resultData `
                 -CorrelationId $correlationId `
                 -Logs $logs

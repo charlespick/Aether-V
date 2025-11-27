@@ -140,6 +140,8 @@ class VMDeleteRequest(BaseModel):
     hyperv_host: str
     force: bool = Field(
         False, description="Force delete even if VM is running")
+    delete_disks: bool = Field(
+        False, description="Delete all attached disks with the VM (validates no shared disks)")
 
 
 class ResourceCreateRequest(BaseModel):

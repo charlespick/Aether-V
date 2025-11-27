@@ -223,6 +223,7 @@ def create_vm_update_request(
 def create_vm_delete_request(
     vm_id: str,
     vm_name: str,
+    delete_disks: bool = False,
     correlation_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> JobRequest:
@@ -231,13 +232,14 @@ def create_vm_delete_request(
     Args:
         vm_id: VM identifier
         vm_name: VM name
+        delete_disks: Whether to delete VM disk files (default False)
         correlation_id: Optional correlation ID
         metadata: Optional metadata dict
     
     Returns:
         JobRequest envelope for vm.delete operation
     """
-    resource_spec = {"vm_id": vm_id, "vm_name": vm_name}
+    resource_spec = {"vm_id": vm_id, "vm_name": vm_name, "delete_disks": delete_disks}
     return create_job_request(
         operation="vm.delete",
         resource_spec=resource_spec,

@@ -157,6 +157,7 @@ def test_vm_lookup_by_id_route_uses_global_search(monkeypatch):
 
 @pytest.mark.anyio("asyncio")
 async def test_handle_vm_action_success(monkeypatch):
+    vm_id = "12345678-1234-1234-1234-123456789abc"
     hostname = "host01"
     vm_name = "vm01"
 
@@ -173,7 +174,9 @@ async def test_handle_vm_action_success(monkeypatch):
         success_message="Start command accepted for VM {vm_name}.",
     )
     monkeypatch.setitem(routes.VM_ACTION_RULES, "start", rule)
-    monkeypatch.setattr(routes.inventory_service, "get_vm", lambda h, v: DummyVM(vm_name, VMState.OFF))
+    
+    dummy_vm = SimpleNamespace(id=vm_id, name=vm_name, host=hostname, state=VMState.OFF)
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", lambda vid: dummy_vm)
 
     async def fake_refresh():
         fake_refresh.invoked = True
@@ -189,7 +192,7 @@ async def test_handle_vm_action_success(monkeypatch):
 
     monkeypatch.setattr(routes.asyncio, "create_task", fake_create_task)
 
-    result = await routes._handle_vm_action("start", hostname, vm_name)
+    result = await routes._handle_vm_action("start", vm_id)
 
     assert result["status"] == "accepted"
     assert result["action"] == "start"
@@ -216,10 +219,10 @@ async def test_handle_vm_action_vm_not_found(monkeypatch):
             success_message="",
         ),
     )
-    monkeypatch.setattr(routes.inventory_service, "get_vm", lambda h, v: None)
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", lambda vid: None)
 
     with pytest.raises(HTTPException) as exc:
-        await routes._handle_vm_action("start", "host", "vm")
+        await routes._handle_vm_action("start", "invalid-vm-id")
 
     assert exc.value.status_code == status.HTTP_404_NOT_FOUND
 
@@ -239,10 +242,11 @@ async def test_handle_vm_action_rejects_disallowed_state(monkeypatch):
             success_message="",
         ),
     )
-    monkeypatch.setattr(routes.inventory_service, "get_vm", lambda h, v: DummyVM("vm", VMState.RUNNING))
+    dummy_vm = SimpleNamespace(id="vm-id", name="vm", host="host", state=VMState.RUNNING)
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", lambda vid: dummy_vm)
 
     with pytest.raises(HTTPException) as exc:
-        await routes._handle_vm_action("start", "host", "vm")
+        await routes._handle_vm_action("start", "vm-id")
 
     assert exc.value.status_code == status.HTTP_409_CONFLICT
     assert exc.value.detail["vm_state"] == VMState.RUNNING.value
@@ -263,10 +267,11 @@ async def test_handle_vm_action_wraps_vm_control_error(monkeypatch):
             success_message="",
         ),
     )
-    monkeypatch.setattr(routes.inventory_service, "get_vm", lambda h, v: DummyVM("vm", VMState.OFF))
+    dummy_vm = SimpleNamespace(id="vm-id", name="vm", host="host", state=VMState.OFF)
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", lambda vid: dummy_vm)
 
     with pytest.raises(HTTPException) as exc:
-        await routes._handle_vm_action("start", "host", "vm")
+        await routes._handle_vm_action("start", "vm-id")
 
     assert exc.value.status_code == status.HTTP_502_BAD_GATEWAY
     assert "Failed to start VM" in exc.value.detail["message"]

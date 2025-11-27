@@ -1815,9 +1815,8 @@ class VMView extends BaseView {
 
         const actionLabel = this.getActionLabel(action);
 
-        const encodedHost = encodeURIComponent(host);
-        const encodedVm = encodeURIComponent(this.vmData.name);
-        const endpoint = `/api/v1/vms/${encodedHost}/${encodedVm}/${action}`;
+        // Use RESTful endpoint with VM ID
+        const endpoint = `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/${action}`;
 
         this.setButtonsBusy(true);
         this.setActionFeedback(`Sending ${actionLabel} request...`, 'info', {
@@ -1894,17 +1893,9 @@ class VMView extends BaseView {
         });
 
         try {
-            const response = await fetch('/api/v1/vms/delete', {
-                method: 'POST',
+            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}?delete_disks=true&force=false`, {
+                method: 'DELETE',
                 credentials: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    vm_name: this.vmData.name,
-                    hyperv_host: host,
-                    force: false,
-                }),
             });
 
             let payload = null;
