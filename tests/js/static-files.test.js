@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const staticDir = path.join(__dirname, '..', '..', 'server', 'app', 'static');
 
@@ -16,6 +17,55 @@ function extractClass(content, className) {
   const match = content.match(pattern);
   return match ? match[0] : '';
 }
+
+// Syntax validation tests - these should run first to catch syntax errors
+test('main.js should have valid JavaScript syntax', () => {
+  const content = readFile('main.js');
+  assert.doesNotThrow(
+    () => new vm.Script(content),
+    'main.js should parse without syntax errors'
+  );
+});
+
+test('overlay.js should have valid JavaScript syntax', () => {
+  const content = readFile('overlay.js');
+  assert.doesNotThrow(
+    () => new vm.Script(content),
+    'overlay.js should parse without syntax errors'
+  );
+});
+
+test('websocket.js should have valid JavaScript syntax', () => {
+  const content = readFile('websocket.js');
+  assert.doesNotThrow(
+    () => new vm.Script(content),
+    'websocket.js should parse without syntax errors'
+  );
+});
+
+test('views.js should have valid JavaScript syntax', () => {
+  const content = readFile('views.js');
+  assert.doesNotThrow(
+    () => new vm.Script(content),
+    'views.js should parse without syntax errors'
+  );
+});
+
+test('provision-form-pydantic.js should have valid JavaScript syntax', () => {
+  const content = readFile('provision-form-pydantic.js');
+  assert.doesNotThrow(
+    () => new vm.Script(content),
+    'provision-form-pydantic.js should parse without syntax errors'
+  );
+});
+
+test('pydantic-form-builder.js should have valid JavaScript syntax', () => {
+  const content = readFile('pydantic-form-builder.js');
+  assert.doesNotThrow(
+    () => new vm.Script(content),
+    'pydantic-form-builder.js should parse without syntax errors'
+  );
+});
 
 test('main.js should define provisioning availability helper', () => {
   const content = readFile('main.js');

@@ -457,6 +457,7 @@ class SettingsOverlay extends BaseOverlay {
                 ossAttributionsBtn.removeEventListener('click', this.ossAttributionsHandler);
             }
             this.ossAttributionsHandler = null;
+        }
         if (this.redeployHandler) {
             const redeployBtn = document.getElementById('redeploy-scripts-btn');
             if (redeployBtn) {
