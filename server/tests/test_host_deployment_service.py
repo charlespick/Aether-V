@@ -226,59 +226,121 @@ class HostDeploymentServiceUtilityTests(TestCase):
         self.service._deployment_enabled = True
         self.service._agent_download_base_url = "https://example.test/agent"
 
-    def test_download_file_to_host_retries_until_success(self):
-        attempts: list[int] = []
-
-        def side_effect(*args, **kwargs):
-            attempts.append(1)
-            if len(attempts) == 1:
-                return "", "error", 1
-            return "", "", 0
+    def test_deploy_all_artifacts_parallel_success(self):
+        artifacts = [
+            ("script1.ps1", "C:/install/script1.ps1"),
+            ("script2.ps1", "C:/install/script2.ps1"),
+            ("disk.iso", "C:/install/disk.iso"),
+        ]
 
         with mock.patch(
             "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
-            side_effect=side_effect,
-        ) as exec_mock, mock.patch(
-            "server.app.services.host_deployment_service.time.sleep"
-        ) as sleep_mock:
-            result = self.service._download_file_to_host(
-                "host-1", "artifact.txt", "C:/remote/artifact.txt"
-            )
+            return_value=("Successfully downloaded 3 artifacts", "", 0),
+        ) as exec_mock:
+            result = self.service._deploy_all_artifacts_parallel("host-1", artifacts)
 
         self.assertTrue(result)
-        self.assertGreaterEqual(exec_mock.call_count, 2)
-        sleep_mock.assert_called_once()
+        self.assertEqual(exec_mock.call_count, 1)
+        
+        # Verify the PowerShell script was constructed correctly
+        call_args = exec_mock.call_args[0]
+        script = call_args[1]
+        self.assertIn("Start-Job -ScriptBlock", script)
+        self.assertIn("Invoke-WebRequest", script)
+        self.assertIn("script1.ps1", script)
+        self.assertIn("script2.ps1", script)
+        self.assertIn("disk.iso", script)
 
-    def test_download_file_to_host_respects_failure_after_attempts(self):
-        with mock.patch.object(
-            self.service, "_deployment_enabled", True
-        ), mock.patch(
+    def test_deploy_all_artifacts_parallel_failure(self):
+        artifacts = [("script.ps1", "C:/install/script.ps1")]
+
+        with mock.patch(
             "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
-            return_value=("", "error", 1),
-        ) as exec_mock, mock.patch.object(
-            settings, "agent_download_max_attempts", 2
-        ), mock.patch(
-            "server.app.services.host_deployment_service.time.sleep"
-        ) as sleep_mock:
-            result = self.service._download_file_to_host(
-                "host-1", "artifact.txt", "C:/remote/artifact.txt"
-            )
+            return_value=("", "Failed to download: script.ps1", 1),
+        ) as exec_mock:
+            result = self.service._deploy_all_artifacts_parallel("host-1", artifacts)
 
         self.assertFalse(result)
-        self.assertEqual(exec_mock.call_count, 2)
-        sleep_mock.assert_called_once()
+        self.assertEqual(exec_mock.call_count, 1)
 
-    def test_download_file_to_host_requires_enabled_service(self):
-        self.service._deployment_enabled = False
+    def test_deploy_all_artifacts_parallel_empty_list(self):
         with mock.patch(
             "server.app.services.host_deployment_service.winrm_service.execute_ps_command"
         ) as exec_mock:
-            result = self.service._download_file_to_host(
-                "host-1", "artifact.txt", "C:/remote/artifact.txt"
-            )
+            result = self.service._deploy_all_artifacts_parallel("host-1", [])
 
-        self.assertFalse(result)
+        self.assertTrue(result)
         exec_mock.assert_not_called()
+
+    def test_deploy_all_artifacts_parallel_respects_retry_settings(self):
+        artifacts = [("test.ps1", "C:/install/test.ps1")]
+
+        with mock.patch(
+            "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
+            return_value=("Downloaded test.ps1 after 3 attempts", "", 0),
+        ) as exec_mock, mock.patch.object(
+            settings, "agent_download_max_attempts", 5
+        ), mock.patch.object(
+            settings, "agent_download_retry_interval", 1.5
+        ):
+            result = self.service._deploy_all_artifacts_parallel("host-1", artifacts)
+
+        self.assertTrue(result)
+        script = exec_mock.call_args[0][1]
+        self.assertIn("5", script)  # max attempts
+        self.assertIn("1.5", script)  # retry interval
+
+    def test_deploy_to_host_uses_parallel_deployment(self):
+        """Test that _deploy_to_host calls _deploy_all_artifacts_parallel with correct artifacts."""
+        self.service._deployment_enabled = True
+        self.service._container_version = "2.0.0"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Create test artifacts
+            script1 = tmp_path / "script1.ps1"
+            script1.write_text("echo 'script1'")
+            script2 = tmp_path / "script2.ps1"
+            script2.write_text("echo 'script2'")
+            iso1 = tmp_path / "disk.iso"
+            iso1.write_text("iso content")
+            version_file = tmp_path / "version"
+            version_file.write_text("2.0.0")
+
+            with mock.patch(
+                "server.app.services.host_deployment_service.AGENT_ARTIFACTS_DIR", tmp_path
+            ), mock.patch(
+                "server.app.services.host_deployment_service.settings.version_file_path",
+                str(version_file)
+            ), mock.patch.object(
+                self.service, "_get_host_version", return_value="1.0.0"
+            ), mock.patch.object(
+                self.service, "_ensure_install_directory", return_value=True
+            ), mock.patch.object(
+                self.service, "_clear_host_install_directory", return_value=True
+            ), mock.patch.object(
+                self.service, "_verify_install_directory_empty", return_value=True
+            ), mock.patch.object(
+                self.service, "_deploy_all_artifacts_parallel", return_value=True
+            ) as deploy_mock, mock.patch.object(
+                self.service, "_verify_expected_artifacts_present", return_value=True
+            ):
+                result = self.service._deploy_to_host("host-1", observed_host_version="1.0.0")
+
+            self.assertTrue(result)
+            deploy_mock.assert_called_once()
+            
+            # Verify the artifacts list contains all expected files
+            call_args = deploy_mock.call_args[0]
+            artifacts = call_args[1]
+            artifact_names = [name for name, _ in artifacts]
+            
+            self.assertIn("script1.ps1", artifact_names)
+            self.assertIn("script2.ps1", artifact_names)
+            self.assertIn("disk.iso", artifact_names)
+            self.assertIn("version", artifact_names)
+            self.assertEqual(len(artifacts), 4)
 
     def test_build_download_url_requires_configured_base(self):
         self.service._agent_download_base_url = None

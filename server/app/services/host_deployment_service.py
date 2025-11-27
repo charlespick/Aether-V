@@ -573,16 +573,13 @@ class HostDeploymentService:
             if not self._verify_install_directory_empty(hostname):
                 return False
 
-            # Deploy scripts
-            if not self._deploy_scripts(hostname, script_files):
-                return False
+            # Deploy all artifacts in parallel using a single WinRM connection
+            all_artifacts = []
+            all_artifacts.extend((f.name, self._build_remote_path(f.name)) for f in script_files)
+            all_artifacts.extend((f.name, self._build_remote_path(f.name)) for f in iso_files)
+            all_artifacts.append((version_path.name, self._build_remote_path(version_path.name)))
 
-            # Deploy ISOs
-            if not self._deploy_isos(hostname, iso_files):
-                return False
-
-            # Deploy version file
-            if not self._deploy_version_file(hostname):
+            if not self._deploy_all_artifacts_parallel(hostname, all_artifacts):
                 return False
 
             if not self._verify_expected_artifacts_present(
@@ -617,85 +614,99 @@ class HostDeploymentService:
             logger.error(f"Failed to ensure install directory on {hostname}: {e}")
             return False
 
-    def _deploy_scripts(self, hostname: str, script_files: Sequence[Path]) -> bool:
-        """Deploy PowerShell scripts to host."""
-        logger.info(f"Deploying scripts to {hostname}")
-
-        script_dir = AGENT_ARTIFACTS_DIR
-
-        try:
-            if not script_files:
-                logger.warning(f"No script files found in {script_dir}")
-                return True
-
-            logger.debug("Found %d scripts to deploy", len(script_files))
-
-            for script_file in script_files:
-                remote_path = self._build_remote_path(script_file.name)
-
-                if not self._download_file_to_host(
-                    hostname, script_file.name, remote_path
-                ):
-                    logger.error(
-                        f"Failed to deploy script {script_file.name} to {hostname}"
-                    )
-                    return False
-
-                logger.debug(f"Deployed {script_file.name} to {hostname}")
-
-            logger.info(f"All scripts deployed to {hostname}")
+    def _deploy_all_artifacts_parallel(
+        self, hostname: str, artifacts: Sequence[tuple[str, str]]
+    ) -> bool:
+        """Deploy all artifacts using parallel downloads in a single WinRM session."""
+        if not artifacts:
+            logger.warning(f"No artifacts to deploy to {hostname}")
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to deploy scripts to {hostname}: {e}")
-            return False
+        logger.info(f"Deploying {len(artifacts)} artifacts to {hostname} in parallel")
 
-    def _deploy_isos(self, hostname: str, iso_files: Sequence[Path]) -> bool:
-        """Deploy ISO files to host."""
-        logger.info(f"Deploying ISOs to {hostname}")
+        max_attempts = max(1, settings.agent_download_max_attempts)
+        retry_interval = max(0.0, settings.agent_download_retry_interval)
 
-        iso_dir = AGENT_ARTIFACTS_DIR
+        # Build the parallel download script
+        download_jobs = []
+        for artifact_name, remote_path in artifacts:
+            download_url = self._build_download_url(artifact_name)
+            download_jobs.append(
+                f"    @{{ Url = {self._ps_literal(download_url)}; "
+                f"Path = {self._ps_literal(remote_path)}; "
+                f"Name = {self._ps_literal(artifact_name)} }}"
+            )
+
+        script = f"""
+$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
+
+$downloads = @(
+{chr(10).join(download_jobs)}
+)
+
+$jobs = $downloads | ForEach-Object {{
+    Start-Job -ScriptBlock {{
+        param($url, $path, $name, $maxAttempts, $retryInterval)
+        $ProgressPreference = 'SilentlyContinue'
+        $ErrorActionPreference = 'Stop'
+        
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {{
+            try {{
+                Invoke-WebRequest -Uri $url -OutFile $path -UseBasicParsing
+                return @{{ Success = $true; Name = $name; Attempt = $attempt }}
+            }} catch {{
+                if ($attempt -lt $maxAttempts) {{
+                    Start-Sleep -Seconds $retryInterval
+                }} else {{
+                    return @{{ Success = $false; Name = $name; Error = $_.Exception.Message }}
+                }}
+            }}
+        }}
+    }} -ArgumentList $_.Url, $_.Path, $_.Name, {max_attempts}, {retry_interval}
+}}
+
+$results = $jobs | Wait-Job | Receive-Job
+$jobs | Remove-Job
+
+$failed = $results | Where-Object {{ -not $_.Success }}
+if ($failed) {{
+    $failedNames = ($failed | ForEach-Object {{ $_.Name }}) -join ', '
+    Write-Error "Failed to download: $failedNames"
+    exit 1
+}}
+
+$retriedDownloads = $results | Where-Object {{ $_.Attempt -gt 1 }}
+if ($retriedDownloads) {{
+    $retriedDownloads | ForEach-Object {{
+        Write-Output "Downloaded $($_.Name) after $($_.Attempt) attempts"
+    }}
+}}
+
+Write-Output "Successfully downloaded $($results.Count) artifacts"
+exit 0
+"""
 
         try:
-            if not iso_files:
-                logger.warning(f"No ISO files found in {iso_dir}")
+            stdout, stderr, exit_code = winrm_service.execute_ps_command(
+                hostname, script
+            )
+
+            if exit_code == 0:
+                logger.info(
+                    f"Successfully deployed {len(artifacts)} artifacts to {hostname}"
+                )
+                if stdout.strip():
+                    logger.debug(f"Deployment output: {stdout.strip()}")
+                return True
+            else:
+                logger.error(
+                    f"Failed to deploy artifacts to {hostname}: {stderr.strip() or 'Unknown error'}"
+                )
                 return False
 
-            logger.debug("Found %d ISOs to deploy", len(iso_files))
-
-            for iso_file in iso_files:
-                remote_path = self._build_remote_path(iso_file.name)
-
-                if not self._download_file_to_host(
-                    hostname, iso_file.name, remote_path
-                ):
-                    logger.error(f"Failed to deploy ISO {iso_file.name} to {hostname}")
-                    return False
-
-                logger.info(f"Deployed {iso_file.name} to {hostname}")
-
-            logger.info(f"All ISOs deployed to {hostname}")
-            return True
-
         except Exception as e:
-            logger.error(f"Failed to deploy ISOs to {hostname}: {e}")
-            return False
-
-    def _deploy_version_file(self, hostname: str) -> bool:
-        """Deploy version file to host."""
-        logger.info(f"Deploying version file to {hostname}")
-
-        version_path = Path(settings.version_file_path)
-        if not version_path.exists():
-            logger.error(f"Version file not found at {version_path}")
-            return False
-
-        remote_path = self._build_remote_path(version_path.name)
-
-        try:
-            return self._download_file_to_host(hostname, version_path.name, remote_path)
-        except Exception as e:
-            logger.error(f"Failed to deploy version file to {hostname}: {e}")
+            logger.error(f"Exception during parallel deployment to {hostname}: {e}")
             return False
 
     def _collect_script_files(self) -> List[Path]:
@@ -819,73 +830,6 @@ class HostDeploymentService:
     def _build_remote_path(self, filename: str) -> str:
         """Construct the remote path inside the host install directory."""
         return str(PureWindowsPath(settings.host_install_directory) / filename)
-
-    def _download_file_to_host(
-        self, hostname: str, artifact_name: str, remote_path: str
-    ) -> bool:
-        """Download an artifact from the web server to the host using HTTP."""
-        if not self._deployment_enabled:
-            logger.error(
-                "Host deployment service is disabled; unable to download %s to %s",
-                artifact_name,
-                hostname,
-            )
-            return False
-
-        download_url = self._build_download_url(artifact_name)
-        command = (
-            "$ProgressPreference = 'SilentlyContinue'; "
-            f"$downloadUrl = {self._ps_literal(download_url)}; "
-            f"$destinationPath = {self._ps_literal(remote_path)}; "
-            "Invoke-WebRequest -Uri $downloadUrl -OutFile $destinationPath -UseBasicParsing"
-        )
-
-        logger.info(
-            f"Downloading {artifact_name} to {hostname}:{remote_path} from {download_url}"
-        )
-
-        max_attempts = max(1, settings.agent_download_max_attempts)
-        retry_interval = max(0.0, settings.agent_download_retry_interval)
-
-        for attempt in range(1, max_attempts + 1):
-            _, stderr, exit_code = winrm_service.execute_ps_command(hostname, command)
-
-            if exit_code == 0:
-                if attempt > 1:
-                    logger.info(
-                        "Download of %s to %s succeeded on attempt %d/%d",
-                        artifact_name,
-                        hostname,
-                        attempt,
-                        max_attempts,
-                    )
-                return True
-
-            logger.warning(
-                "Attempt %d/%d failed to download %s to %s: %s",
-                attempt,
-                max_attempts,
-                artifact_name,
-                hostname,
-                stderr.strip() or f"exit code {exit_code}",
-            )
-
-            if attempt < max_attempts and retry_interval:
-                logger.info(
-                    "Retrying download of %s to %s in %.1f seconds",
-                    artifact_name,
-                    hostname,
-                    retry_interval,
-                )
-                time.sleep(retry_interval)
-
-        logger.error(
-            "Failed to download %s to %s after %d attempt(s)",
-            artifact_name,
-            hostname,
-            max_attempts,
-        )
-        return False
 
     def _build_download_url(self, artifact_name: str) -> str:
         """Build a download URL for an artifact exposed by the FastAPI static mount."""
