@@ -41,6 +41,7 @@ from ..core.models import (
     InventoryServiceMetrics,
     HostDeploymentMetrics,
     NotificationLevel,
+    NotificationCategory,
 )
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
@@ -482,7 +483,8 @@ async def _execute_redeploy(host_list: List[str], running_jobs: int) -> None:
                     "Not all jobs completed within timeout; proceeding with redeployment anyway"
                 )
 
-        logger.info("Starting force redeployment to %d host(s)", len(host_list))
+        logger.info("Starting force redeployment to %d host(s)",
+                    len(host_list))
         await host_deployment_service.force_redeploy_all_hosts(host_list)
         logger.info("Force redeployment completed successfully")
 
@@ -492,6 +494,7 @@ async def _execute_redeploy(host_list: List[str], running_jobs: int) -> None:
             title="Host Script Redeployment Failed",
             message=f"Failed to redeploy host scripts: {exc}",
             level=NotificationLevel.ERROR,
+            category=NotificationCategory.HOST,
         )
 
 
@@ -613,8 +616,6 @@ async def reset_vm_action(
     """Reset (power cycle) a running virtual machine."""
 
     return await _handle_vm_action("reset", vm_id)
-
-
 
 
 @router.get("/api/v1/jobs", response_model=List[Job], tags=["Jobs"])
