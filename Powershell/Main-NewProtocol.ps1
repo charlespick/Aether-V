@@ -42,6 +42,20 @@ begin {
     . (Join-Path $scriptRoot 'Provisioning.PublishProvisioningData.ps1')
     . (Join-Path $scriptRoot 'Provisioning.RegisterVM.ps1')
     . (Join-Path $scriptRoot 'Provisioning.WaitForProvisioningKey.ps1')
+    
+    # Initialize provisioning scripts version from version file
+    # This is required for KVP version exchange with guest agents
+    $versionFilePath = Join-Path $scriptRoot 'version'
+    if (Test-Path -LiteralPath $versionFilePath -PathType Leaf) {
+        $rawVersion = Get-Content -LiteralPath $versionFilePath -Raw -ErrorAction SilentlyContinue
+        if ($rawVersion) {
+            $global:ProvisioningScriptsVersion = $rawVersion.Trim()
+        }
+    }
+    
+    if (-not $global:ProvisioningScriptsVersion) {
+        throw "FATAL: Could not read provisioning scripts version from '$versionFilePath'. Ensure the version file is deployed with the agent scripts."
+    }
 }
 
 process {
@@ -965,9 +979,27 @@ end {
                 $publishParams['AnsibleSshKey'] = $resourceSpec['cnf_ansible_ssh_key']
             }
             
-            # Publish data to guest
-            Invoke-ProvisioningPublishProvisioningData @publishParams
-            $logs += "Provisioning data published successfully"
+            # Set password environment variables (secure pattern to avoid command-line exposure)
+            # These are read by Invoke-ProvisioningPublishProvisioningData
+            if ($resourceSpec.ContainsKey('guest_la_pw') -and $resourceSpec['guest_la_pw']) {
+                $env:GuestLaPw = $resourceSpec['guest_la_pw']
+            } else {
+                throw "guest_la_pw is required for guest initialization"
+            }
+            if ($resourceSpec.ContainsKey('guest_domain_join_pw') -and $resourceSpec['guest_domain_join_pw']) {
+                $env:GuestDomainJoinPw = $resourceSpec['guest_domain_join_pw']
+            }
+            
+            try {
+                # Publish data to guest
+                Invoke-ProvisioningPublishProvisioningData @publishParams
+                $logs += "Provisioning data published successfully"
+            }
+            finally {
+                # Clear sensitive environment variables
+                $env:GuestLaPw = $null
+                $env:GuestDomainJoinPw = $null
+            }
             
             # Step 6: Wait for guest to complete provisioning
             $logs += "Waiting for guest to complete provisioning..."

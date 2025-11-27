@@ -59,7 +59,7 @@ def _redact_sensitive_parameters(
     # Known sensitive field names from Pydantic models
     sensitive_fields = {
         "guest_la_pw",
-        "guest_domain_joinpw",
+        "guest_domain_join_pw",
         "cnf_ansible_ssh_key",
     }
 

@@ -57,8 +57,8 @@ class TestMinimalGuestConfig:
         assert config["guest_la_pw"] == "SecurePass123!"
         
         # Should not contain any optional fields
-        assert "guest_domain_jointarget" not in config
-        assert "guest_v4_ipaddr" not in config
+        assert "guest_domain_join_target" not in config
+        assert "guest_v4_ip_addr" not in config
         assert "cnf_ansible_ssh_user" not in config
     
     def test_minimal_guest_config_with_different_credentials(self):
@@ -84,10 +84,10 @@ class TestDomainJoinConfiguration:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_domain_jointarget="corp.example.com",
-            guest_domain_joinuid="EXAMPLE\\svc_join",
-            guest_domain_joinpw="DomainPass456!",
-            guest_domain_joinou="OU=Servers,DC=corp,DC=example,DC=com",
+            guest_domain_join_target="corp.example.com",
+            guest_domain_join_uid="EXAMPLE\\svc_join",
+            guest_domain_join_pw="DomainPass456!",
+            guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
         )
         
         config = generate_guest_config(vm, guest_config_spec=guest)
@@ -97,10 +97,10 @@ class TestDomainJoinConfiguration:
         assert config["guest_la_pw"] == "SecurePass123!"
         
         # Should contain all domain join fields
-        assert config["guest_domain_jointarget"] == "corp.example.com"
-        assert config["guest_domain_joinuid"] == "EXAMPLE\\svc_join"
-        assert config["guest_domain_joinpw"] == "DomainPass456!"
-        assert config["guest_domain_joinou"] == "OU=Servers,DC=corp,DC=example,DC=com"
+        assert config["guest_domain_join_target"] == "corp.example.com"
+        assert config["guest_domain_join_uid"] == "EXAMPLE\\svc_join"
+        assert config["guest_domain_join_pw"] == "DomainPass456!"
+        assert config["guest_domain_join_ou"] == "OU=Servers,DC=corp,DC=example,DC=com"
     
     def test_domain_join_with_different_domain(self):
         """Test domain join with different domain values."""
@@ -108,17 +108,17 @@ class TestDomainJoinConfiguration:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_domain_jointarget="internal.company.net",
-            guest_domain_joinuid="COMPANY\\domain_admin",
-            guest_domain_joinpw="AnotherPass789!",
-            guest_domain_joinou="OU=Database,OU=Production,DC=internal,DC=company,DC=net",
+            guest_domain_join_target="internal.company.net",
+            guest_domain_join_uid="COMPANY\\domain_admin",
+            guest_domain_join_pw="AnotherPass789!",
+            guest_domain_join_ou="OU=Database,OU=Production,DC=internal,DC=company,DC=net",
         )
         
         config = generate_guest_config(vm, guest_config_spec=guest)
         
-        assert config["guest_domain_jointarget"] == "internal.company.net"
-        assert config["guest_domain_joinuid"] == "COMPANY\\domain_admin"
-        assert config["guest_domain_joinou"] == "OU=Database,OU=Production,DC=internal,DC=company,DC=net"
+        assert config["guest_domain_join_target"] == "internal.company.net"
+        assert config["guest_domain_join_uid"] == "COMPANY\\domain_admin"
+        assert config["guest_domain_join_ou"] == "OU=Database,OU=Production,DC=internal,DC=company,DC=net"
 
 
 class TestStaticIPConfiguration:
@@ -131,9 +131,9 @@ class TestStaticIPConfiguration:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_v4_ipaddr="192.168.1.100",
-            guest_v4_cidrprefix=24,
-            guest_v4_defaultgw="192.168.1.1",
+            guest_v4_ip_addr="192.168.1.100",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="192.168.1.1",
             guest_v4_dns1="192.168.1.10",
         )
         
@@ -143,14 +143,14 @@ class TestStaticIPConfiguration:
         assert config["guest_la_uid"] == "Administrator"
         
         # Should contain all required static IP fields
-        assert config["guest_v4_ipaddr"] == "192.168.1.100"
-        assert config["guest_v4_cidrprefix"] == 24
-        assert config["guest_v4_defaultgw"] == "192.168.1.1"
+        assert config["guest_v4_ip_addr"] == "192.168.1.100"
+        assert config["guest_v4_cidr_prefix"] == 24
+        assert config["guest_v4_default_gw"] == "192.168.1.1"
         assert config["guest_v4_dns1"] == "192.168.1.10"
         
         # Optional fields should not be present if not provided
         assert "guest_v4_dns2" not in config
-        assert "guest_net_dnssuffix" not in config
+        assert "guest_net_dns_suffix" not in config
     
     def test_guest_config_with_static_ip_and_optional_fields(self):
         """Test static IP config with optional DNS2 and suffix."""
@@ -158,23 +158,23 @@ class TestStaticIPConfiguration:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_v4_ipaddr="10.0.0.50",
-            guest_v4_cidrprefix=16,
-            guest_v4_defaultgw="10.0.0.1",
+            guest_v4_ip_addr="10.0.0.50",
+            guest_v4_cidr_prefix=16,
+            guest_v4_default_gw="10.0.0.1",
             guest_v4_dns1="10.0.0.10",
             guest_v4_dns2="10.0.0.11",
-            guest_net_dnssuffix="corp.example.com",
+            guest_net_dns_suffix="corp.example.com",
         )
         
         config = generate_guest_config(vm, guest_config_spec=guest)
         
         # Should contain required IP fields
-        assert config["guest_v4_ipaddr"] == "10.0.0.50"
-        assert config["guest_v4_cidrprefix"] == 16
+        assert config["guest_v4_ip_addr"] == "10.0.0.50"
+        assert config["guest_v4_cidr_prefix"] == 16
         
         # Should contain optional fields
         assert config["guest_v4_dns2"] == "10.0.0.11"
-        assert config["guest_net_dnssuffix"] == "corp.example.com"
+        assert config["guest_net_dns_suffix"] == "corp.example.com"
     
     def test_static_ip_with_different_network_ranges(self):
         """Test static IP with various network configurations."""
@@ -182,16 +182,16 @@ class TestStaticIPConfiguration:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_v4_ipaddr="172.16.50.200",
-            guest_v4_cidrprefix=22,
-            guest_v4_defaultgw="172.16.48.1",
+            guest_v4_ip_addr="172.16.50.200",
+            guest_v4_cidr_prefix=22,
+            guest_v4_default_gw="172.16.48.1",
             guest_v4_dns1="8.8.8.8",
         )
         
         config = generate_guest_config(vm, guest_config_spec=guest)
         
-        assert config["guest_v4_ipaddr"] == "172.16.50.200"
-        assert config["guest_v4_cidrprefix"] == 22
+        assert config["guest_v4_ip_addr"] == "172.16.50.200"
+        assert config["guest_v4_cidr_prefix"] == 22
 
 
 class TestAnsibleConfiguration:
@@ -241,13 +241,13 @@ class TestCombinedConfigurations:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_domain_jointarget="corp.example.com",
-            guest_domain_joinuid="EXAMPLE\\svc_join",
-            guest_domain_joinpw="DomainPass456!",
-            guest_domain_joinou="OU=Servers,DC=corp,DC=example,DC=com",
-            guest_v4_ipaddr="192.168.1.100",
-            guest_v4_cidrprefix=24,
-            guest_v4_defaultgw="192.168.1.1",
+            guest_domain_join_target="corp.example.com",
+            guest_domain_join_uid="EXAMPLE\\svc_join",
+            guest_domain_join_pw="DomainPass456!",
+            guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
+            guest_v4_ip_addr="192.168.1.100",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="192.168.1.1",
             guest_v4_dns1="192.168.1.10",
         )
         
@@ -257,12 +257,12 @@ class TestCombinedConfigurations:
         assert "guest_la_uid" in config
         
         # Should have domain join
-        assert "guest_domain_jointarget" in config
-        assert config["guest_domain_jointarget"] == "corp.example.com"
+        assert "guest_domain_join_target" in config
+        assert config["guest_domain_join_target"] == "corp.example.com"
         
         # Should have static IP
-        assert "guest_v4_ipaddr" in config
-        assert config["guest_v4_ipaddr"] == "192.168.1.100"
+        assert "guest_v4_ip_addr" in config
+        assert config["guest_v4_ip_addr"] == "192.168.1.100"
     
     def test_all_configurations_combined(self):
         """Test guest config with domain join, static IP, and Ansible."""
@@ -270,16 +270,16 @@ class TestCombinedConfigurations:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_domain_jointarget="internal.company.net",
-            guest_domain_joinuid="COMPANY\\svc_join",
-            guest_domain_joinpw="DomainPass456!",
-            guest_domain_joinou="OU=Servers,DC=internal,DC=company,DC=net",
-            guest_v4_ipaddr="10.0.0.50",
-            guest_v4_cidrprefix=24,
-            guest_v4_defaultgw="10.0.0.1",
+            guest_domain_join_target="internal.company.net",
+            guest_domain_join_uid="COMPANY\\svc_join",
+            guest_domain_join_pw="DomainPass456!",
+            guest_domain_join_ou="OU=Servers,DC=internal,DC=company,DC=net",
+            guest_v4_ip_addr="10.0.0.50",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="10.0.0.1",
             guest_v4_dns1="10.0.0.10",
             guest_v4_dns2="10.0.0.11",
-            guest_net_dnssuffix="internal.company.net",
+            guest_net_dns_suffix="internal.company.net",
             cnf_ansible_ssh_user="ansible",
             cnf_ansible_ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample",
         )
@@ -288,24 +288,24 @@ class TestCombinedConfigurations:
         
         # Should have all configuration sections
         assert "guest_la_uid" in config
-        assert "guest_domain_jointarget" in config
-        assert "guest_v4_ipaddr" in config
+        assert "guest_domain_join_target" in config
+        assert "guest_v4_ip_addr" in config
         assert "cnf_ansible_ssh_user" in config
         
         # Verify all keys are present
         expected_keys = {
             "guest_la_uid",
             "guest_la_pw",
-            "guest_domain_jointarget",
-            "guest_domain_joinuid",
-            "guest_domain_joinpw",
-            "guest_domain_joinou",
-            "guest_v4_ipaddr",
-            "guest_v4_cidrprefix",
-            "guest_v4_defaultgw",
+            "guest_domain_join_target",
+            "guest_domain_join_uid",
+            "guest_domain_join_pw",
+            "guest_domain_join_ou",
+            "guest_v4_ip_addr",
+            "guest_v4_cidr_prefix",
+            "guest_v4_default_gw",
             "guest_v4_dns1",
             "guest_v4_dns2",
-            "guest_net_dnssuffix",
+            "guest_net_dns_suffix",
             "cnf_ansible_ssh_user",
             "cnf_ansible_ssh_key",
         }
@@ -317,9 +317,9 @@ class TestCombinedConfigurations:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_v4_ipaddr="192.168.2.50",
-            guest_v4_cidrprefix=24,
-            guest_v4_defaultgw="192.168.2.1",
+            guest_v4_ip_addr="192.168.2.50",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="192.168.2.1",
             guest_v4_dns1="192.168.2.10",
             cnf_ansible_ssh_user="ansible",
             cnf_ansible_ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample",
@@ -328,13 +328,13 @@ class TestCombinedConfigurations:
         config = generate_guest_config(vm, guest_config_spec=guest)
         
         # Should have static IP
-        assert config["guest_v4_ipaddr"] == "192.168.2.50"
+        assert config["guest_v4_ip_addr"] == "192.168.2.50"
         
         # Should have Ansible
         assert config["cnf_ansible_ssh_user"] == "ansible"
         
         # Should NOT have domain join
-        assert "guest_domain_jointarget" not in config
+        assert "guest_domain_join_target" not in config
 
 
 class TestGeneratorWithAllSpecs:
@@ -414,15 +414,15 @@ class TestGeneratorFromDicts:
         guest_dict = {
             "guest_la_uid": "Administrator",
             "guest_la_pw": "SecurePass123!",
-            "guest_domain_jointarget": "corp.example.com",
-            "guest_domain_joinuid": "EXAMPLE\\svc_join",
-            "guest_domain_joinpw": "DomainPass456!",
-            "guest_domain_joinou": "OU=Servers,DC=corp,DC=example,DC=com",
+            "guest_domain_join_target": "corp.example.com",
+            "guest_domain_join_uid": "EXAMPLE\\svc_join",
+            "guest_domain_join_pw": "DomainPass456!",
+            "guest_domain_join_ou": "OU=Servers,DC=corp,DC=example,DC=com",
         }
         
         config = generate_guest_config_from_dicts(vm_dict, guest_config_dict=guest_dict)
         
-        assert config["guest_domain_jointarget"] == "corp.example.com"
+        assert config["guest_domain_join_target"] == "corp.example.com"
     
     def test_generate_from_dicts_with_nic(self):
         """Test generating config with NIC dict."""
@@ -437,9 +437,9 @@ class TestGeneratorFromDicts:
         guest_dict = {
             "guest_la_uid": "Administrator",
             "guest_la_pw": "SecurePass123!",
-            "guest_v4_ipaddr": "192.168.1.100",
-            "guest_v4_cidrprefix": 24,
-            "guest_v4_defaultgw": "192.168.1.1",
+            "guest_v4_ip_addr": "192.168.1.100",
+            "guest_v4_cidr_prefix": 24,
+            "guest_v4_default_gw": "192.168.1.1",
             "guest_v4_dns1": "192.168.1.10",
         }
         
@@ -449,7 +449,7 @@ class TestGeneratorFromDicts:
             guest_config_dict=guest_dict,
         )
         
-        assert config["guest_v4_ipaddr"] == "192.168.1.100"
+        assert config["guest_v4_ip_addr"] == "192.168.1.100"
     
     def test_generate_from_dicts_validation_error(self):
         """Test that invalid dict raises ValidationError."""
@@ -492,19 +492,19 @@ class TestEdgeCases:
         guest = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_v4_ipaddr="192.168.1.100",
-            guest_v4_cidrprefix=24,
-            guest_v4_defaultgw="192.168.1.1",
+            guest_v4_ip_addr="192.168.1.100",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="192.168.1.1",
             guest_v4_dns1="192.168.1.10",
             # guest_v4_dns2 is None
-            # guest_net_dnssuffix is None
+            # guest_net_dns_suffix is None
         )
         
         config = generate_guest_config(vm, guest_config_spec=guest)
         
         # Optional fields should not be included if None
         assert "guest_v4_dns2" not in config
-        assert "guest_net_dnssuffix" not in config
+        assert "guest_net_dns_suffix" not in config
     
     def test_config_dict_is_flat(self):
         """Test that generated config is a flat dictionary."""

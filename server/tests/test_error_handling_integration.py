@@ -205,7 +205,7 @@ class TestGuestConfigParameterSets:
             GuestConfigSpec(
                 guest_la_uid="admin",
                 guest_la_pw="password123",
-                guest_domain_jointarget="domain.com",  # Partial - missing other fields
+                guest_domain_join_target="domain.com",  # Partial - missing other fields
             )
         
         errors = exc_info.value.errors()
@@ -216,13 +216,13 @@ class TestGuestConfigParameterSets:
         config = GuestConfigSpec(
             guest_la_uid="admin",
             guest_la_pw="password123",
-            guest_domain_jointarget="domain.com",
-            guest_domain_joinuid="domain\\admin",
-            guest_domain_joinpw="domainpass",
-            guest_domain_joinou="OU=Servers,DC=domain,DC=com",
+            guest_domain_join_target="domain.com",
+            guest_domain_join_uid="domain\\admin",
+            guest_domain_join_pw="domainpass",
+            guest_domain_join_ou="OU=Servers,DC=domain,DC=com",
         )
         
-        assert config.guest_domain_jointarget == "domain.com"
+        assert config.guest_domain_join_target == "domain.com"
 
     def test_partial_static_ip_rejected(self):
         """Reject partial static IP configuration (all-or-none for required fields)."""
@@ -230,7 +230,7 @@ class TestGuestConfigParameterSets:
             GuestConfigSpec(
                 guest_la_uid="admin",
                 guest_la_pw="password123",
-                guest_v4_ipaddr="192.168.1.10",  # Partial - missing gateway, DNS, etc.
+                guest_v4_ip_addr="192.168.1.10",  # Partial - missing gateway, DNS, etc.
             )
         
         errors = exc_info.value.errors()
@@ -241,13 +241,13 @@ class TestGuestConfigParameterSets:
         config = GuestConfigSpec(
             guest_la_uid="admin",
             guest_la_pw="password123",
-            guest_v4_ipaddr="192.168.1.10",
-            guest_v4_cidrprefix=24,
-            guest_v4_defaultgw="192.168.1.1",
+            guest_v4_ip_addr="192.168.1.10",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="192.168.1.1",
             guest_v4_dns1="8.8.8.8",
         )
         
-        assert config.guest_v4_ipaddr == "192.168.1.10"
+        assert config.guest_v4_ip_addr == "192.168.1.10"
 
     def test_partial_ansible_config_rejected(self):
         """Reject partial Ansible configuration (all-or-none)."""
@@ -323,16 +323,16 @@ class TestLargeVMConfiguration:
             guest_config=GuestConfigSpec(
                 guest_la_uid="administrator",
                 guest_la_pw="P@ssw0rd123!",
-                guest_domain_jointarget="corp.example.com",
-                guest_domain_joinuid="CORP\\svc-provisioning",
-                guest_domain_joinpw="DomainP@ss123!",
-                guest_domain_joinou="OU=Servers,OU=Production,DC=corp,DC=example,DC=com",
-                guest_v4_ipaddr="10.0.1.100",
-                guest_v4_cidrprefix=24,
-                guest_v4_defaultgw="10.0.1.1",
+                guest_domain_join_target="corp.example.com",
+                guest_domain_join_uid="CORP\\svc-provisioning",
+                guest_domain_join_pw="DomainP@ss123!",
+                guest_domain_join_ou="OU=Servers,OU=Production,DC=corp,DC=example,DC=com",
+                guest_v4_ip_addr="10.0.1.100",
+                guest_v4_cidr_prefix=24,
+                guest_v4_default_gw="10.0.1.1",
                 guest_v4_dns1="10.0.1.10",
                 guest_v4_dns2="10.0.1.11",
-                guest_net_dnssuffix="corp.example.com",
+                guest_net_dns_suffix="corp.example.com",
                 cnf_ansible_ssh_user="ansible",
                 cnf_ansible_ssh_key="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...",
             ),
@@ -341,8 +341,8 @@ class TestLargeVMConfiguration:
         
         assert deployment.vm_spec.vm_clustered is True
         assert deployment.disk_spec.image_name == "windows-server-2022"
-        assert deployment.guest_config.guest_domain_jointarget == "corp.example.com"
-        assert deployment.guest_config.guest_v4_ipaddr == "10.0.1.100"
+        assert deployment.guest_config.guest_domain_join_target == "corp.example.com"
+        assert deployment.guest_config.guest_v4_ip_addr == "10.0.1.100"
         assert deployment.guest_config.cnf_ansible_ssh_user == "ansible"
 
 
