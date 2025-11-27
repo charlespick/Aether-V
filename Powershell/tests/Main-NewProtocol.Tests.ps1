@@ -504,15 +504,15 @@ Describe 'Main-NewProtocol.ps1 - VM Delete Disk Cleanup Logic' {
     It 'has logic to check for shared disks' {
         $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
         
-        # Should call Get-VHD to check Attached property
-        $scriptContent | Should -Match 'Get-VHD.*-Path'
+        # Should check SupportPersistentReservations property to identify shared disks
+        $scriptContent | Should -Match 'SupportPersistentReservations'
     }
     
     It 'validates no shared disks before deletion' {
         $scriptContent = Get-Content -Path $script:MainScriptPath -Raw
         
         # Should have error handling for shared disks
-        $scriptContent | Should -Match 'Attached.*-gt.*1|shared.*disk'
+        $scriptContent | Should -Match 'SupportPersistentReservations|shared.*disk'
     }
     
     It 'removes disks from VM before deletion' {
