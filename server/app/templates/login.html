@@ -41,9 +41,7 @@
                     <span class="login-version">Version {{ build_metadata.version }}</span>
                 </div>
                 <nav class="login-footer-links" aria-label="Helpful links">
-                    {% if github_url and github_url != 'https://github.com/aether-v/Aether-V' %}
-                    <a href="{{ github_url }}" target="_blank" rel="noopener" class="login-link">GitHub</a>
-                    {% elif build_metadata.github_repository %}
+                    {% if build_metadata.github_repository %}
                     <a href="{{ build_metadata.github_repository }}" target="_blank" rel="noopener" class="login-link">GitHub</a>
                     {% endif %}
                     <a href="{{ api_reference_url }}" class="login-link">API Reference</a>

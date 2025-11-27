@@ -18,10 +18,10 @@ FROM base AS dependencies
 # Install build-time dependencies for Python wheels
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        gcc \
-        python3-dev \
-        libkrb5-dev \
-        libsasl2-dev \
+    gcc \
+    python3-dev \
+    libkrb5-dev \
+    libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -30,6 +30,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 3: Capture build metadata
 FROM base AS build-info
+
+# Accept GITHUB_REPOSITORY as a build argument
+ARG GITHUB_REPOSITORY
 
 WORKDIR /src
 
@@ -107,12 +110,12 @@ WORKDIR /src
 # Install Node.js for license-checker and build dependencies for Python wheels
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        nodejs \
-        npm \
-        gcc \
-        python3-dev \
-        libkrb5-dev \
-        libsasl2-dev \
+    nodejs \
+    npm \
+    gcc \
+    python3-dev \
+    libkrb5-dev \
+    libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install pip-licenses
@@ -143,24 +146,24 @@ COPY ISOs/ ./ISOs/
 RUN set -eux; \
     mkdir -p /artifacts; \
     if [ ! -f ./version ]; then \
-        echo "Missing version file in repository root" >&2; \
-        exit 1; \
+    echo "Missing version file in repository root" >&2; \
+    exit 1; \
     fi; \
     cp ./version /artifacts/version; \
     script_count="$(find ./Powershell -maxdepth 1 -type f -name '*.ps1' | wc -l | tr -d '[:space:]')"; \
     if [ "${script_count}" -eq 0 ]; then \
-        echo "No PowerShell scripts found in Powershell/." >&2; \
-        exit 1; \
+    echo "No PowerShell scripts found in Powershell/." >&2; \
+    exit 1; \
     fi; \
     find ./Powershell -maxdepth 1 -type f -name '*.ps1' -exec cp {} /artifacts/ \;; \
     if [ ! -d ./ISOs ]; then \
-        echo "Missing ISOs directory. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
-        exit 1; \
+    echo "Missing ISOs directory. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
+    exit 1; \
     fi; \
     iso_count="$(find ./ISOs -maxdepth 1 -type f -name '*.iso' | wc -l | tr -d '[:space:]')"; \
     if [ "${iso_count}" -eq 0 ]; then \
-        echo "No ISO artifacts found in ISOs/. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
-        exit 1; \
+    echo "No ISO artifacts found in ISOs/. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
+    exit 1; \
     fi; \
     find ./ISOs -maxdepth 1 -type f -name '*.iso' -exec cp {} /artifacts/ \;
 
@@ -169,11 +172,11 @@ FROM base AS application
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        krb5-user \
-        libkrb5-3 \
-        libgssapi-krb5-2 \
-        libk5crypto3 \
-        libcomerr2 \
+    krb5-user \
+    libkrb5-3 \
+    libgssapi-krb5-2 \
+    libk5crypto3 \
+    libcomerr2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python dependencies from previous stage

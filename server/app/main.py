@@ -48,7 +48,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-PROJECT_GITHUB_URL = "https://github.com/aether-v/Aether-V"
 API_REFERENCE_URL = "/docs"
 
 
@@ -615,10 +614,7 @@ async def root(request: Request):
             if not is_authenticated:
                 logger.info(
                     "Unauthenticated request for UI; rendering login page")
-                
-                # Use dynamic GitHub URL from build metadata if available, otherwise fall back to hardcoded value
-                github_url = build_metadata.github_repository or PROJECT_GITHUB_URL
-                
+
                 response = templates.TemplateResponse(
                     "login.html",
                     {
@@ -628,7 +624,6 @@ async def root(request: Request):
                         "app_name": settings.app_name,
                         "build_metadata": build_metadata,
                         "build_metadata_payload": _build_metadata_payload(),
-                        "github_url": github_url,
                         "api_reference_url": API_REFERENCE_URL,
                     },
                     status_code=status.HTTP_200_OK,
