@@ -152,6 +152,9 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             output=[],
         )
 
+        # Enrich metadata first (source of truth)
+        await self.job_service._enrich_job_metadata(job)
+        
         await self.job_service._sync_job_notification(job)
 
         self.assertIsNotNone(job.notification_id)
