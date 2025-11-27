@@ -78,7 +78,7 @@ def detect_os_family_from_image_name(image_name: Optional[str]) -> OSFamily:
     Returns:
         OSFamily.LINUX if a Linux distribution is detected, otherwise OSFamily.WINDOWS
     """
-    if not image_name:
+    if not image_name or not image_name.strip():
         return OSFamily.WINDOWS
 
     image_name_lower = image_name.lower()
@@ -1099,14 +1099,16 @@ class JobService:
         # Detect OS family from image name for secure boot configuration
         # The managed deployment service is responsible for parsing the image name
         # and setting the os_family field so the host agent can configure secure boot correctly
-        detected_os_family = None
-        if request.disk_spec and request.disk_spec.image_name:
-            detected_os_family = detect_os_family_from_image_name(
-                request.disk_spec.image_name
-            )
+        image_name = (
+            request.disk_spec.image_name
+            if request.disk_spec
+            else None
+        )
+        detected_os_family = detect_os_family_from_image_name(image_name)
+        if image_name:
             await self._append_job_output(
                 job.job_id,
-                f"Detected OS family '{detected_os_family.value}' from image '{request.disk_spec.image_name}'",
+                f"Detected OS family '{detected_os_family.value}' from image '{image_name}'",
             )
 
         # Step 1: Create VM as a child job
@@ -1117,8 +1119,7 @@ class JobService:
 
         # Build VM spec with OS family for secure boot configuration
         vm_spec_dict = request.vm_spec.model_dump()
-        if detected_os_family:
-            vm_spec_dict["os_family"] = detected_os_family.value
+        vm_spec_dict["os_family"] = detected_os_family.value
 
         vm_job_definition = {
             "schema": {"id": "vm.create", "version": 1},
@@ -1261,8 +1262,7 @@ class JobService:
                 }
 
                 # Pass OS family to initialize job for correct provisioning ISO
-                if detected_os_family:
-                    init_fields["os_family"] = detected_os_family.value
+                init_fields["os_family"] = detected_os_family.value
 
                 init_job_definition = {
                     "schema": {"id": "initialize-vm", "version": 1},
