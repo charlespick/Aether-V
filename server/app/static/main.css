@@ -4052,6 +4052,8 @@ tbody tr:last-child td {
     margin-top: 16px;
     padding-top: 16px;
     border-top: 1px solid var(--border-color);
+}
+
 /* Confirmation Dialog Overlay */
 .confirm-dialog-overlay {
     position: fixed;
@@ -4163,16 +4165,4 @@ tbody tr:last-child td {
     padding: 16px 24px 20px;
     border-top: 1px solid var(--border-color);
     justify-content: flex-end;
-}
-
-/* Admin section styling */
-.admin-section .setting-item {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    border-radius: 8px;
-}
-
-[data-theme="dark"] .admin-section .setting-item {
-    background: rgba(239, 68, 68, 0.1);
-    border-color: rgba(239, 68, 68, 0.3);
 }

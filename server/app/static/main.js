@@ -726,6 +726,7 @@ async function checkAuthenticationStatus() {
 
             if (data.authenticated) {
                 userInfo = data.user;
+                window.userInfo = userInfo;
 
                 // Ensure profile button is visible when auth is enabled
                 const profileBtn = document.getElementById('profile-btn');
@@ -740,6 +741,7 @@ async function checkAuthenticationStatus() {
                 console.log('Not authenticated:', data.reason);
                 // Clear any local state
                 userInfo = null;
+                window.userInfo = null;
                 localStorage.removeItem('authToken'); // Clean up any old localStorage
 
                 // Always show profile button, even if auth disabled
@@ -841,6 +843,7 @@ async function logout() {
 
     // Clear local state
     userInfo = null;
+    window.userInfo = null;
 
     updateProfileOverlayContent(userInfo);
 

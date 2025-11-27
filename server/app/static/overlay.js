@@ -59,6 +59,12 @@ class OverlayManager {
 
         // Create and render overlay
         this.currentOverlay = new OverlayClass(data);
+        
+        // Store instance globally for onclick handlers
+        if (overlayName === 'settings') {
+            window.settingsOverlayInstance = this.currentOverlay;
+        }
+        
         const content = await this.currentOverlay.render();
         const title = this.currentOverlay.getTitle();
 
@@ -353,6 +359,7 @@ class SettingsOverlay extends BaseOverlay {
                                 id="redeploy-scripts-btn"
                                 ${this.hasAdminPermission() ? '' : 'disabled'}
                                 title="${this.hasAdminPermission() ? 'Redeploy provisioning scripts to all hosts' : 'Requires admin role'}"
+                                onclick="if (window.settingsOverlayInstance) window.settingsOverlayInstance.showRedeployConfirmation()"
                             >
                                 Redeploy
                             </button>
@@ -403,10 +410,24 @@ class SettingsOverlay extends BaseOverlay {
             ossAttributionsBtn.addEventListener('click', this.ossAttributionsHandler);
         }
         // Setup redeploy button handler
-        const redeployBtn = document.getElementById('redeploy-scripts-btn');
-        if (redeployBtn) {
-            this.redeployHandler = () => this.showRedeployConfirmation();
-            redeployBtn.addEventListener('click', this.redeployHandler);
+        try {
+            const redeployBtn = document.getElementById('redeploy-scripts-btn');
+            if (redeployBtn) {
+                // Update button state based on current permissions
+                const hasPermission = this.hasAdminPermission();
+                if (hasPermission) {
+                    redeployBtn.removeAttribute('disabled');
+                    redeployBtn.title = 'Redeploy provisioning scripts to all hosts';
+                } else {
+                    redeployBtn.setAttribute('disabled', 'disabled');
+                    redeployBtn.title = 'Requires admin role';
+                }
+                
+                this.redeployHandler = () => this.showRedeployConfirmation();
+                redeployBtn.addEventListener('click', this.redeployHandler);
+            }
+        } catch (error) {
+            console.error('Error setting up redeploy button:', error);
         }
 
         this.aboutExpanded = false;
