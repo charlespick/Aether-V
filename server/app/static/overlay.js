@@ -359,7 +359,6 @@ class SettingsOverlay extends BaseOverlay {
                                 id="redeploy-scripts-btn"
                                 ${this.hasAdminPermission() ? '' : 'disabled'}
                                 title="${this.hasAdminPermission() ? 'Redeploy provisioning scripts to all hosts' : 'Requires admin role'}"
-                                onclick="if (window.settingsOverlayInstance) window.settingsOverlayInstance.showRedeployConfirmation()"
                             >
                                 Redeploy
                             </button>
