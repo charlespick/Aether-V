@@ -10,6 +10,7 @@ from typing import Optional
 import httpx
 
 from ..core.build_info import build_metadata
+from ..core.config import settings
 from ..core.models import NotificationLevel
 from .notification_service import notification_service
 
@@ -207,7 +208,7 @@ class UpdateCheckerService:
                     UPDATE_NOTIFICATION_KEY,
                     title="Application update available",
                     message=(
-                        f"A new version of Aether-V is available: {latest_normalized}. "
+                        f"A new version of {settings.app_name} is available: {latest_normalized}. "
                         f"You are currently running version {current_normalized}."
                     ),
                     level=NotificationLevel.INFO,
