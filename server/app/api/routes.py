@@ -708,7 +708,7 @@ async def update_vm_resource(
 async def delete_vm_resource(
     vm_id: str,
     force: bool = False,
-    delete_disks: bool = True,
+    delete_disks: bool = False,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Delete a VM by ID using the job queue."""
