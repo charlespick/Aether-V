@@ -43,6 +43,8 @@ from ..core.models import (
     OSSLicenseResponse,
     OSSPackage,
     OSSLicenseSummary,
+    NotificationLevel,
+    NotificationCategory,
 )
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
@@ -405,6 +407,100 @@ async def get_service_diagnostics(
     )
 
 
+@router.post(
+    "/api/v1/admin/redeploy",
+    tags=["Admin"],
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def trigger_redeploy(
+    user: dict = Depends(require_permission(Permission.ADMIN)),
+):
+    """Trigger redeployment of host scripts to all configured hosts.
+
+    This endpoint waits for all running jobs to complete, then triggers
+    a force redeployment of provisioning scripts to all Hyper-V hosts.
+    During redeployment, inventory refresh is paused and VM provisioning
+    operations are unavailable.
+
+    Requires admin role.
+    """
+    # Check if already in progress
+    if host_deployment_service.is_startup_in_progress():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A redeployment is already in progress",
+        )
+
+    # Get configured hosts
+    host_list = settings.get_hyperv_hosts_list()
+    if not host_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Hyper-V hosts are configured",
+        )
+
+    # Check that deployment service is enabled
+    if not host_deployment_service.is_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Host deployment service is disabled because "
+                "AGENT_DOWNLOAD_BASE_URL is not configured"
+            ),
+        )
+
+    # Get running job count
+    running_jobs = await job_service.get_running_jobs_count()
+
+    # Start the redeployment process in the background
+    asyncio.create_task(_execute_redeploy(host_list, running_jobs))
+
+    return {
+        "status": "accepted",
+        "message": (
+            f"Redeployment initiated. Waiting for {running_jobs} running job(s) "
+            "to complete before starting redeployment."
+            if running_jobs > 0
+            else "Redeployment initiated. Starting immediately."
+        ),
+        "running_jobs": running_jobs,
+        "target_hosts": len(host_list),
+    }
+
+
+async def _execute_redeploy(host_list: List[str], running_jobs: int) -> None:
+    """Background task to execute the redeployment process."""
+    try:
+        if running_jobs > 0:
+            logger.info(
+                "Waiting for %d running job(s) to complete before redeploying",
+                running_jobs,
+            )
+            # Wait for running jobs with a reasonable timeout
+            jobs_completed = await job_service.wait_for_running_jobs(
+                timeout=600.0,  # 10 minutes max wait
+                poll_interval=2.0,
+            )
+            if not jobs_completed:
+                logger.warning(
+                    "Not all jobs completed within timeout; proceeding with redeployment anyway"
+                )
+
+        logger.info("Starting force redeployment to %d host(s)",
+                    len(host_list))
+        await host_deployment_service.force_redeploy_all_hosts(host_list)
+        logger.info("Force redeployment completed successfully")
+
+    except Exception as exc:
+        logger.exception("Force redeployment failed: %s", exc)
+        notification_service.create_notification(
+            title="Host Script Redeployment Failed",
+            message=f"Failed to redeploy host scripts: {exc}",
+            level=NotificationLevel.ERROR,
+            category=NotificationCategory.HOST,
+        )
+
+
 @router.get("/api/v1/about", response_model=AboutResponse, tags=["About"])
 async def get_about(user: dict = Depends(require_permission(Permission.READER))):
     """Return metadata for the About screen."""
@@ -579,8 +675,6 @@ async def reset_vm_action(
     """Reset (power cycle) a running virtual machine."""
 
     return await _handle_vm_action("reset", vm_id)
-
-
 
 
 @router.get("/api/v1/jobs", response_model=List[Job], tags=["Jobs"])
