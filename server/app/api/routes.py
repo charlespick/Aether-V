@@ -9,6 +9,7 @@ import secrets
 import uuid
 import zlib
 from urllib.parse import urlencode, urlsplit, urlunsplit
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
@@ -528,13 +529,12 @@ async def get_oss_licenses(user: dict = Depends(require_permission(Permission.RE
     This endpoint provides license information for all open source packages
     used by the application, including both Python and JavaScript dependencies.
     """
-    from pathlib import Path
-
     # Look for the license file in expected locations
     app_dir = Path(__file__).resolve().parent.parent
     license_paths = [
         app_dir.parent / "oss-licenses.json",  # Container: /app/oss-licenses.json
-        app_dir.parent.parent / "oss-licenses.json",  # Development: server/oss-licenses.json
+        # Development: server/oss-licenses.json
+        app_dir.parent.parent / "oss-licenses.json",
     ]
 
     license_data = None
@@ -544,7 +544,8 @@ async def get_oss_licenses(user: dict = Depends(require_permission(Permission.RE
                 license_data = json.loads(path.read_text(encoding="utf-8"))
                 break
             except (json.JSONDecodeError, IOError) as e:
-                logger.warning("Failed to read OSS licenses from %s: %s", path, e)
+                logger.warning(
+                    "Failed to read OSS licenses from %s: %s", path, e)
 
     if license_data is None:
         # Return empty response if no license file is found
