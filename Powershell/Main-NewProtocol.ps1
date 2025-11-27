@@ -48,13 +48,13 @@ begin {
     $versionFilePath = Join-Path $scriptRoot 'version'
     if (Test-Path -LiteralPath $versionFilePath -PathType Leaf) {
         $rawVersion = Get-Content -LiteralPath $versionFilePath -Raw -ErrorAction SilentlyContinue
-        if ($rawVersion) {
+        if (-not [string]::IsNullOrWhiteSpace($rawVersion)) {
             $global:ProvisioningScriptsVersion = $rawVersion.Trim()
         }
     }
     
-    if (-not $global:ProvisioningScriptsVersion) {
-        throw "FATAL: Could not read provisioning scripts version from '$versionFilePath'. Ensure the version file is deployed with the agent scripts."
+    if ([string]::IsNullOrWhiteSpace($global:ProvisioningScriptsVersion)) {
+        throw "FATAL: Could not read provisioning scripts version from '$versionFilePath'. Ensure the version file is deployed with the agent scripts and contains a valid version string."
     }
 }
 
@@ -979,8 +979,14 @@ end {
                 $publishParams['AnsibleSshKey'] = $resourceSpec['cnf_ansible_ssh_key']
             }
             
-            # Set password environment variables (secure pattern to avoid command-line exposure)
-            # These are read by Invoke-ProvisioningPublishProvisioningData
+            # Password handling: Environment variables are used instead of command-line parameters
+            # to avoid exposing credentials in process listings. While environment variables are
+            # visible to child processes, this is acceptable here because:
+            # 1. No child processes are spawned during password transmission
+            # 2. Variables are cleared immediately after use in the finally block
+            # 3. The provisioning publish function encrypts data before transmission via KVP
+            # Note: SecureString would require changes throughout the entire provisioning chain
+            # and would not prevent memory exposure in the receiving guest agent.
             if ($resourceSpec.ContainsKey('guest_la_pw') -and $resourceSpec['guest_la_pw']) {
                 $env:GuestLaPw = $resourceSpec['guest_la_pw']
             } else {
@@ -996,7 +1002,7 @@ end {
                 $logs += "Provisioning data published successfully"
             }
             finally {
-                # Clear sensitive environment variables
+                # Clear sensitive environment variables immediately after use
                 $env:GuestLaPw = $null
                 $env:GuestDomainJoinPw = $null
             }
