@@ -36,9 +36,12 @@ begin {
     
     # Source common provisioning functions
     $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-    Get-ChildItem -Path (Join-Path $scriptRoot 'Provisioning.*.ps1') -File |
-    Sort-Object Name |
-    ForEach-Object { . $_.FullName }
+    . (Join-Path $scriptRoot 'Provisioning.CleanupISO.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.CopyImage.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.CopyProvisioningISO.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.PublishProvisioningData.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.RegisterVM.ps1')
+    . (Join-Path $scriptRoot 'Provisioning.WaitForProvisioningKey.ps1')
 }
 
 process {
@@ -467,11 +470,11 @@ end {
             $logs += "VM deleted successfully"
             
             $resultData = @{
-                vm_id   = $vmId
-                vm_name = $vmName
-                status  = "deleted"
+                vm_id         = $vmId
+                vm_name       = $vmName
+                status        = "deleted"
                 disks_deleted = $deleteDisks
-                disk_count = $diskPaths.Count
+                disk_count    = $diskPaths.Count
             }
 
             Write-JobResult `
