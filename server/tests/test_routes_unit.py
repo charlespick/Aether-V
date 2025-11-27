@@ -44,6 +44,7 @@ def test_current_build_info_returns_model(monkeypatch):
         git_commit="abc",
         git_ref="main",
         git_state="clean",
+        github_repository="https://github.com/test/repo",
         build_time=datetime(2024, 1, 2),
         build_host="builder",
     )
@@ -63,6 +64,7 @@ async def test_health_check_includes_build_metadata(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )
@@ -83,6 +85,7 @@ async def test_readiness_check_reflects_config_errors(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )
@@ -108,6 +111,7 @@ async def test_readiness_check_without_errors_reports_ready(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )
@@ -367,3 +371,81 @@ async def test_logout_get_handles_post_logout_callback(monkeypatch):
 
     assert isinstance(response, routes.RedirectResponse)
     assert response.headers["location"] == "http://example.com/"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_trigger_redeploy_success(monkeypatch):
+    """Test that the redeploy endpoint accepts a valid request."""
+    from app.api.routes import trigger_redeploy
+
+    # Mock a user with admin permissions
+    user = {"sub": "admin1", "permissions": ["admin"]}
+    
+    # Mock the service state
+    monkeypatch.setattr(routes.host_deployment_service, "is_startup_in_progress", lambda: False)
+    monkeypatch.setattr(routes.host_deployment_service, "_deployment_enabled", True, raising=False)
+    monkeypatch.setattr(routes.settings, "hyperv_hosts", "host1,host2")
+    
+    # Mock job service to report no running jobs
+    async def mock_get_running_jobs_count():
+        return 0
+    monkeypatch.setattr(routes.job_service, "get_running_jobs_count", mock_get_running_jobs_count)
+
+    result = await trigger_redeploy(user)
+    assert result["status"] == "accepted"
+    assert result["target_hosts"] == 2
+
+
+@pytest.mark.anyio("asyncio")
+async def test_trigger_redeploy_rejects_when_already_in_progress(monkeypatch):
+    """Test that redeploy returns 409 when a deployment is already running."""
+    from app.api.routes import trigger_redeploy
+    from fastapi import HTTPException
+
+    user = {"sub": "admin1", "permissions": ["admin"]}
+    
+    # Mock deployment in progress
+    monkeypatch.setattr(routes.host_deployment_service, "is_startup_in_progress", lambda: True)
+
+    with pytest.raises(HTTPException) as exc:
+        await trigger_redeploy(user)
+    
+    assert exc.value.status_code == 409
+    assert "already in progress" in exc.value.detail
+
+
+@pytest.mark.anyio("asyncio")
+async def test_trigger_redeploy_rejects_when_no_hosts_configured(monkeypatch):
+    """Test that redeploy returns 400 when no hosts are configured."""
+    from app.api.routes import trigger_redeploy
+    from fastapi import HTTPException
+
+    user = {"sub": "admin1", "permissions": ["admin"]}
+    
+    monkeypatch.setattr(routes.host_deployment_service, "is_startup_in_progress", lambda: False)
+    monkeypatch.setattr(routes.settings, "hyperv_hosts", "")
+
+    with pytest.raises(HTTPException) as exc:
+        await trigger_redeploy(user)
+    
+    assert exc.value.status_code == 400
+    assert "No Hyper-V hosts" in exc.value.detail
+
+
+@pytest.mark.anyio("asyncio")
+async def test_trigger_redeploy_rejects_when_service_disabled(monkeypatch):
+    """Test that redeploy returns 503 when deployment service is disabled."""
+    from app.api.routes import trigger_redeploy
+    from fastapi import HTTPException
+
+    user = {"sub": "admin1", "permissions": ["admin"]}
+    
+    monkeypatch.setattr(routes.host_deployment_service, "is_startup_in_progress", lambda: False)
+    monkeypatch.setattr(routes.settings, "hyperv_hosts", "host1")
+    monkeypatch.setattr(routes.host_deployment_service, "_deployment_enabled", False, raising=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await trigger_redeploy(user)
+    
+    assert exc.value.status_code == 503
+    assert "disabled" in exc.value.detail

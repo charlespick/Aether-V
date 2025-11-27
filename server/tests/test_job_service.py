@@ -152,6 +152,9 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             output=[],
         )
 
+        # Enrich metadata first (source of truth)
+        await self.job_service._enrich_job_metadata(job)
+
         await self.job_service._sync_job_notification(job)
 
         self.assertIsNotNone(job.notification_id)
@@ -209,7 +212,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
 
     async def test_line_buffer_handles_plain_text_across_chunks(self):
         """Test that line buffering works across chunk boundaries.
-        
+
         Since pypsrp handles CLIXML deserialization internally, we receive
         plain text that just needs line buffering.
         """
@@ -265,7 +268,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
 
     async def test_line_buffer_handles_incomplete_lines_across_chunks(self):
         """Test that incomplete lines are buffered until newline arrives.
-        
+
         This verifies line buffering works when a line is split across
         multiple chunks without a newline.
         """
@@ -425,6 +428,9 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         async with self.job_service._lock:
             self.job_service.jobs[job.job_id] = job
 
+        # Enrich metadata before updating job status
+        await self.job_service._enrich_job_metadata(job)
+
         await self.job_service._update_job(
             job.job_id,
             status=JobStatus.RUNNING,
@@ -454,6 +460,9 @@ class JobServiceTests(IsolatedAsyncioTestCase):
 
         async with self.job_service._lock:
             self.job_service.jobs[job.job_id] = job
+
+        # Enrich metadata before updating job status
+        await self.job_service._enrich_job_metadata(job)
 
         await self.job_service._update_job(
             job.job_id,
@@ -571,7 +580,8 @@ class JobServiceTests(IsolatedAsyncioTestCase):
                 # Verify definition is stored in parameters
                 self.assertIn("definition", stored.parameters)
                 definition = stored.parameters["definition"]
-                self.assertEqual(definition["fields"]["vm_id"], "12345678-1234-1234-1234-123456789abc")
+                self.assertEqual(
+                    definition["fields"]["vm_id"], "12345678-1234-1234-1234-123456789abc")
                 self.assertEqual(definition["fields"]["vm_name"], "test-vm")
         finally:
             self.job_service._process_job = original_process

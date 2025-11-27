@@ -262,6 +262,7 @@ class BuildInfo(BaseModel):
     git_commit: Optional[str] = None
     git_ref: Optional[str] = None
     git_state: Optional[str] = None
+    github_repository: Optional[str] = None
     build_time: Optional[datetime] = None
     build_host: Optional[str] = None
 
@@ -288,6 +289,32 @@ class NotificationsResponse(BaseModel):
     notifications: List[Notification]
     total_count: int
     unread_count: int
+
+
+class OSSPackage(BaseModel):
+    """Information about an open source package."""
+
+    name: str
+    version: str
+    license: str
+    author: Optional[str] = None
+    url: Optional[str] = None
+    ecosystem: str
+
+
+class OSSLicenseSummary(BaseModel):
+    """Summary statistics for OSS license information."""
+
+    total: int
+    python: int
+    javascript: int
+
+
+class OSSLicenseResponse(BaseModel):
+    """Response containing OSS license information."""
+
+    packages: List[OSSPackage]
+    summary: OSSLicenseSummary
 
 
 class RemoteTaskPoolMetrics(BaseModel):

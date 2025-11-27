@@ -36,6 +36,10 @@ class BuildMetadata(BaseModel):
         default=None,
         description="State of the Git repository (branch, detached, or unknown)",
     )
+    github_repository: Optional[str] = Field(
+        default=None,
+        description="GitHub repository URL if built in GitHub Actions",
+    )
     build_time: Optional[datetime] = Field(
         default=None, description="Timestamp when the container image was built"
     )
@@ -105,6 +109,7 @@ def _load_build_metadata() -> BuildMetadata:
         git_commit=metadata.get("git_commit"),
         git_ref=metadata.get("git_ref"),
         git_state=metadata.get("git_state"),
+        github_repository=metadata.get("github_repository"),
         build_time=build_time,
         build_host=metadata.get("build_host"),
     )

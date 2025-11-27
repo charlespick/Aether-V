@@ -59,6 +59,12 @@ class OverlayManager {
 
         // Create and render overlay
         this.currentOverlay = new OverlayClass(data);
+        
+        // Store instance globally for onclick handlers
+        if (overlayName === 'settings') {
+            window.settingsOverlayInstance = this.currentOverlay;
+        }
+        
         const content = await this.currentOverlay.render();
         const title = this.currentOverlay.getTitle();
 
@@ -103,6 +109,7 @@ class OverlayManager {
         this.registerOverlay('nic-create', NicCreateOverlay);
         this.registerOverlay('nic-edit', NicEditOverlay);
         this.registerOverlay('vm-edit', VMEditOverlay);
+        this.registerOverlay('oss-attributions', OSSAttributionsOverlay);
     }
 }
 
@@ -149,10 +156,19 @@ class SettingsOverlay extends BaseOverlay {
         this.diagnosticsData = null;
         this.aboutSeeMoreHandler = null;
         this.aboutExpanded = false;
+        this.redeployHandler = null;
+        this.confirmDialogHandler = null;
     }
 
     getTitle() {
         return 'Settings';
+    }
+
+    hasAdminPermission() {
+        const permissions = window.userInfo?.permissions || [];
+        return permissions.some(
+            (p) => String(p).toLowerCase() === 'admin'
+        );
     }
 
     async render() {
@@ -294,7 +310,7 @@ class SettingsOverlay extends BaseOverlay {
                             src="/assets/Logo.png"
                             alt="${productName} logo"
                             class="about-logo"
-                            loading="lazy"
+                            loading="eager"
                         />
                         <div class="about-brand-text">
                             <p class="about-name">${productName}</p>
@@ -304,6 +320,15 @@ class SettingsOverlay extends BaseOverlay {
                     ${summaryMarkup}
                     ${moreDetailsMarkup}
                     ${seeMoreButtonMarkup}
+                    <div class="about-actions-row">
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            id="oss-attributions-btn"
+                        >
+                            OSS Attributions
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -316,6 +341,29 @@ class SettingsOverlay extends BaseOverlay {
                 </div>
                 <div class="diagnostics-content" id="diagnostics-content">
                     ${diagnosticsMarkup}
+                </div>
+            </div>
+
+            <div class="settings-section admin-section" id="admin-section" hidden aria-hidden="true">
+                <h3>Administration</h3>
+                <div class="setting-item">
+                    <div class="setting-header">
+                        <div class="setting-info">
+                            <div class="setting-title">Redeploy Host Scripts</div>
+                            <div class="setting-description">Force redeploy provisioning scripts to all Hyper-V hosts. Running jobs will be allowed to complete first.</div>
+                        </div>
+                        <div class="setting-control">
+                            <button
+                                type="button"
+                                class="btn btn-secondary"
+                                id="redeploy-scripts-btn"
+                                ${this.hasAdminPermission() ? '' : 'disabled'}
+                                title="${this.hasAdminPermission() ? 'Redeploy provisioning scripts to all hosts' : 'Requires admin role'}"
+                            >
+                                Redeploy
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -350,6 +398,35 @@ class SettingsOverlay extends BaseOverlay {
                 this.updateAboutExpansion();
             };
             seeMoreBtn.addEventListener('click', this.aboutSeeMoreHandler);
+        }
+
+        const ossAttributionsBtn = document.getElementById('oss-attributions-btn');
+        if (ossAttributionsBtn) {
+            this.ossAttributionsHandler = () => {
+                overlayManager.close();
+                overlayManager.open('oss-attributions');
+            };
+            ossAttributionsBtn.addEventListener('click', this.ossAttributionsHandler);
+        }
+        // Setup redeploy button handler
+        try {
+            const redeployBtn = document.getElementById('redeploy-scripts-btn');
+            if (redeployBtn) {
+                // Update button state based on current permissions
+                const hasPermission = this.hasAdminPermission();
+                if (hasPermission) {
+                    redeployBtn.removeAttribute('disabled');
+                    redeployBtn.title = 'Redeploy provisioning scripts to all hosts';
+                } else {
+                    redeployBtn.setAttribute('disabled', 'disabled');
+                    redeployBtn.title = 'Requires admin role';
+                }
+                
+                this.redeployHandler = () => this.showRedeployConfirmation();
+                redeployBtn.addEventListener('click', this.redeployHandler);
+            }
+        } catch (error) {
+            console.error('Error setting up redeploy button:', error);
         }
 
         this.aboutExpanded = false;
@@ -394,6 +471,27 @@ class SettingsOverlay extends BaseOverlay {
             }
             this.aboutSeeMoreHandler = null;
         }
+
+        if (this.ossAttributionsHandler) {
+            const ossAttributionsBtn = document.getElementById('oss-attributions-btn');
+            if (ossAttributionsBtn) {
+                ossAttributionsBtn.removeEventListener('click', this.ossAttributionsHandler);
+            }
+            this.ossAttributionsHandler = null;
+        }
+        if (this.redeployHandler) {
+            const redeployBtn = document.getElementById('redeploy-scripts-btn');
+            if (redeployBtn) {
+                redeployBtn.removeEventListener('click', this.redeployHandler);
+            }
+            this.redeployHandler = null;
+        }
+
+        // Remove any confirmation dialog that might be open
+        const confirmDialog = document.getElementById('redeploy-confirm-dialog');
+        if (confirmDialog) {
+            confirmDialog.remove();
+        }
     }
 
     updateAboutExpansion() {
@@ -416,6 +514,113 @@ class SettingsOverlay extends BaseOverlay {
             diagnosticsSection.classList.toggle('is-expanded', expanded);
             diagnosticsSection.setAttribute('aria-hidden', expanded ? 'false' : 'true');
             diagnosticsSection.toggleAttribute('hidden', !expanded);
+        }
+
+        // Also toggle admin section visibility
+        const adminSection = document.getElementById('admin-section');
+        if (adminSection) {
+            adminSection.classList.toggle('is-expanded', expanded);
+            adminSection.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            adminSection.toggleAttribute('hidden', !expanded);
+        }
+    }
+
+    showRedeployConfirmation() {
+        // Create confirmation dialog
+        const existingDialog = document.getElementById('redeploy-confirm-dialog');
+        if (existingDialog) {
+            existingDialog.remove();
+        }
+
+        const dialog = document.createElement('div');
+        dialog.id = 'redeploy-confirm-dialog';
+        dialog.className = 'confirm-dialog-overlay';
+        dialog.innerHTML = `
+            <div class="confirm-dialog">
+                <div class="confirm-dialog-header">
+                    <h3>Confirm Redeploy Host Scripts</h3>
+                </div>
+                <div class="confirm-dialog-content">
+                    <p>This action will:</p>
+                    <ul>
+                        <li>Wait for all running jobs to complete</li>
+                        <li>Temporarily pause VM provisioning operations</li>
+                        <li>Redeploy all provisioning scripts to Hyper-V hosts</li>
+                        <li>Restart the inventory refresh cycle</li>
+                    </ul>
+                    <p class="confirm-dialog-warning">
+                        <strong>Note:</strong> VM provisioning will be unavailable during the redeployment process.
+                    </p>
+                </div>
+                <div class="confirm-dialog-actions">
+                    <button type="button" class="btn btn-secondary" id="redeploy-cancel">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="redeploy-confirm">Redeploy Scripts</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(dialog);
+
+        // Add event listeners
+        const cancelBtn = document.getElementById('redeploy-cancel');
+        const confirmBtn = document.getElementById('redeploy-confirm');
+
+        cancelBtn.addEventListener('click', () => {
+            dialog.remove();
+        });
+
+        confirmBtn.addEventListener('click', async () => {
+            await this.executeRedeploy();
+            dialog.remove();
+        });
+
+        // Close on backdrop click
+        dialog.addEventListener('click', (e) => {
+            if (e.target === dialog) {
+                dialog.remove();
+            }
+        });
+    }
+
+    async executeRedeploy() {
+        const redeployBtn = document.getElementById('redeploy-scripts-btn');
+        if (redeployBtn) {
+            redeployBtn.disabled = true;
+            redeployBtn.textContent = 'Redeploying...';
+        }
+
+        try {
+            const response = await fetch('/api/v1/admin/redeploy', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                // Close the settings overlay
+                overlayManager.close();
+                // Show a toast or notification (if available)
+                console.log('Redeploy initiated:', result.message);
+            } else {
+                const errorMsg = result?.detail || 'Failed to initiate redeployment';
+                console.error('Redeploy failed:', errorMsg);
+                if (redeployBtn) {
+                    redeployBtn.disabled = false;
+                    redeployBtn.textContent = 'Redeploy';
+                }
+                alert(`Failed to redeploy: ${errorMsg}`);
+            }
+        } catch (error) {
+            console.error('Redeploy error:', error);
+            if (redeployBtn) {
+                redeployBtn.disabled = false;
+                redeployBtn.textContent = 'Redeploy';
+            }
+            alert(`Failed to redeploy: ${error.message}`);
         }
     }
 
@@ -2335,6 +2540,135 @@ class VMEditOverlay extends BaseOverlay {
         } catch (error) {
             console.error('VM update error:', error);
             this.messagesEl.innerHTML = `<div class="form-error">Failed to update VM: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// OSS Attributions Overlay - Displays open source license information
+class OSSAttributionsOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.licenses = null;
+        this.loading = true;
+        this.error = null;
+    }
+
+    getTitle() {
+        return 'Open Source Licenses';
+    }
+
+    async render() {
+        // Fetch license data
+        await this.fetchLicenses();
+
+        if (this.loading) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-loading">Loading license information...</div>
+                </div>
+            `;
+        }
+
+        if (this.error) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-error">${this.escapeHtml(this.error)}</div>
+                </div>
+            `;
+        }
+
+        const packages = this.licenses?.packages || [];
+        const summary = this.licenses?.summary || {};
+
+        if (packages.length === 0) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-empty">No license information available.</div>
+                </div>
+            `;
+        }
+
+        const pythonPackages = packages.filter(p => p.ecosystem === 'python');
+        const jsPackages = packages.filter(p => p.ecosystem === 'javascript');
+
+        return `
+            <div class="oss-attributions">
+                <div class="oss-intro">
+                    <p>This software includes open source components. We thank the authors and maintainers of these packages for their contributions to the open source community.</p>
+                    <div class="oss-summary">
+                        <span class="oss-summary-item"><strong>${summary.total || packages.length}</strong> packages</span>
+                        <span class="oss-summary-divider">•</span>
+                        <span class="oss-summary-item"><strong>${summary.python || pythonPackages.length}</strong> Python</span>
+                        <span class="oss-summary-divider">•</span>
+                        <span class="oss-summary-item"><strong>${summary.javascript || jsPackages.length}</strong> JavaScript</span>
+                    </div>
+                </div>
+
+                ${pythonPackages.length > 0 ? `
+                    <div class="oss-section">
+                        <h3 class="oss-section-title">Python Packages</h3>
+                        <div class="oss-package-list">
+                            ${pythonPackages.map(pkg => this.renderPackage(pkg)).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+
+                ${jsPackages.length > 0 ? `
+                    <div class="oss-section">
+                        <h3 class="oss-section-title">JavaScript Packages</h3>
+                        <div class="oss-package-list">
+                            ${jsPackages.map(pkg => this.renderPackage(pkg)).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+
+    renderPackage(pkg) {
+        const name = this.escapeHtml(pkg.name || 'Unknown');
+        const version = this.escapeHtml(pkg.version || '');
+        const license = this.escapeHtml(pkg.license || 'Unknown');
+        const author = pkg.author ? this.escapeHtml(pkg.author) : null;
+        const url = pkg.url || '';
+
+        const nameDisplay = url
+            ? `<a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="oss-package-link">${name}</a>`
+            : `<span class="oss-package-name">${name}</span>`;
+
+        return `
+            <div class="oss-package">
+                <div class="oss-package-header">
+                    ${nameDisplay}
+                    ${version ? `<span class="oss-package-version">${version}</span>` : ''}
+                </div>
+                <div class="oss-package-details">
+                    <span class="oss-package-license">${license}</span>
+                    ${author ? `<span class="oss-package-author">by ${author}</span>` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    async fetchLicenses() {
+        this.loading = true;
+        this.error = null;
+
+        try {
+            const response = await fetch('/api/v1/oss-licenses', {
+                credentials: 'same-origin',
+            });
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch license information: ${response.statusText}`);
+            }
+
+            this.licenses = await response.json();
+        } catch (error) {
+            console.error('Failed to fetch OSS licenses:', error);
+            this.error = 'Unable to load license information. Please try again later.';
+        } finally {
+            this.loading = false;
         }
     }
 }

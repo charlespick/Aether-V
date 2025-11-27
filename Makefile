@@ -61,7 +61,7 @@ test:
 	@echo ""
 	@echo "=== JavaScript Tests ==="
 	@echo "Running Node.js tests..."
-	@node --test tests/js
+	@node --test 'tests/js/*.test.js'
 	@echo ""
 	@echo "=== PowerShell Tests ==="
 	@echo "Running Pester tests..."

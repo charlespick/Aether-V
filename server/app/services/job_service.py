@@ -7,6 +7,7 @@ import base64
 import copy
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from pathlib import PureWindowsPath
@@ -505,95 +506,103 @@ class JobService:
 
         This runs before job execution to capture current state from inventory.
         Metadata is stored in job.parameters['_metadata'] for use in notifications.
+        
+        Metadata fields:
+        - resource_type: "VM", "Network Adapter", or "Disk"
+        - resource_name: Human-readable resource name
+        - vm_name: Parent VM name (all job types)
         """
         metadata = {}
-
         definition = job.parameters.get("definition", {})
         fields = definition.get("fields", {})
 
-        # Extract resource information based on job type
-        vm_jobs = (
-            "create_vm", "update_vm", "delete_vm",
-            "managed_deployment", "initialize_vm"
-        )
-        nic_jobs = ("create_nic", "update_nic", "delete_nic")
-        disk_jobs = ("create_disk", "update_disk", "delete_disk")
-
-        if job.job_type in vm_jobs:
-            # For VM jobs, get VM name from parameters
-            if job.job_type == "delete_vm":
-                vm_name = job.parameters.get("vm_name")
-            elif job.job_type == "managed_deployment":
-                # For managed deployment, extract from request.vm_spec
-                request_data = job.parameters.get("request", {})
-                vm_spec = request_data.get("vm_spec", {})
-                vm_name = vm_spec.get("vm_name")
-            else:
-                vm_name = fields.get("vm_name")
-
+        # VM jobs: Extract VM name
+        if job.job_type in ("create_vm", "update_vm", "delete_vm", "initialize_vm"):
+            vm_name = fields.get("vm_name") or job.parameters.get("vm_name")
             if vm_name:
                 metadata["resource_type"] = "VM"
                 metadata["resource_name"] = vm_name
                 metadata["vm_name"] = vm_name
 
-        elif job.job_type in nic_jobs or job.job_type in disk_jobs:
-            # For NIC/Disk jobs, look up parent VM and resource names
+        # Managed deployment: Special case for nested structure
+        elif job.job_type == "managed_deployment":
+            request_data = job.parameters.get("request", {})
+            vm_spec = request_data.get("vm_spec", {})
+            vm_name = vm_spec.get("vm_name")
+            if vm_name:
+                metadata["resource_type"] = "VM"
+                metadata["resource_name"] = vm_name
+                metadata["vm_name"] = vm_name
+
+        # NIC jobs: Look up parent VM and NIC details
+        elif job.job_type in ("create_nic", "update_nic", "delete_nic"):
             vm_id = fields.get("vm_id")
             resource_id = fields.get("resource_id")
-
+            
             if vm_id:
                 vm = inventory_service.get_vm_by_id(vm_id)
                 if vm:
                     metadata["vm_name"] = vm.name
-                    if vm.id:
-                        metadata["vm_id"] = vm.id
+                    metadata["resource_type"] = "Network Adapter"
+                    
+                    # Find existing NIC name from inventory
+                    resource_name = None
+                    if resource_id and vm.networks:
+                        for nic in vm.networks:
+                            if nic.id and nic.id.lower() == resource_id.lower():
+                                resource_name = nic.name or f"NIC {resource_id[:8]}"
+                                break
+                    
+                    # Fallback to field values for create operations
+                    if not resource_name:
+                        adapter_name = fields.get("adapter_name")
+                        if adapter_name:
+                            resource_name = adapter_name
+                        elif resource_id:
+                            resource_name = f"NIC {resource_id[:8]}"
+                        else:
+                            resource_name = "Network Adapter"
+                    
+                    if resource_name:
+                        metadata["resource_name"] = resource_name
 
-                    if job.job_type in nic_jobs:
-                        metadata["resource_type"] = "Network Adapter"
-                        # Try to find NIC name
-                        if resource_id and vm.networks:
-                            for nic in vm.networks:
-                                if nic.id and nic.id.lower() == resource_id.lower():
-                                    metadata["resource_name"] = nic.name or f"NIC {resource_id[:8]}"
-                                    metadata["resource_id"] = resource_id
-                                    break
-                        # For create, use adapter_name from fields
-                        if not metadata.get("resource_name"):
-                            adapter_name = fields.get("adapter_name")
-                            if adapter_name:
-                                metadata["resource_name"] = adapter_name
-                            elif resource_id:
-                                metadata["resource_name"] = f"NIC {resource_id[:8]}"
-                            else:
-                                metadata["resource_name"] = "Network Adapter"
-
-                    elif job.job_type in disk_jobs:
-                        metadata["resource_type"] = "Disk"
-                        # Try to find disk name
-                        if resource_id and vm.disks:
-                            for disk in vm.disks:
-                                if disk.id and disk.id.lower() == resource_id.lower():
-                                    # Use the actual disk filename
-                                    if disk.name:
-                                        metadata["resource_name"] = disk.name
-                                    elif disk.path:
-                                        import os
-                                        metadata["resource_name"] = os.path.basename(
-                                            disk.path)
-                                    else:
-                                        metadata["resource_name"] = "Disk"
-                                    metadata["resource_id"] = resource_id
-                                    break
-                        # For create, use image_name or disk_size_gb
-                        if not metadata.get("resource_name"):
-                            image_name = fields.get("image_name")
-                            disk_size_gb = fields.get("disk_size_gb")
-                            if image_name:
-                                metadata["resource_name"] = f"Disk from '{image_name}'"
-                            elif disk_size_gb:
-                                metadata["resource_name"] = f"{disk_size_gb}GB Disk"
-                            else:
-                                metadata["resource_name"] = "Disk"
+        # Disk jobs: Look up parent VM and disk details
+        elif job.job_type in ("create_disk", "update_disk", "delete_disk"):
+            vm_id = fields.get("vm_id")
+            resource_id = fields.get("resource_id")
+            
+            if vm_id:
+                vm = inventory_service.get_vm_by_id(vm_id)
+                if vm:
+                    metadata["vm_name"] = vm.name
+                    metadata["resource_type"] = "Disk"
+                    
+                    # Find existing disk name from inventory
+                    resource_name = None
+                    if resource_id and vm.disks:
+                        for disk in vm.disks:
+                            if disk.id and disk.id.lower() == resource_id.lower():
+                                if disk.name:
+                                    resource_name = disk.name
+                                elif disk.path:
+                                    resource_name = os.path.basename(disk.path)
+                                else:
+                                    resource_name = "Disk"
+                                break
+                    
+                    # Fallback to field values for create operations
+                    if not resource_name:
+                        image_name = fields.get("image_name")
+                        disk_size_gb = fields.get("disk_size_gb")
+                        if image_name:
+                            resource_name = f"Disk from '{image_name}'"
+                        elif disk_size_gb:
+                            resource_name = f"{disk_size_gb}GB Disk"
+                        else:
+                            resource_name = "Disk"
+                    
+                    if resource_name:
+                        metadata["resource_name"] = resource_name
 
         # Store metadata in job parameters
         if metadata:
@@ -1452,18 +1461,8 @@ class JobService:
             await self._sync_job_notification(job)
 
             if job.job_type == "delete_vm":
-                # Get vm_name from enriched metadata, or fallback to parameters
-                metadata = job.parameters.get("_metadata", {})
-                vm_name = metadata.get(
-                    "vm_name") or metadata.get("resource_name")
-
-                if not vm_name:
-                    # Fallback for tests or when enrichment hasn't run
-                    definition = job.parameters.get("definition") or {}
-                    fields = definition.get("fields") or {}
-                    vm_name = fields.get(
-                        "vm_name") or job.parameters.get("vm_name")
-
+                # Get vm_name from enriched metadata
+                vm_name = self._extract_vm_name(job)
                 target_host = (job.target_host or "").strip()
                 if vm_name and target_host:
                     if job.status == JobStatus.RUNNING:
@@ -1495,22 +1494,9 @@ class JobService:
             return
 
         # Get enriched metadata (populated in _enrich_job_metadata)
-        # If not enriched yet (e.g., in tests), extract basic info from parameters
         metadata = job.parameters.get("_metadata", {})
-
-        if not metadata:
-            # Fallback: extract vm_name from parameters for notification metadata
-            definition = job.parameters.get("definition") or {}
-            fields = definition.get("fields") or {}
-            vm_name = fields.get("vm_name") or job.parameters.get("vm_name")
-
-            # Set minimal metadata for notification purposes
-            metadata = {
-                "resource_type": "VM" if "vm" in job.job_type else "Resource",
-                "resource_name": vm_name,
-                "vm_name": vm_name,
-            }
-
+        
+        # Extract metadata fields with defaults
         resource_type = metadata.get("resource_type", "Resource")
         resource_name = metadata.get("resource_name")
         vm_name = metadata.get("vm_name")
@@ -1533,16 +1519,6 @@ class JobService:
 
         # Format resource name for display
         resource_label = resource_name if resource_name else job.job_id[:8]
-
-        # For managed deployment, always treat as VM deployment
-        if job.job_type == "managed_deployment":
-            resource_type = "VM"
-            if not resource_name:
-                # Extract VM name from request if metadata not available
-                request_data = job.parameters.get("request", {})
-                vm_spec = request_data.get("vm_spec", {})
-                resource_label = vm_spec.get("vm_name", job.job_id[:8])
-                resource_name = resource_label
 
         # Determine location phrase
         is_vm_job = resource_type == "VM"
@@ -1669,25 +1645,20 @@ class JobService:
     def _extract_vm_name(self, job: Job) -> Optional[str]:
         """Extract VM name from job parameters.
 
-        Attempts to get vm_name from enriched metadata first, then falls back
-        to various parameter locations depending on job type.
+        Uses enriched metadata from _enrich_job_metadata.
         """
-        # Try enriched metadata first (from _enrich_job_metadata)
+        # Get vm_name from enriched metadata
         metadata = job.parameters.get("_metadata", {})
-        vm_name = metadata.get("vm_name") or metadata.get("resource_name")
+        vm_name = metadata.get("vm_name")
         if vm_name:
-            return str(vm_name) if vm_name else None
-
-        # Fallback for delete_vm jobs
-        if job.job_type == "delete_vm":
-            vm_name_param = job.parameters.get("vm_name")
-            return str(vm_name_param) if vm_name_param else None
-
-        # Fallback for other job types - check definition.fields
-        definition = job.parameters.get("definition") or {}
-        fields = definition.get("fields") or {}
-        vm_name_field = fields.get("vm_name")
-        return str(vm_name_field) if vm_name_field else None
+            return str(vm_name)
+        
+        # For VM jobs, resource_name equals vm_name
+        resource_name = metadata.get("resource_name")
+        if resource_name and metadata.get("resource_type") == "VM":
+            return str(resource_name)
+        
+        return None
 
     def _log_agent_request(self, job_id: str, target_host: str, payload: str, script_name: str) -> None:
         """Log raw JSON being sent to host agent.
@@ -1758,6 +1729,50 @@ class JobService:
 
         await self._broadcast_job_output(job_id, lines)
         return lines
+
+    async def get_running_jobs_count(self) -> int:
+        """Return the number of currently running jobs."""
+        async with self._lock:
+            return sum(
+                1 for job in self.jobs.values()
+                if job.status == JobStatus.RUNNING
+            )
+
+    async def wait_for_running_jobs(
+        self,
+        timeout: float = 300.0,
+        poll_interval: float = 1.0,
+    ) -> bool:
+        """Wait for all running jobs to complete.
+
+        Args:
+            timeout: Maximum time to wait in seconds (default 5 minutes)
+            poll_interval: Time between polling checks in seconds
+
+        Returns:
+            True if all jobs completed within timeout, False otherwise
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        while loop.time() < deadline:
+            running_count = await self.get_running_jobs_count()
+            if running_count == 0:
+                logger.info("All running jobs have completed")
+                return True
+
+            logger.debug(
+                "Waiting for %d running job(s) to complete",
+                running_count,
+            )
+            await asyncio.sleep(poll_interval)
+
+        running_count = await self.get_running_jobs_count()
+        logger.warning(
+            "Timed out waiting for jobs to complete; %d job(s) still running",
+            running_count,
+        )
+        return False
 
     async def get_metrics(self) -> Dict[str, Any]:
         """Return diagnostic information about the job service."""

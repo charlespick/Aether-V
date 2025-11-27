@@ -9,6 +9,7 @@ import secrets
 import uuid
 import zlib
 from urllib.parse import urlencode, urlsplit, urlunsplit
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
@@ -40,6 +41,11 @@ from ..core.models import (
     JobServiceMetrics,
     InventoryServiceMetrics,
     HostDeploymentMetrics,
+    OSSLicenseResponse,
+    OSSPackage,
+    OSSLicenseSummary,
+    NotificationLevel,
+    NotificationCategory,
 )
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
@@ -255,6 +261,7 @@ def _current_build_info() -> BuildInfo:
         git_commit=build_metadata.git_commit,
         git_ref=build_metadata.git_ref,
         git_state=build_metadata.git_state,
+        github_repository=build_metadata.github_repository,
         build_time=build_metadata.build_time,
         build_host=build_metadata.build_host,
     )
@@ -401,6 +408,109 @@ async def get_service_diagnostics(
     )
 
 
+@router.post(
+    "/api/v1/admin/redeploy",
+    tags=["Admin"],
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def trigger_redeploy(
+    user: dict = Depends(require_permission(Permission.ADMIN)),
+):
+    """Trigger redeployment of host scripts to all configured hosts.
+
+    This endpoint waits for all running jobs to complete, then triggers
+    a force redeployment of provisioning scripts to all Hyper-V hosts.
+    During redeployment, inventory refresh is paused and VM provisioning
+    operations are unavailable.
+
+    Requires admin role.
+    """
+    # Check if already in progress
+    if host_deployment_service.is_startup_in_progress():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A redeployment is already in progress",
+        )
+
+    # Get configured hosts
+    host_list = settings.get_hyperv_hosts_list()
+    if not host_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Hyper-V hosts are configured",
+        )
+
+    # Check that deployment service is enabled
+    if not host_deployment_service.is_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Host deployment service is disabled because "
+                "AGENT_DOWNLOAD_BASE_URL is not configured"
+            ),
+        )
+
+    # Get running job count
+    running_jobs = await job_service.get_running_jobs_count()
+
+    # Start the redeployment process in the background
+    asyncio.create_task(_execute_redeploy(host_list, running_jobs))
+
+    return {
+        "status": "accepted",
+        "message": (
+            f"Redeployment initiated. Waiting for {running_jobs} running job(s) "
+            "to complete before starting redeployment."
+            if running_jobs > 0
+            else "Redeployment initiated. Starting immediately."
+        ),
+        "running_jobs": running_jobs,
+        "target_hosts": len(host_list),
+    }
+
+
+async def _execute_redeploy(host_list: List[str], running_jobs: int) -> None:
+    """Background task to execute the redeployment process."""
+    try:
+        if running_jobs > 0:
+            logger.info(
+                "Waiting for %d running job(s) to complete before redeploying",
+                running_jobs,
+            )
+            # Wait for running jobs with a reasonable timeout
+            jobs_completed = await job_service.wait_for_running_jobs(
+                timeout=600.0,  # 10 minutes max wait
+                poll_interval=2.0,
+            )
+            if not jobs_completed:
+                logger.warning(
+                    "Not all jobs completed within timeout; proceeding with redeployment anyway"
+                )
+
+        # Stop inventory service to prevent interference during redeployment
+        logger.info("Stopping inventory service for redeployment")
+        await inventory_service.stop()
+
+        try:
+            logger.info("Starting force redeployment to %d host(s)",
+                        len(host_list))
+            await host_deployment_service.force_redeploy_all_hosts(host_list)
+            logger.info("Force redeployment completed successfully")
+        finally:
+            # Always restart inventory service, even if redeployment fails
+            logger.info("Restarting inventory service")
+            await inventory_service.start()
+
+    except Exception as exc:
+        logger.exception("Force redeployment failed: %s", exc)
+        notification_service.create_notification(
+            title="Host Script Redeployment Failed",
+            message=f"Failed to redeploy host scripts: {exc}",
+            level=NotificationLevel.ERROR,
+            category=NotificationCategory.HOST,
+        )
+
+
 @router.get("/api/v1/about", response_model=AboutResponse, tags=["About"])
 async def get_about(user: dict = Depends(require_permission(Permission.READER))):
     """Return metadata for the About screen."""
@@ -410,6 +520,62 @@ async def get_about(user: dict = Depends(require_permission(Permission.READER)))
         description="Hyper-V Virtual Machine Management Platform",
         build=_current_build_info(),
     )
+
+
+@router.get("/api/v1/oss-licenses", response_model=OSSLicenseResponse, tags=["About"])
+async def get_oss_licenses(user: dict = Depends(require_permission(Permission.READER))):
+    """Return OSS license information for third-party packages.
+
+    This endpoint provides license information for all open source packages
+    used by the application, including both Python and JavaScript dependencies.
+    """
+    # Look for the license file in expected locations
+    app_dir = Path(__file__).resolve().parent.parent
+    license_paths = [
+        app_dir.parent / "oss-licenses.json",  # Container: /app/oss-licenses.json
+        # Development: server/oss-licenses.json
+        app_dir.parent.parent / "oss-licenses.json",
+    ]
+
+    license_data = None
+    for path in license_paths:
+        if path.exists():
+            try:
+                license_data = json.loads(path.read_text(encoding="utf-8"))
+                break
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(
+                    "Failed to read OSS licenses from %s: %s", path, e)
+
+    if license_data is None:
+        # Return empty response if no license file is found
+        logger.warning("OSS license file not found in expected locations")
+        return OSSLicenseResponse(
+            packages=[],
+            summary=OSSLicenseSummary(total=0, python=0, javascript=0),
+        )
+
+    # Parse the packages and summary from the file
+    packages = [
+        OSSPackage(
+            name=pkg.get("name", ""),
+            version=pkg.get("version", ""),
+            license=pkg.get("license", "Unknown"),
+            author=pkg.get("author"),
+            url=pkg.get("url"),
+            ecosystem=pkg.get("ecosystem", "unknown"),
+        )
+        for pkg in license_data.get("packages", [])
+    ]
+
+    summary_data = license_data.get("summary", {})
+    summary = OSSLicenseSummary(
+        total=summary_data.get("total", len(packages)),
+        python=summary_data.get("python", 0),
+        javascript=summary_data.get("javascript", 0),
+    )
+
+    return OSSLicenseResponse(packages=packages, summary=summary)
 
 
 @router.get("/api/v1/inventory", response_model=InventoryResponse, tags=["Inventory"])
@@ -519,8 +685,6 @@ async def reset_vm_action(
     """Reset (power cycle) a running virtual machine."""
 
     return await _handle_vm_action("reset", vm_id)
-
-
 
 
 @router.get("/api/v1/jobs", response_model=List[Job], tags=["Jobs"])
