@@ -404,26 +404,20 @@ end {
                 if ($hardDisks.Count -gt 0) {
                     $logs += "Checking for shared disks before deletion..."
                     
-                    # Validate no shared disks
+                    # Validate no shared disks using SupportPersistentReservations property
                     foreach ($disk in $hardDisks) {
                         if (-not $disk.Path) {
                             continue
                         }
                         
-                        try {
-                            $vhd = Get-VHD -Path $disk.Path -ErrorAction Stop
-                            if ($vhd.Attached -gt 1) {
-                                throw "Cannot delete VM with delete_disks=true: Disk '$($disk.Path)' is shared and attached to $($vhd.Attached) VMs. Detach shared disks manually or set delete_disks=false."
-                            }
+                        # Check if this is a shared disk (cluster shared volume)
+                        if ($disk.SupportPersistentReservations) {
+                            throw "Cannot delete VM with delete_disks=true: Disk '$($disk.Path)' is a shared disk (SupportPersistentReservations=True). Detach shared disks manually or set delete_disks=false."
                         }
-                        catch [System.Management.Automation.ItemNotFoundException] {
+                        
+                        # Verify the disk file exists
+                        if (-not (Test-Path -LiteralPath $disk.Path -PathType Leaf)) {
                             $logs += "WARNING: Disk file '$($disk.Path)' not found; will skip deletion."
-                        }
-                        catch {
-                            if ($_.Exception.Message -like "*shared*") {
-                                throw
-                            }
-                            $logs += "WARNING: Unable to check if disk '$($disk.Path)' is shared: $($_.Exception.Message)"
                         }
                     }
                     
