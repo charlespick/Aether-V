@@ -99,7 +99,38 @@ output_path = Path("/out/build-info.json")
 output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 PY
 
-# Stage 4: Collect agent artifacts (scripts, ISOs, version)
+# Stage 4: Collect OSS license information
+FROM base AS license-collector
+
+WORKDIR /src
+
+# Install Node.js for license-checker and build dependencies for Python wheels
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        nodejs \
+        npm \
+        gcc \
+        python3-dev \
+        libkrb5-dev \
+        libsasl2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install pip-licenses
+COPY server/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt pip-licenses
+
+# Copy package.json and install npm dependencies for license-checker
+COPY server/package.json server/package-lock.json ./
+RUN npm install --omit=dev && \
+    npm install --save-dev license-checker
+
+# Copy the license collection script and run it
+COPY server/scripts/collect_licenses.py ./scripts/
+RUN mkdir -p /out && \
+    python scripts/collect_licenses.py && \
+    cp oss-licenses.json /out/
+
+# Stage 5: Collect agent artifacts (scripts, ISOs, version)
 FROM base AS agent-artifacts
 
 WORKDIR /src
@@ -133,7 +164,7 @@ RUN set -eux; \
     fi; \
     find ./ISOs -maxdepth 1 -type f -name '*.iso' -exec cp {} /artifacts/ \;
 
-# Stage 5: Application
+# Stage 6: Application
 FROM base AS application
 
 RUN apt-get update && \
@@ -165,6 +196,9 @@ RUN mkdir -p /app/agent
 # Copy build metadata and the curated agent artifacts (scripts, ISOs, version)
 COPY --from=build-info /out/build-info.json /app/agent/build-info.json
 COPY --from=agent-artifacts /artifacts/ /app/agent/
+
+# Copy OSS license information
+COPY --from=license-collector /out/oss-licenses.json /app/oss-licenses.json
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \
