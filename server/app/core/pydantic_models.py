@@ -17,6 +17,12 @@ from enum import Enum
 # ============================================================================
 
 
+class OSFamily(str, Enum):
+    """Operating system family for secure boot configuration."""
+    WINDOWS = "windows"
+    LINUX = "linux"
+
+
 class VmSpec(BaseModel):
     """Virtual machine hardware specification.
     
@@ -50,6 +56,10 @@ class VmSpec(BaseModel):
         False,
         description="Request that the new VM be registered with the Failover Cluster",
     )
+    os_family: Optional[OSFamily] = Field(
+        None,
+        description="Operating system family (windows or linux). Used to configure secure boot settings. If not specified, defaults to windows.",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -59,6 +69,7 @@ class VmSpec(BaseModel):
                 "cpu_cores": 2,
                 "storage_class": "fast-ssd",
                 "vm_clustered": False,
+                "os_family": "windows",
             }
         }
     )
