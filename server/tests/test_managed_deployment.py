@@ -71,10 +71,10 @@ class TestManagedDeploymentRequest:
             guest_config=GuestConfigSpec(
                 guest_la_uid="Administrator",
                 guest_la_pw="SecurePass123!",
-                guest_domain_jointarget="corp.example.com",
-                guest_domain_joinuid="EXAMPLE\\svc_join",
-                guest_domain_joinpw="DomainPass456!",
-                guest_domain_joinou="OU=Servers,DC=corp,DC=example,DC=com",
+                guest_domain_join_target="corp.example.com",
+                guest_domain_join_uid="EXAMPLE\\svc_join",
+                guest_domain_join_pw="DomainPass456!",
+                guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
             ),
             target_host="hyperv-01.example.com",
         )
@@ -83,7 +83,7 @@ class TestManagedDeploymentRequest:
         assert request.disk_spec.image_name == "Windows Server 2022"
         assert request.nic_spec.network == "Production"
         assert request.guest_config.guest_la_uid == "Administrator"
-        assert request.guest_config.guest_domain_jointarget == "corp.example.com"
+        assert request.guest_config.guest_domain_join_target == "corp.example.com"
 
     def test_managed_deployment_with_static_ip(self):
         """Test managed deployment with static IP configuration."""
@@ -99,16 +99,16 @@ class TestManagedDeploymentRequest:
             guest_config=GuestConfigSpec(
                 guest_la_uid="Administrator",
                 guest_la_pw="SecurePass123!",
-                guest_v4_ipaddr="192.168.1.100",
-                guest_v4_cidrprefix=24,
-                guest_v4_defaultgw="192.168.1.1",
+                guest_v4_ip_addr="192.168.1.100",
+                guest_v4_cidr_prefix=24,
+                guest_v4_default_gw="192.168.1.1",
                 guest_v4_dns1="192.168.1.10",
             ),
             target_host="hyperv-02.example.com",
         )
 
-        assert request.guest_config.guest_v4_ipaddr == "192.168.1.100"
-        assert request.guest_config.guest_v4_cidrprefix == 24
+        assert request.guest_config.guest_v4_ip_addr == "192.168.1.100"
+        assert request.guest_config.guest_v4_cidr_prefix == 24
 
 
 class TestManagedDeploymentJobSubmission:
@@ -480,10 +480,10 @@ class TestGuestConfigIntegration:
         guest_config_spec = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_domain_jointarget="corp.example.com",
-            guest_domain_joinuid="EXAMPLE\\svc_join",
-            guest_domain_joinpw="DomainPass456!",
-            guest_domain_joinou="OU=Servers,DC=corp,DC=example,DC=com",
+            guest_domain_join_target="corp.example.com",
+            guest_domain_join_uid="EXAMPLE\\svc_join",
+            guest_domain_join_pw="DomainPass456!",
+            guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
         )
 
         config = generate_guest_config(
@@ -494,10 +494,10 @@ class TestGuestConfigIntegration:
         # Verify all domain join fields are present
         assert "guest_la_uid" in config
         assert "guest_la_pw" in config
-        assert "guest_domain_jointarget" in config
-        assert "guest_domain_joinuid" in config
-        assert "guest_domain_joinpw" in config
-        assert "guest_domain_joinou" in config
+        assert "guest_domain_join_target" in config
+        assert "guest_domain_join_uid" in config
+        assert "guest_domain_join_pw" in config
+        assert "guest_domain_join_ou" in config
 
     def test_guest_config_with_static_ip(self):
         """Test guest config generation with static IP."""
@@ -516,9 +516,9 @@ class TestGuestConfigIntegration:
         guest_config_spec = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_v4_ipaddr="192.168.1.100",
-            guest_v4_cidrprefix=24,
-            guest_v4_defaultgw="192.168.1.1",
+            guest_v4_ip_addr="192.168.1.100",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="192.168.1.1",
             guest_v4_dns1="192.168.1.10",
         )
 
@@ -529,9 +529,9 @@ class TestGuestConfigIntegration:
         )
 
         # Verify static IP fields are present
-        assert config["guest_v4_ipaddr"] == "192.168.1.100"
-        assert config["guest_v4_cidrprefix"] == 24
-        assert config["guest_v4_defaultgw"] == "192.168.1.1"
+        assert config["guest_v4_ip_addr"] == "192.168.1.100"
+        assert config["guest_v4_cidr_prefix"] == 24
+        assert config["guest_v4_default_gw"] == "192.168.1.1"
         assert config["guest_v4_dns1"] == "192.168.1.10"
 
 

@@ -166,13 +166,13 @@ class TestGuestConfigSpecModel:
         config = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_domain_jointarget="corp.example.com",
-            guest_domain_joinuid="EXAMPLE\\svc_join",
-            guest_domain_joinpw="DomainPass456!",
-            guest_domain_joinou="OU=Servers,DC=corp,DC=example,DC=com",
+            guest_domain_join_target="corp.example.com",
+            guest_domain_join_uid="EXAMPLE\\svc_join",
+            guest_domain_join_pw="DomainPass456!",
+            guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
         )
         
-        assert config.guest_domain_jointarget == "corp.example.com"
+        assert config.guest_domain_join_target == "corp.example.com"
     
     def test_guest_config_partial_domain_join_fails(self):
         """Test that partial domain join config is rejected."""
@@ -180,7 +180,7 @@ class TestGuestConfigSpecModel:
             GuestConfigSpec(
                 guest_la_uid="Administrator",
                 guest_la_pw="SecurePass123!",
-                guest_domain_jointarget="corp.example.com",
+                guest_domain_join_target="corp.example.com",
                 # Missing other domain join fields
             )
         
@@ -192,14 +192,14 @@ class TestGuestConfigSpecModel:
         config = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
-            guest_v4_ipaddr="192.168.1.100",
-            guest_v4_cidrprefix=24,
-            guest_v4_defaultgw="192.168.1.1",
+            guest_v4_ip_addr="192.168.1.100",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="192.168.1.1",
             guest_v4_dns1="192.168.1.10",
         )
         
-        assert config.guest_v4_ipaddr == "192.168.1.100"
-        assert config.guest_v4_cidrprefix == 24
+        assert config.guest_v4_ip_addr == "192.168.1.100"
+        assert config.guest_v4_cidr_prefix == 24
     
     def test_guest_config_partial_static_ip_fails(self):
         """Test that partial static IP config is rejected."""
@@ -207,8 +207,8 @@ class TestGuestConfigSpecModel:
             GuestConfigSpec(
                 guest_la_uid="Administrator",
                 guest_la_pw="SecurePass123!",
-                guest_v4_ipaddr="192.168.1.100",
-                guest_v4_cidrprefix=24,
+                guest_v4_ip_addr="192.168.1.100",
+                guest_v4_cidr_prefix=24,
                 # Missing gateway and DNS
             )
         

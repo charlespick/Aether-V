@@ -42,6 +42,17 @@ begin {
     . (Join-Path $scriptRoot 'Provisioning.PublishProvisioningData.ps1')
     . (Join-Path $scriptRoot 'Provisioning.RegisterVM.ps1')
     . (Join-Path $scriptRoot 'Provisioning.WaitForProvisioningKey.ps1')
+    
+    # Initialize provisioning scripts version from version file if available
+    # This is required for KVP version exchange with guest agents during vm.initialize
+    # but is optional for other operations (vm.create, disk.create, etc.)
+    $script:VersionFilePath = Join-Path $scriptRoot 'version'
+    if (Test-Path -LiteralPath $script:VersionFilePath -PathType Leaf) {
+        $rawVersion = Get-Content -LiteralPath $script:VersionFilePath -Raw -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($rawVersion)) {
+            $global:ProvisioningScriptsVersion = $rawVersion.Trim()
+        }
+    }
 }
 
 process {
@@ -857,6 +868,13 @@ end {
             $logs += 'Executing vm.initialize operation'
             $logs += "Correlation ID: $correlationId"
             
+            # Validate provisioning scripts version is available
+            # This is required for KVP version exchange with guest agents
+            if ([string]::IsNullOrWhiteSpace($global:ProvisioningScriptsVersion)) {
+                throw "Provisioning scripts version not initialized. Ensure the version file is deployed at '$($script:VersionFilePath)' with the agent scripts."
+            }
+            $logs += "Provisioning scripts version: $global:ProvisioningScriptsVersion"
+            
             # Extract required fields
             $vmId = $resourceSpec['vm_id']
             $vmName = $resourceSpec['vm_name']
@@ -965,9 +983,33 @@ end {
                 $publishParams['AnsibleSshKey'] = $resourceSpec['cnf_ansible_ssh_key']
             }
             
-            # Publish data to guest
-            Invoke-ProvisioningPublishProvisioningData @publishParams
-            $logs += "Provisioning data published successfully"
+            # Password handling: Environment variables are used instead of command-line parameters
+            # to avoid exposing credentials in process listings. While environment variables are
+            # visible to child processes, this is acceptable here because:
+            # 1. No child processes are spawned during password transmission
+            # 2. Variables are cleared immediately after use in the finally block
+            # 3. The provisioning publish function encrypts data before transmission via KVP
+            # Note: SecureString would require changes throughout the entire provisioning chain
+            # and would not prevent memory exposure in the receiving guest agent.
+            if ($resourceSpec.ContainsKey('guest_la_pw') -and $resourceSpec['guest_la_pw']) {
+                $env:GuestLaPw = $resourceSpec['guest_la_pw']
+            } else {
+                throw "guest_la_pw is required for guest initialization"
+            }
+            if ($resourceSpec.ContainsKey('guest_domain_join_pw') -and $resourceSpec['guest_domain_join_pw']) {
+                $env:GuestDomainJoinPw = $resourceSpec['guest_domain_join_pw']
+            }
+            
+            try {
+                # Publish data to guest
+                Invoke-ProvisioningPublishProvisioningData @publishParams
+                $logs += "Provisioning data published successfully"
+            }
+            finally {
+                # Clear sensitive environment variables immediately after use
+                $env:GuestLaPw = $null
+                $env:GuestDomainJoinPw = $null
+            }
             
             # Step 6: Wait for guest to complete provisioning
             $logs += "Waiting for guest to complete provisioning..."

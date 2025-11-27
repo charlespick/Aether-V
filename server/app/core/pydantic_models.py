@@ -149,6 +149,9 @@ class GuestConfigSpec(BaseModel):
     
     This model aggregates all guest-level configuration from VM and NIC specs.
     It is transmitted to the guest agent via KVP for OS-level provisioning.
+    
+    Field names use underscores to match the expected format for the PowerShell
+    host agent and KVP key names (e.g., guest_v4_ip_addr -> hlvmm.data.guest_v4_ip_addr).
     """
     # VM-level guest config
     guest_la_uid: str = Field(
@@ -161,19 +164,19 @@ class GuestConfigSpec(BaseModel):
     )
     
     # Domain join configuration (all-or-none)
-    guest_domain_jointarget: Optional[str] = Field(
+    guest_domain_join_target: Optional[str] = Field(
         None,
         description="Fully qualified domain name to join",
     )
-    guest_domain_joinuid: Optional[str] = Field(
+    guest_domain_join_uid: Optional[str] = Field(
         None,
         description="User account used to join the domain",
     )
-    guest_domain_joinpw: Optional[str] = Field(
+    guest_domain_join_pw: Optional[str] = Field(
         None,
         description="Password for the domain join account",
     )
-    guest_domain_joinou: Optional[str] = Field(
+    guest_domain_join_ou: Optional[str] = Field(
         None,
         description="Organizational unit path for the computer account",
     )
@@ -189,15 +192,15 @@ class GuestConfigSpec(BaseModel):
     )
     
     # NIC-level guest config (static IP - all-or-none)
-    guest_v4_ipaddr: Optional[str] = Field(
+    guest_v4_ip_addr: Optional[str] = Field(
         None,
         description="Static IPv4 address to assign to the guest adapter",
     )
-    guest_v4_cidrprefix: Optional[int] = Field(
+    guest_v4_cidr_prefix: Optional[int] = Field(
         None,
         description="CIDR prefix length that accompanies the static IPv4 address",
     )
-    guest_v4_defaultgw: Optional[str] = Field(
+    guest_v4_default_gw: Optional[str] = Field(
         None,
         description="Default IPv4 gateway for the guest adapter",
     )
@@ -209,7 +212,7 @@ class GuestConfigSpec(BaseModel):
         None,
         description="Secondary IPv4 DNS server for the guest adapter",
     )
-    guest_net_dnssuffix: Optional[str] = Field(
+    guest_net_dns_suffix: Optional[str] = Field(
         None,
         description="DNS search suffix for the guest network configuration",
     )
@@ -219,17 +222,17 @@ class GuestConfigSpec(BaseModel):
         """Validate all-or-none parameter sets for domain join and ansible."""
         # Domain join: all-or-none
         domain_fields = [
-            self.guest_domain_jointarget,
-            self.guest_domain_joinuid,
-            self.guest_domain_joinpw,
-            self.guest_domain_joinou,
+            self.guest_domain_join_target,
+            self.guest_domain_join_uid,
+            self.guest_domain_join_pw,
+            self.guest_domain_join_ou,
         ]
         domain_provided = [f for f in domain_fields if f is not None and f != ""]
         if domain_provided and len(domain_provided) != len(domain_fields):
             raise ValueError(
                 "Domain join configuration requires all fields: "
-                "guest_domain_jointarget, guest_domain_joinuid, "
-                "guest_domain_joinpw, guest_domain_joinou"
+                "guest_domain_join_target, guest_domain_join_uid, "
+                "guest_domain_join_pw, guest_domain_join_ou"
             )
         
         # Ansible: all-or-none
@@ -243,17 +246,17 @@ class GuestConfigSpec(BaseModel):
         
         # Static IP: all-or-none for required fields
         static_ip_required = [
-            self.guest_v4_ipaddr,
-            self.guest_v4_cidrprefix,
-            self.guest_v4_defaultgw,
+            self.guest_v4_ip_addr,
+            self.guest_v4_cidr_prefix,
+            self.guest_v4_default_gw,
             self.guest_v4_dns1,
         ]
         static_ip_provided = [f for f in static_ip_required if f is not None and f != ""]
         if static_ip_provided and len(static_ip_provided) != len(static_ip_required):
             raise ValueError(
                 "Static IP configuration requires all fields: "
-                "guest_v4_ipaddr, guest_v4_cidrprefix, "
-                "guest_v4_defaultgw, guest_v4_dns1"
+                "guest_v4_ip_addr, guest_v4_cidr_prefix, "
+                "guest_v4_default_gw, guest_v4_dns1"
             )
         
         return self
@@ -263,10 +266,10 @@ class GuestConfigSpec(BaseModel):
             "example": {
                 "guest_la_uid": "Administrator",
                 "guest_la_pw": "SecurePass123!",
-                "guest_domain_jointarget": "corp.example.com",
-                "guest_domain_joinuid": "EXAMPLE\\svc_join",
-                "guest_domain_joinpw": "DomainPass456!",
-                "guest_domain_joinou": "OU=Servers,DC=corp,DC=example,DC=com",
+                "guest_domain_join_target": "corp.example.com",
+                "guest_domain_join_uid": "EXAMPLE\\svc_join",
+                "guest_domain_join_pw": "DomainPass456!",
+                "guest_domain_join_ou": "OU=Servers,DC=corp,DC=example,DC=com",
             }
         }
     )

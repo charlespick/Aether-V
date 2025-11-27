@@ -24,6 +24,10 @@ def generate_guest_config(
     It takes structured Pydantic models and generates a guest configuration
     dictionary that will be transmitted to the guest agent via KVP.
     
+    The returned keys match the field names expected by the PowerShell host
+    agent and ultimately map to KVP keys (e.g., guest_v4_ip_addr maps to
+    hlvmm.data.guest_v4_ip_addr in the guest registry).
+    
     Args:
         vm_spec: VM hardware specification (required, used for logging context)
         nic_spec: Network adapter specification (optional, reserved for future use)
@@ -70,16 +74,16 @@ def generate_guest_config(
     config["guest_la_pw"] = guest_config_spec.guest_la_pw
     
     # Add domain join configuration if provided (all-or-none)
-    if guest_config_spec.guest_domain_jointarget:
-        config["guest_domain_jointarget"] = guest_config_spec.guest_domain_jointarget
-        config["guest_domain_joinuid"] = guest_config_spec.guest_domain_joinuid
-        config["guest_domain_joinpw"] = guest_config_spec.guest_domain_joinpw
-        config["guest_domain_joinou"] = guest_config_spec.guest_domain_joinou
+    if guest_config_spec.guest_domain_join_target:
+        config["guest_domain_join_target"] = guest_config_spec.guest_domain_join_target
+        config["guest_domain_join_uid"] = guest_config_spec.guest_domain_join_uid
+        config["guest_domain_join_pw"] = guest_config_spec.guest_domain_join_pw
+        config["guest_domain_join_ou"] = guest_config_spec.guest_domain_join_ou
         
         logger.debug(
             "Added domain join config for VM '%s' to domain '%s'",
             vm_spec.vm_name,
-            guest_config_spec.guest_domain_jointarget,
+            guest_config_spec.guest_domain_join_target,
         )
     
     # Add Ansible configuration if provided (all-or-none)
@@ -94,10 +98,10 @@ def generate_guest_config(
         )
     
     # Add static IP configuration if provided (all-or-none)
-    if guest_config_spec.guest_v4_ipaddr:
-        config["guest_v4_ipaddr"] = guest_config_spec.guest_v4_ipaddr
-        config["guest_v4_cidrprefix"] = guest_config_spec.guest_v4_cidrprefix
-        config["guest_v4_defaultgw"] = guest_config_spec.guest_v4_defaultgw
+    if guest_config_spec.guest_v4_ip_addr:
+        config["guest_v4_ip_addr"] = guest_config_spec.guest_v4_ip_addr
+        config["guest_v4_cidr_prefix"] = guest_config_spec.guest_v4_cidr_prefix
+        config["guest_v4_default_gw"] = guest_config_spec.guest_v4_default_gw
         config["guest_v4_dns1"] = guest_config_spec.guest_v4_dns1
         
         # Optional DNS2 (not part of all-or-none set)
@@ -105,14 +109,14 @@ def generate_guest_config(
             config["guest_v4_dns2"] = guest_config_spec.guest_v4_dns2
         
         # Optional DNS suffix (not part of all-or-none set)
-        if guest_config_spec.guest_net_dnssuffix:
-            config["guest_net_dnssuffix"] = guest_config_spec.guest_net_dnssuffix
+        if guest_config_spec.guest_net_dns_suffix:
+            config["guest_net_dns_suffix"] = guest_config_spec.guest_net_dns_suffix
         
         logger.debug(
             "Added static IP config for VM '%s' (IP: %s/%s)",
             vm_spec.vm_name,
-            guest_config_spec.guest_v4_ipaddr,
-            guest_config_spec.guest_v4_cidrprefix,
+            guest_config_spec.guest_v4_ip_addr,
+            guest_config_spec.guest_v4_cidr_prefix,
         )
     
     logger.info(

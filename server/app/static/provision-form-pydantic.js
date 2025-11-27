@@ -246,7 +246,7 @@ class ProvisionFormPydantic {
                                 </div>
                             </div>
                             <div class="field-control">
-                                <input type="text" id="guest-v4-ipaddr" name="guest_v4_ipaddr" 
+                                <input type="text" id="guest-v4-ipaddr" name="guest_v4_ip_addr" 
                                        pattern="^(?:\\d{1,3}\\.){3}\\d{1,3}$"
                                        placeholder="e.g., 192.168.1.100" />
                             </div>
@@ -261,7 +261,7 @@ class ProvisionFormPydantic {
                                 </div>
                             </div>
                             <div class="field-control">
-                                <input type="number" id="guest-v4-cidrprefix" name="guest_v4_cidrprefix" 
+                                <input type="number" id="guest-v4-cidrprefix" name="guest_v4_cidr_prefix" 
                                        min="0" max="32" step="1" inputmode="numeric" placeholder="e.g., 24" />
                             </div>
                             <p class="field-description">CIDR prefix length (e.g., 24 for /24 subnet)</p>
@@ -275,7 +275,7 @@ class ProvisionFormPydantic {
                                 </div>
                             </div>
                             <div class="field-control">
-                                <input type="text" id="guest-v4-defaultgw" name="guest_v4_defaultgw" 
+                                <input type="text" id="guest-v4-defaultgw" name="guest_v4_default_gw" 
                                        pattern="^(?:\\d{1,3}\\.){3}\\d{1,3}$"
                                        placeholder="e.g., 192.168.1.1" />
                             </div>
@@ -318,7 +318,7 @@ class ProvisionFormPydantic {
                                 </div>
                             </div>
                             <div class="field-control">
-                                <input type="text" id="guest-net-dnssuffix" name="guest_net_dnssuffix" 
+                                <input type="text" id="guest-net-dnssuffix" name="guest_net_dns_suffix" 
                                        placeholder="e.g., example.com" />
                             </div>
                             <p class="field-description">DNS search suffix for the guest network configuration (optional)</p>
@@ -380,7 +380,7 @@ class ProvisionFormPydantic {
                                 </div>
                             </div>
                             <div class="field-control">
-                                <input type="text" id="guest-domain-jointarget" name="guest_domain_jointarget" 
+                                <input type="text" id="guest-domain-jointarget" name="guest_domain_join_target" 
                                        placeholder="e.g., corp.example.com" />
                             </div>
                             <p class="field-description">Fully qualified domain name to join</p>
@@ -394,7 +394,7 @@ class ProvisionFormPydantic {
                                 </div>
                             </div>
                             <div class="field-control">
-                                <input type="text" id="guest-domain-joinuid" name="guest_domain_joinuid" 
+                                <input type="text" id="guest-domain-joinuid" name="guest_domain_join_uid" 
                                        placeholder="e.g., EXAMPLE\\svc_join" />
                             </div>
                             <p class="field-description">User account used to join the domain</p>
@@ -408,7 +408,7 @@ class ProvisionFormPydantic {
                                 </div>
                             </div>
                             <div class="field-control">
-                                <input type="password" id="guest-domain-joinpw" name="guest_domain_joinpw" 
+                                <input type="password" id="guest-domain-joinpw" name="guest_domain_join_pw" 
                                        autocomplete="new-password" />
                             </div>
                             <p class="field-description">Password for the domain join account</p>
@@ -422,7 +422,7 @@ class ProvisionFormPydantic {
                                 </div>
                             </div>
                             <div class="field-control">
-                                <input type="text" id="guest-domain-joinou" name="guest_domain_joinou" 
+                                <input type="text" id="guest-domain-joinou" name="guest_domain_join_ou" 
                                        placeholder="e.g., OU=Servers,DC=corp,DC=example,DC=com" />
                             </div>
                             <p class="field-description">Organizational unit path for the computer account</p>
@@ -600,26 +600,26 @@ class ProvisionFormPydantic {
         // Add static IP config if not using DHCP
         const useDhcp = document.getElementById('use-dhcp').checked;
         if (!useDhcp) {
-            payload.guest_config.guest_v4_ipaddr = formData.get('guest_v4_ipaddr');
-            payload.guest_config.guest_v4_cidrprefix = parseInt(formData.get('guest_v4_cidrprefix'), 10);
-            payload.guest_config.guest_v4_defaultgw = formData.get('guest_v4_defaultgw');
+            payload.guest_config.guest_v4_ip_addr = formData.get('guest_v4_ip_addr');
+            payload.guest_config.guest_v4_cidr_prefix = parseInt(formData.get('guest_v4_cidr_prefix'), 10);
+            payload.guest_config.guest_v4_default_gw = formData.get('guest_v4_default_gw');
             payload.guest_config.guest_v4_dns1 = formData.get('guest_v4_dns1');
             payload.guest_config.guest_v4_dns2 = formData.get('guest_v4_dns2') || null;
             
             // Add DNS suffix if provided (can be set with or without static IP)
-            const dnsSuffix = formData.get('guest_net_dnssuffix');
+            const dnsSuffix = formData.get('guest_net_dns_suffix');
             if (dnsSuffix) {
-                payload.guest_config.guest_net_dnssuffix = dnsSuffix;
+                payload.guest_config.guest_net_dns_suffix = dnsSuffix;
             }
         }
 
         // Add domain join config if enabled
         const enableDomainJoin = document.getElementById('enable-domain-join').checked;
         if (enableDomainJoin) {
-            payload.guest_config.guest_domain_jointarget = formData.get('guest_domain_jointarget');
-            payload.guest_config.guest_domain_joinuid = formData.get('guest_domain_joinuid');
-            payload.guest_config.guest_domain_joinpw = formData.get('guest_domain_joinpw');
-            payload.guest_config.guest_domain_joinou = formData.get('guest_domain_joinou');
+            payload.guest_config.guest_domain_join_target = formData.get('guest_domain_join_target');
+            payload.guest_config.guest_domain_join_uid = formData.get('guest_domain_join_uid');
+            payload.guest_config.guest_domain_join_pw = formData.get('guest_domain_join_pw');
+            payload.guest_config.guest_domain_join_ou = formData.get('guest_domain_join_ou');
         }
 
         // Add Ansible config if enabled
