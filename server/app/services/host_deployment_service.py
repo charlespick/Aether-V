@@ -574,7 +574,7 @@ class HostDeploymentService:
                 return False
 
             # Deploy all artifacts in parallel using a single WinRM connection
-            all_artifacts = []
+            all_artifacts: List[Tuple[str, str]] = []
             all_artifacts.extend((f.name, self._build_remote_path(f.name)) for f in script_files)
             all_artifacts.extend((f.name, self._build_remote_path(f.name)) for f in iso_files)
             all_artifacts.append((version_path.name, self._build_remote_path(version_path.name)))

@@ -21,7 +21,6 @@ except ModuleNotFoundError:  # pragma: no cover - fallback stub for minimal envs
     class HTTPError(Exception):
         pass
 
-
     class AsyncClient:  # pragma: no cover - test stub
         def __init__(self, *args, **kwargs):
             pass
@@ -34,7 +33,6 @@ except ModuleNotFoundError:  # pragma: no cover - fallback stub for minimal envs
 
         async def get(self, *args, **kwargs):  # noqa: D401 - simple stub
             raise HTTPError("httpx stub is not functional in tests")
-
 
     httpx_module.AsyncClient = AsyncClient
     httpx_module.HTTPError = HTTPError
@@ -51,21 +49,17 @@ except ModuleNotFoundError:  # pragma: no cover - fallback stub for minimal envs
     class AuthenticationError(Exception):
         pass
 
-
     class WinRMError(Exception):
         pass
 
-
     class WinRMTransportError(Exception):
         pass
-
 
     class PSInvocationState:
         COMPLETED = object()
         FAILED = object()
         STOPPED = object()
         DISCONNECTED = object()
-
 
     exceptions_module.AuthenticationError = AuthenticationError
     exceptions_module.PSInvocationState = PSInvocationState
@@ -82,14 +76,12 @@ except ModuleNotFoundError:  # pragma: no cover - fallback stub for minimal envs
         def close(self):  # noqa: D401 - simple stub
             return None
 
-
     class RunspacePool:  # pragma: no cover - test stub
         def __init__(self, *args, **kwargs):
             pass
 
         def close(self):  # noqa: D401 - simple stub
             return None
-
 
     powershell_module.PowerShell = PowerShell
     powershell_module.RunspacePool = RunspacePool
@@ -102,7 +94,6 @@ except ModuleNotFoundError:  # pragma: no cover - fallback stub for minimal envs
 
         def close(self):  # noqa: D401 - simple stub
             return None
-
 
     wsman_module.WSMan = WSMan
 
@@ -144,21 +135,24 @@ class HostDeploymentServiceVersionTests(TestCase):
 
     def test_assess_host_version_handles_empty_container_version(self):
         self.service._container_version = "   "
-        needs_update, normalized, reason = self.service._assess_host_version("1.2.3")
+        needs_update, normalized, reason = self.service._assess_host_version(
+            "1.2.3")
         self.assertTrue(needs_update)
         self.assertEqual(normalized, "1.2.3")
         self.assertEqual(reason, "container version unavailable")
 
     def test_assess_host_version_reports_unparsable_host_version(self):
         self.service._container_version = "2.0.0"
-        needs_update, normalized, reason = self.service._assess_host_version("v2")
+        needs_update, normalized, reason = self.service._assess_host_version(
+            "v2")
         self.assertTrue(needs_update)
         self.assertEqual(normalized, "v2")
         self.assertEqual(reason, "host version unparsable")
 
     def test_assess_host_version_allows_host_ahead(self):
         self.service._container_version = "1.0.0"
-        needs_update, normalized, reason = self.service._assess_host_version("1.0.1")
+        needs_update, normalized, reason = self.service._assess_host_version(
+            "1.0.1")
         self.assertFalse(needs_update)
         self.assertEqual(normalized, "1.0.1")
         self.assertEqual(reason, "host version ahead of container")
@@ -196,7 +190,8 @@ class HostDeploymentServiceVersionTests(TestCase):
         ) as ensure_dir, mock.patch.object(
             self.service, "_clear_host_install_directory"
         ) as clear_dir:
-            result = self.service._deploy_to_host("host-1", observed_host_version="3.1.4")
+            result = self.service._deploy_to_host(
+                "host-1", observed_host_version="3.1.4")
 
         self.assertTrue(result)
         get_version.assert_not_called()
@@ -237,11 +232,12 @@ class HostDeploymentServiceUtilityTests(TestCase):
             "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
             return_value=("Successfully downloaded 3 artifacts", "", 0),
         ) as exec_mock:
-            result = self.service._deploy_all_artifacts_parallel("host-1", artifacts)
+            result = self.service._deploy_all_artifacts_parallel(
+                "host-1", artifacts)
 
         self.assertTrue(result)
         self.assertEqual(exec_mock.call_count, 1)
-        
+
         # Verify the PowerShell script was constructed correctly
         call_args = exec_mock.call_args[0]
         script = call_args[1]
@@ -258,7 +254,8 @@ class HostDeploymentServiceUtilityTests(TestCase):
             "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
             return_value=("", "Failed to download: script.ps1", 1),
         ) as exec_mock:
-            result = self.service._deploy_all_artifacts_parallel("host-1", artifacts)
+            result = self.service._deploy_all_artifacts_parallel(
+                "host-1", artifacts)
 
         self.assertFalse(result)
         self.assertEqual(exec_mock.call_count, 1)
@@ -283,7 +280,8 @@ class HostDeploymentServiceUtilityTests(TestCase):
         ), mock.patch.object(
             settings, "agent_download_retry_interval", 1.5
         ):
-            result = self.service._deploy_all_artifacts_parallel("host-1", artifacts)
+            result = self.service._deploy_all_artifacts_parallel(
+                "host-1", artifacts)
 
         self.assertTrue(result)
         script = exec_mock.call_args[0][1]
@@ -297,7 +295,7 @@ class HostDeploymentServiceUtilityTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-            
+
             # Create test artifacts
             script1 = tmp_path / "script1.ps1"
             script1.write_text("echo 'script1'")
@@ -311,8 +309,8 @@ class HostDeploymentServiceUtilityTests(TestCase):
             with mock.patch(
                 "server.app.services.host_deployment_service.AGENT_ARTIFACTS_DIR", tmp_path
             ), mock.patch(
-                "server.app.services.host_deployment_service.settings.version_file_path",
-                str(version_file)
+                "server.app.core.config.AGENT_VERSION_PATH",
+                version_file
             ), mock.patch.object(
                 self.service, "_get_host_version", return_value="1.0.0"
             ), mock.patch.object(
@@ -326,16 +324,17 @@ class HostDeploymentServiceUtilityTests(TestCase):
             ) as deploy_mock, mock.patch.object(
                 self.service, "_verify_expected_artifacts_present", return_value=True
             ):
-                result = self.service._deploy_to_host("host-1", observed_host_version="1.0.0")
+                result = self.service._deploy_to_host(
+                    "host-1", observed_host_version="1.0.0")
 
             self.assertTrue(result)
             deploy_mock.assert_called_once()
-            
+
             # Verify the artifacts list contains all expected files
             call_args = deploy_mock.call_args[0]
             artifacts = call_args[1]
             artifact_names = [name for name, _ in artifacts]
-            
+
             self.assertIn("script1.ps1", artifact_names)
             self.assertIn("script2.ps1", artifact_names)
             self.assertIn("disk.iso", artifact_names)
@@ -382,7 +381,8 @@ class HostDeploymentServiceUtilityTests(TestCase):
             "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
             return_value=("", "", 0),
         ) as exec_mock:
-            self.assertTrue(self.service._clear_host_install_directory("host-1"))
+            self.assertTrue(
+                self.service._clear_host_install_directory("host-1"))
 
         self.assertEqual(exec_mock.call_count, 1)
 
@@ -391,14 +391,16 @@ class HostDeploymentServiceUtilityTests(TestCase):
             "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
             return_value=("", "boom", 1),
         ):
-            self.assertFalse(self.service._clear_host_install_directory("host-1"))
+            self.assertFalse(
+                self.service._clear_host_install_directory("host-1"))
 
     def test_verify_install_directory_empty_handles_errors(self):
         with mock.patch(
             "server.app.services.host_deployment_service.winrm_service.execute_ps_command",
             return_value=("", "boom", 1),
         ):
-            self.assertFalse(self.service._verify_install_directory_empty("host-1"))
+            self.assertFalse(
+                self.service._verify_install_directory_empty("host-1"))
 
     def test_verify_expected_artifacts_present(self):
         with mock.patch(
@@ -448,7 +450,8 @@ class HostDeploymentServiceUtilityTests(TestCase):
         async def ensure_host_setup(hostname: str) -> bool:
             return False
 
-        self.service.ensure_host_setup = ensure_host_setup  # type: ignore[assignment]
+        # type: ignore[assignment]
+        self.service.ensure_host_setup = ensure_host_setup
         self.service._host_setup_status["host-1"] = HostSetupStatus(
             state="error", error="boom"
         )
@@ -528,10 +531,12 @@ class HostDeploymentServiceIngressTests(IsolatedAsyncioTestCase):
         run_mock = mock.AsyncMock(side_effect=run_call)
 
         with mock.patch.object(self.service, "_run_winrm_call", run_mock):
-            first = asyncio.create_task(self.service.ensure_host_setup("host-1"))
+            first = asyncio.create_task(
+                self.service.ensure_host_setup("host-1"))
             await deploy_started.wait()
 
-            second = asyncio.create_task(self.service.ensure_host_setup("host-1"))
+            second = asyncio.create_task(
+                self.service.ensure_host_setup("host-1"))
 
             await asyncio.sleep(0)
             self.assertEqual(call_sequence, ["version", "deploy"])
@@ -544,4 +549,3 @@ class HostDeploymentServiceIngressTests(IsolatedAsyncioTestCase):
         self.assertTrue(result_two)
         self.assertEqual(run_mock.await_count, 2)
         self.assertEqual(call_sequence, ["version", "deploy"])
-

@@ -563,7 +563,8 @@ class JobService:
                         else:
                             resource_name = "Network Adapter"
                     
-                    metadata["resource_name"] = resource_name
+                    if resource_name:
+                        metadata["resource_name"] = resource_name
 
         # Disk jobs: Look up parent VM and disk details
         elif job.job_type in ("create_disk", "update_disk", "delete_disk"):
@@ -600,7 +601,8 @@ class JobService:
                         else:
                             resource_name = "Disk"
                     
-                    metadata["resource_name"] = resource_name
+                    if resource_name:
+                        metadata["resource_name"] = resource_name
 
         # Store metadata in job parameters
         if metadata:

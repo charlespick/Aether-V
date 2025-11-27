@@ -58,7 +58,7 @@ def collect_python_licenses() -> list[dict[str, Any]]:
 
 def collect_js_licenses(package_dir: Path) -> list[dict[str, Any]]:
     """Collect license information from JavaScript packages using license-checker."""
-    packages = []
+    packages: list[dict[str, Any]] = []
     
     node_modules = package_dir / "node_modules"
     if not node_modules.exists():
