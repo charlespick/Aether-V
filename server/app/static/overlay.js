@@ -103,6 +103,7 @@ class OverlayManager {
         this.registerOverlay('nic-create', NicCreateOverlay);
         this.registerOverlay('nic-edit', NicEditOverlay);
         this.registerOverlay('vm-edit', VMEditOverlay);
+        this.registerOverlay('oss-attributions', OSSAttributionsOverlay);
     }
 }
 
@@ -303,6 +304,15 @@ class SettingsOverlay extends BaseOverlay {
                     ${summaryMarkup}
                     ${moreDetailsMarkup}
                     ${seeMoreButtonMarkup}
+                    <div class="about-actions-row">
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            id="oss-attributions-btn"
+                        >
+                            OSS Attributions
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -351,6 +361,15 @@ class SettingsOverlay extends BaseOverlay {
             seeMoreBtn.addEventListener('click', this.aboutSeeMoreHandler);
         }
 
+        const ossAttributionsBtn = document.getElementById('oss-attributions-btn');
+        if (ossAttributionsBtn) {
+            this.ossAttributionsHandler = () => {
+                overlayManager.close();
+                overlayManager.open('oss-attributions');
+            };
+            ossAttributionsBtn.addEventListener('click', this.ossAttributionsHandler);
+        }
+
         this.aboutExpanded = false;
         this.updateAboutExpansion();
     }
@@ -392,6 +411,14 @@ class SettingsOverlay extends BaseOverlay {
                 seeMoreBtn.removeEventListener('click', this.aboutSeeMoreHandler);
             }
             this.aboutSeeMoreHandler = null;
+        }
+
+        if (this.ossAttributionsHandler) {
+            const ossAttributionsBtn = document.getElementById('oss-attributions-btn');
+            if (ossAttributionsBtn) {
+                ossAttributionsBtn.removeEventListener('click', this.ossAttributionsHandler);
+            }
+            this.ossAttributionsHandler = null;
         }
     }
 
@@ -2334,6 +2361,135 @@ class VMEditOverlay extends BaseOverlay {
         } catch (error) {
             console.error('VM update error:', error);
             this.messagesEl.innerHTML = `<div class="form-error">Failed to update VM: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// OSS Attributions Overlay - Displays open source license information
+class OSSAttributionsOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.licenses = null;
+        this.loading = true;
+        this.error = null;
+    }
+
+    getTitle() {
+        return 'Open Source Licenses';
+    }
+
+    async render() {
+        // Fetch license data
+        await this.fetchLicenses();
+
+        if (this.loading) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-loading">Loading license information...</div>
+                </div>
+            `;
+        }
+
+        if (this.error) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-error">${this.escapeHtml(this.error)}</div>
+                </div>
+            `;
+        }
+
+        const packages = this.licenses?.packages || [];
+        const summary = this.licenses?.summary || {};
+
+        if (packages.length === 0) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-empty">No license information available.</div>
+                </div>
+            `;
+        }
+
+        const pythonPackages = packages.filter(p => p.ecosystem === 'python');
+        const jsPackages = packages.filter(p => p.ecosystem === 'javascript');
+
+        return `
+            <div class="oss-attributions">
+                <div class="oss-intro">
+                    <p>This software includes open source components. We thank the authors and maintainers of these packages for their contributions to the open source community.</p>
+                    <div class="oss-summary">
+                        <span class="oss-summary-item"><strong>${summary.total || packages.length}</strong> packages</span>
+                        <span class="oss-summary-divider">•</span>
+                        <span class="oss-summary-item"><strong>${summary.python || pythonPackages.length}</strong> Python</span>
+                        <span class="oss-summary-divider">•</span>
+                        <span class="oss-summary-item"><strong>${summary.javascript || jsPackages.length}</strong> JavaScript</span>
+                    </div>
+                </div>
+
+                ${pythonPackages.length > 0 ? `
+                    <div class="oss-section">
+                        <h3 class="oss-section-title">Python Packages</h3>
+                        <div class="oss-package-list">
+                            ${pythonPackages.map(pkg => this.renderPackage(pkg)).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+
+                ${jsPackages.length > 0 ? `
+                    <div class="oss-section">
+                        <h3 class="oss-section-title">JavaScript Packages</h3>
+                        <div class="oss-package-list">
+                            ${jsPackages.map(pkg => this.renderPackage(pkg)).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+
+    renderPackage(pkg) {
+        const name = this.escapeHtml(pkg.name || 'Unknown');
+        const version = this.escapeHtml(pkg.version || '');
+        const license = this.escapeHtml(pkg.license || 'Unknown');
+        const author = pkg.author ? this.escapeHtml(pkg.author) : null;
+        const url = pkg.url || '';
+
+        const nameDisplay = url
+            ? `<a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="oss-package-link">${name}</a>`
+            : `<span class="oss-package-name">${name}</span>`;
+
+        return `
+            <div class="oss-package">
+                <div class="oss-package-header">
+                    ${nameDisplay}
+                    ${version ? `<span class="oss-package-version">${version}</span>` : ''}
+                </div>
+                <div class="oss-package-details">
+                    <span class="oss-package-license">${license}</span>
+                    ${author ? `<span class="oss-package-author">by ${author}</span>` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    async fetchLicenses() {
+        this.loading = true;
+        this.error = null;
+
+        try {
+            const response = await fetch('/api/v1/oss-licenses', {
+                credentials: 'same-origin',
+            });
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch license information: ${response.statusText}`);
+            }
+
+            this.licenses = await response.json();
+        } catch (error) {
+            console.error('Failed to fetch OSS licenses:', error);
+            this.error = 'Unable to load license information. Please try again later.';
+        } finally {
+            this.loading = false;
         }
     }
 }

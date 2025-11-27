@@ -291,6 +291,32 @@ class NotificationsResponse(BaseModel):
     unread_count: int
 
 
+class OSSPackage(BaseModel):
+    """Information about an open source package."""
+
+    name: str
+    version: str
+    license: str
+    author: Optional[str] = None
+    url: Optional[str] = None
+    ecosystem: str
+
+
+class OSSLicenseSummary(BaseModel):
+    """Summary statistics for OSS license information."""
+
+    total: int
+    python: int
+    javascript: int
+
+
+class OSSLicenseResponse(BaseModel):
+    """Response containing OSS license information."""
+
+    packages: List[OSSPackage]
+    summary: OSSLicenseSummary
+
+
 class RemoteTaskPoolMetrics(BaseModel):
     """Snapshot of a remote task worker pool."""
 

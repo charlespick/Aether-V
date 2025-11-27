@@ -40,6 +40,9 @@ from ..core.models import (
     JobServiceMetrics,
     InventoryServiceMetrics,
     HostDeploymentMetrics,
+    OSSLicenseResponse,
+    OSSPackage,
+    OSSLicenseSummary,
 )
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
@@ -411,6 +414,62 @@ async def get_about(user: dict = Depends(require_permission(Permission.READER)))
         description="Hyper-V Virtual Machine Management Platform",
         build=_current_build_info(),
     )
+
+
+@router.get("/api/v1/oss-licenses", response_model=OSSLicenseResponse, tags=["About"])
+async def get_oss_licenses(user: dict = Depends(require_permission(Permission.READER))):
+    """Return OSS license information for third-party packages.
+
+    This endpoint provides license information for all open source packages
+    used by the application, including both Python and JavaScript dependencies.
+    """
+    from pathlib import Path
+
+    # Look for the license file in expected locations
+    app_dir = Path(__file__).resolve().parent.parent
+    license_paths = [
+        app_dir.parent / "oss-licenses.json",  # Container: /app/oss-licenses.json
+        app_dir.parent.parent / "oss-licenses.json",  # Development: server/oss-licenses.json
+    ]
+
+    license_data = None
+    for path in license_paths:
+        if path.exists():
+            try:
+                license_data = json.loads(path.read_text(encoding="utf-8"))
+                break
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning("Failed to read OSS licenses from %s: %s", path, e)
+
+    if license_data is None:
+        # Return empty response if no license file is found
+        logger.warning("OSS license file not found in expected locations")
+        return OSSLicenseResponse(
+            packages=[],
+            summary=OSSLicenseSummary(total=0, python=0, javascript=0),
+        )
+
+    # Parse the packages and summary from the file
+    packages = [
+        OSSPackage(
+            name=pkg.get("name", ""),
+            version=pkg.get("version", ""),
+            license=pkg.get("license", "Unknown"),
+            author=pkg.get("author"),
+            url=pkg.get("url"),
+            ecosystem=pkg.get("ecosystem", "unknown"),
+        )
+        for pkg in license_data.get("packages", [])
+    ]
+
+    summary_data = license_data.get("summary", {})
+    summary = OSSLicenseSummary(
+        total=summary_data.get("total", len(packages)),
+        python=summary_data.get("python", 0),
+        javascript=summary_data.get("javascript", 0),
+    )
+
+    return OSSLicenseResponse(packages=packages, summary=summary)
 
 
 @router.get("/api/v1/inventory", response_model=InventoryResponse, tags=["Inventory"])
