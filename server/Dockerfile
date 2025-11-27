@@ -44,6 +44,7 @@ RUN set -eux; \
     python - <<'PY'
 import datetime
 import json
+import os
 import socket
 import subprocess
 from pathlib import Path
@@ -82,6 +83,11 @@ if Path(".git").exists():
         metadata["git_state"] = state
 else:
     metadata["source_control"] = "absent"
+
+# Capture GitHub repository from CI environment
+github_repo = os.environ.get("GITHUB_REPOSITORY")
+if github_repo:
+    metadata["github_repository"] = f"https://github.com/{github_repo}"
 
 version_file = Path("version")
 metadata["version"] = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "unknown"

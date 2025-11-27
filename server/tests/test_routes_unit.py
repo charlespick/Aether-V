@@ -44,6 +44,7 @@ def test_current_build_info_returns_model(monkeypatch):
         git_commit="abc",
         git_ref="main",
         git_state="clean",
+        github_repository="https://github.com/test/repo",
         build_time=datetime(2024, 1, 2),
         build_host="builder",
     )
@@ -63,6 +64,7 @@ async def test_health_check_includes_build_metadata(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )
@@ -83,6 +85,7 @@ async def test_readiness_check_reflects_config_errors(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )
@@ -108,6 +111,7 @@ async def test_readiness_check_without_errors_reports_ready(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )

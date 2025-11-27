@@ -60,6 +60,7 @@ def _build_metadata_payload() -> dict:
         "git_commit": build_metadata.git_commit,
         "git_ref": build_metadata.git_ref,
         "git_state": build_metadata.git_state,
+        "github_repository": build_metadata.github_repository,
         "build_time": build_metadata.build_time_iso,
         "build_host": build_metadata.build_host,
     }
@@ -606,6 +607,10 @@ async def root(request: Request):
             if not is_authenticated:
                 logger.info(
                     "Unauthenticated request for UI; rendering login page")
+                
+                # Use dynamic GitHub URL from build metadata if available, otherwise fall back to hardcoded value
+                github_url = build_metadata.github_repository or PROJECT_GITHUB_URL
+                
                 response = templates.TemplateResponse(
                     "login.html",
                     {
@@ -615,7 +620,7 @@ async def root(request: Request):
                         "app_name": settings.app_name,
                         "build_metadata": build_metadata,
                         "build_metadata_payload": _build_metadata_payload(),
-                        "github_url": PROJECT_GITHUB_URL,
+                        "github_url": github_url,
                         "api_reference_url": API_REFERENCE_URL,
                     },
                     status_code=status.HTTP_200_OK,

@@ -255,6 +255,7 @@ def _current_build_info() -> BuildInfo:
         git_commit=build_metadata.git_commit,
         git_ref=build_metadata.git_ref,
         git_state=build_metadata.git_state,
+        github_repository=build_metadata.github_repository,
         build_time=build_metadata.build_time,
         build_host=build_metadata.build_host,
     )

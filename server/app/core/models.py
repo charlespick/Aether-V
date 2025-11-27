@@ -262,6 +262,7 @@ class BuildInfo(BaseModel):
     git_commit: Optional[str] = None
     git_ref: Optional[str] = None
     git_state: Optional[str] = None
+    github_repository: Optional[str] = None
     build_time: Optional[datetime] = None
     build_host: Optional[str] = None
 
