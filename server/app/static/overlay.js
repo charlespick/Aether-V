@@ -294,7 +294,6 @@ class SettingsOverlay extends BaseOverlay {
                             src="/assets/Logo.png"
                             alt="${productName} logo"
                             class="about-logo"
-                            loading="lazy"
                         />
                         <div class="about-brand-text">
                             <p class="about-name">${productName}</p>
