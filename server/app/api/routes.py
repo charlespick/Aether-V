@@ -486,10 +486,19 @@ async def _execute_redeploy(host_list: List[str], running_jobs: int) -> None:
                     "Not all jobs completed within timeout; proceeding with redeployment anyway"
                 )
 
-        logger.info("Starting force redeployment to %d host(s)",
-                    len(host_list))
-        await host_deployment_service.force_redeploy_all_hosts(host_list)
-        logger.info("Force redeployment completed successfully")
+        # Stop inventory service to prevent interference during redeployment
+        logger.info("Stopping inventory service for redeployment")
+        await inventory_service.stop()
+
+        try:
+            logger.info("Starting force redeployment to %d host(s)",
+                        len(host_list))
+            await host_deployment_service.force_redeploy_all_hosts(host_list)
+            logger.info("Force redeployment completed successfully")
+        finally:
+            # Always restart inventory service, even if redeployment fails
+            logger.info("Restarting inventory service")
+            await inventory_service.start()
 
     except Exception as exc:
         logger.exception("Force redeployment failed: %s", exc)
