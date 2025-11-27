@@ -1,7 +1,13 @@
 
+
+<img src="./Assets/Logo.png" width="150">
+
 # Aether-V
 
-Aether-V is a unified solution for modern workload management on Hyper-V, providing a complete platform that includes a web frontend, orchestration service, and guest agents. Designed for both homelab and enterprise environments, Aether-V streamlines VM provisioning, configuration, and lifecycle management with secure, resilient architecture.
+Aether-V is a unified solution for modern infrastructure management on Hyper-V, providing a complete platform that includes a web frontend, orchestration service, and guest agents. Designed for both homelab and enterprise environments, Aether-V streamlines VM provisioning, configuration, and lifecycle management with secure, resilient architecture.
+
+![Alt text](Docs/Screenshots.png)
+Background credit [Nigel Hoare](https://unsplash.com/@dementedpixel) used under the [Unsplash License](https://unsplash.com/license)
 
 ## Overview
 
@@ -10,12 +16,12 @@ Aether-V enables automated, secure, and scalable management of Hyper-V virtual m
 ## Key Features
 
 - **Unified Platform:** Web UI, REST API, and guest agents for end-to-end VM lifecycle management.
-- **Stateless Operation:** No persistent storage; service state is always derived from live Hyper-V hosts.
+- **Stateless Operation:** No persistent storage or database; service state is always derived from live Hyper-V hosts.
 - **Encrypted Provisioning Data:** VM provisioning data is injected via Hyper-V KVP, encrypted so only the VM can access secrets after provisioning.
 - **OIDC Authentication:** Enterprise-ready authentication with Microsoft Entra ID (Azure AD) for users and service principals.
-- **Containerized & Kubernetes-ready:** Easy deployment and scaling in cloud-native environments.
-- **Auto-refresh Inventory:** Periodic updates from all hosts.
-- **No SCVMM or SQL Server Required:** Minimal infrastructure footprint.
+- **Containerized & Production-ready:** Easy highly-available deployment in a Kubernetes environment.
+- **Authoritative Inventory:** Periodic updates from all hosts.
+- **Minimal infrastructure footprint:** No SCVMM or SQL Server Required.
 
 ## How It Works
 
@@ -93,53 +99,34 @@ workflows.
 
 ## API & UI
 
-- **Inventory:** `GET /api/v1/inventory`
-- **Hosts:** `GET /api/v1/hosts`
-- **VMs:** `GET /api/v1/vms`, `POST /api/v1/vms/create`, `POST /api/v1/vms/delete`
-- **Jobs:** `GET /api/v1/jobs/{job_id}`
-- **Auth:** OIDC login/logout endpoints
-- **Health:** `/healthz`, `/readyz`
+### Inventory & Discovery
+- **Inventory:** `GET /api/v1/inventory` - Complete inventory with clusters, hosts, VMs, and disconnected hosts
+- **Hosts:** `GET /api/v1/hosts` - List all Hyper-V hosts
+- **Host VMs:** `GET /api/v1/hosts/{hostname}/vms` - List VMs on a specific host
+- **VMs:** `GET /api/v1/vms` - List all VMs across all hosts
+- **VM by ID:** `GET /api/v1/vms/by-id/{vm_id}` - Get VM details by ID
+
+### Resource Management
+- **VMs:** `GET /api/v1/resources/vms`, `GET /api/v1/resources/vms/{vm_id}`, `POST /api/v1/resources/vms`, `PUT /api/v1/resources/vms/{vm_id}`, `DELETE /api/v1/resources/vms/{vm_id}`
+- **VM Actions:** `POST /api/v1/resources/vms/{vm_id}/start`, `POST /api/v1/resources/vms/{vm_id}/shutdown`, `POST /api/v1/resources/vms/{vm_id}/stop`, `POST /api/v1/resources/vms/{vm_id}/reset`
+- **VM Initialization:** `POST /api/v1/resources/vms/{vm_id}/initialize` - Trigger guest configuration
+- **Disks:** `GET /api/v1/resources/vms/{vm_id}/disks`, `GET /api/v1/resources/vms/{vm_id}/disks/{disk_id}`, `POST /api/v1/resources/disks`, `PUT /api/v1/resources/vms/{vm_id}/disks/{disk_id}`, `DELETE /api/v1/resources/vms/{vm_id}/disks/{disk_id}`
+- **NICs:** `GET /api/v1/resources/vms/{vm_id}/nics`, `GET /api/v1/resources/vms/{vm_id}/nics/{nic_id}`, `POST /api/v1/resources/nics`, `PUT /api/v1/resources/vms/{vm_id}/nics/{nic_id}`, `DELETE /api/v1/resources/vms/{vm_id}/nics/{nic_id}`
+
+### Managed Deployments
+- **Deploy VM:** `POST /api/managed-deployments` - Create complete VM with disks, NICs, and guest configuration in one operation
+
+### Jobs & Operations
+- **Jobs:** `GET /api/v1/jobs` - List all jobs
+- **Job Details:** `GET /api/v1/jobs/{job_id}` - Get job status and details
+
+
+**More APIs are available for system and othe purposes**
 
 Interactive API docs: `/docs` (Swagger UI), `/redoc`
 
-## Extending & Customizing
-
-- Extend provisioning scripts (`ProvisioningService.sh/ps1`) for custom logic.
-- Add new fields or features as needed.
-- Integrate with automation tools via API or future Terraform provider.
-
-## Security
-
-- Always enable OIDC in production.
-- Use Kubernetes Secrets for credentials.
-- Enable TLS for ingress.
-- Map Microsoft Entra scopes/app roles to `OIDC_READER_PERMISSIONS`, `OIDC_WRITER_PERMISSIONS`, and `OIDC_ADMIN_PERMISSIONS`; access tokens are validated for the configured audience and signing keys.
-- Configure RBAC and use HTTPS for WinRM in production.
-
-## Troubleshooting
-
-- Check WinRM connectivity and credentials.
-- Review logs via `kubectl logs`.
-- Use health endpoints for readiness checks.
-
-## Project Structure
-
-```
-server/
-├── app/
-│   ├── api/           # API routes
-│   ├── core/          # Core models and config
-│   ├── services/      # Business logic services
-│   ├── templates/     # Web UI templates
-│   └── main.py        # Application entry point
-├── k8s/               # Kubernetes manifests
-├── Dockerfile         # Container definition
-└── requirements.txt   # Python dependencies
-```
-
 ## Roadmap
 
-- Enhanced job logging
-- Terraform provider integration
+- Terraform provider
 - Multi-replica support
 - Persistent job history
