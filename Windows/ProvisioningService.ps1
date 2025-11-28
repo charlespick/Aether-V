@@ -375,10 +375,12 @@ function Invoke-Modules {
             if (Get-Command $executeFunction -ErrorAction SilentlyContinue) {
                 # Execute the module
                 & $executeFunction -DecryptedKeysDir $DecryptedKeysDir
-            } else {
+            }
+            else {
                 Write-Host "ERROR: Module $moduleName does not have function $executeFunction"
             }
-        } else {
+        }
+        else {
             Write-Host "WARNING: Module file not found: $modulePath (skipping)"
         }
     }
@@ -396,286 +398,288 @@ try {
     $decryptedKeysDir = "C:\ProgramData\HyperV"
 
     switch (Get-Content -Path $PhaseFile -Encoding UTF8) {
-    "nophasestartedyet" {
-        "phase_one" | Set-Content -Path $PhaseFile -Encoding UTF8
-        $cdromDrives = Get-WmiObject -Class Win32_CDROMDrive
+        "nophasestartedyet" {
+            "phase_one" | Set-Content -Path $PhaseFile -Encoding UTF8
+            $cdromDrives = Get-WmiObject -Class Win32_CDROMDrive
 
-        if ($cdromDrives) {
-            foreach ($cd in $cdromDrives) {
-                $driveLetter = $cd.Drive
-                if ($driveLetter) {
-                    (New-Object -comObject Shell.Application).NameSpace(17).ParseName($driveLetter).InvokeVerb("Eject")
-                    Write-Host "Ejected CD-ROM at drive $driveLetter"
+            if ($cdromDrives) {
+                foreach ($cd in $cdromDrives) {
+                    $driveLetter = $cd.Drive
+                    if ($driveLetter) {
+                        (New-Object -comObject Shell.Application).NameSpace(17).ParseName($driveLetter).InvokeVerb("Eject")
+                        Write-Host "Ejected CD-ROM at drive $driveLetter"
+                    }
                 }
             }
-        }
-        else {
-            Write-Host "No CD-ROM drive found to eject."
-        }
-
-        while ($true) {
-            Set-CurrentErrorSummary 'error waiting:host_signal'
-            $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
-            if ($state -eq "waitingforpublickey") {
-                break
+            else {
+                Write-Host "No CD-ROM drive found to eject."
             }
-            Start-Sleep -Seconds 5
-        }
 
-        # Read expected version from local version file
-        $versionFilePath = "C:\ProgramData\HyperV\version"
-        if (-not (Test-Path $versionFilePath)) {
-            Write-Host "Version file not found at $versionFilePath. Cannot verify provisioning system version."
-            Throw-ProvisioningError 'error validating:manifest' "Version file not found at $versionFilePath. Cannot verify provisioning system version."
-        }
-        $expectedVersionRaw = Get-Content -Path $versionFilePath -Raw -ErrorAction SilentlyContinue
-        if (-not $expectedVersionRaw) {
-            Write-Host "Failed to read version from $versionFilePath. Cannot verify provisioning system version."
-            Throw-ProvisioningError 'error validating:manifest' "Failed to read version from $versionFilePath. Cannot verify provisioning system version."
-        }
-
-        # Normalize expected version: trim whitespace, remove null chars, convert to string
-        $expectedVersion = [string]($expectedVersionRaw -replace "`0", "").Trim()
-        if (-not $expectedVersion) {
-            Write-Host "Version file contains empty or invalid content. Cannot verify provisioning system version."
-            Throw-ProvisioningError 'error validating:manifest' "Version file contains empty or invalid content. Cannot verify provisioning system version."
-        }
-
-        Set-CurrentErrorSummary 'error validating:manifest'
-        $manifestRaw = Read-HyperVKvp -Key "hlvmm.meta.version" -ErrorAction SilentlyContinue
-        if (-not $manifestRaw) {
-            Write-Host "Failed to read hlvmm.meta.version from KVP. Cannot verify provisioning system version."
-            Throw-ProvisioningError 'error validating:manifest' "Failed to read hlvmm.meta.version from KVP. Cannot verify provisioning system version."
-        }
-
-        # Normalize manifest version: trim whitespace, remove null chars, convert to string
-        $manifest = [string]($manifestRaw -replace "`0", "").Trim()
-
-        if ($manifest -ne $expectedVersion) {
-            Write-Host "Provisioning system manifest mismatch. Expected: '$expectedVersion', Got: '$manifest'."
-            Throw-ProvisioningError 'error validating:manifest' "Provisioning system manifest mismatch. Expected: '$expectedVersion', Got: '$manifest'."
-        }
-        Write-Host "Provisioning system version verified: $expectedVersion"
-
-        # Generate RSA key pair and keep them in memory
-        $rsa = $null
-        try {
-            Set-CurrentErrorSummary 'error generating:rsa_keys'
-            $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
-            $publicKey = $rsa.ExportCspBlob($false)
-
-            # Convert public key to Base64 and write it to the KVP
-            Set-CurrentErrorSummary 'error publishing:public_key'
-            $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
-            Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_public_key" -Value $publicKeyBase64
-
-            Set-CurrentErrorSummary 'error publishing:guest_state'
-            Publish-GuestState -Status 'waitingforaeskey' -ErrorSummary ''
-
-            Set-CurrentErrorSummary 'error waiting:provisioning_data'
             while ($true) {
+                Set-CurrentErrorSummary 'error waiting:host_signal'
                 $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
-                if ($state -eq "provisioningdatapublished") {
+                if ($state -eq "waitingforpublickey") {
                     break
                 }
                 Start-Sleep -Seconds 5
             }
 
-            # Read the shared AES key from "hlvmm.meta.shared_aes_key"
-            Set-CurrentErrorSummary 'error decrypting:shared_aes_key'
-            $sharedAesKeyBase64 = Read-HyperVKvp -Key "hlvmm.meta.shared_aes_key" -ErrorAction SilentlyContinue
-            if (-not $sharedAesKeyBase64) {
-                Write-Host "Failed to retrieve shared AES key."
-                Throw-ProvisioningError 'error decrypting:shared_aes_key' "Failed to retrieve shared AES key from KVP."
+            # Read expected version from local version file
+            $versionFilePath = "C:\ProgramData\HyperV\version"
+            if (-not (Test-Path $versionFilePath)) {
+                Write-Host "Version file not found at $versionFilePath. Cannot verify provisioning system version."
+                Throw-ProvisioningError 'error validating:manifest' "Version file not found at $versionFilePath. Cannot verify provisioning system version."
+            }
+            $expectedVersionRaw = Get-Content -Path $versionFilePath -Raw -ErrorAction SilentlyContinue
+            if (-not $expectedVersionRaw) {
+                Write-Host "Failed to read version from $versionFilePath. Cannot verify provisioning system version."
+                Throw-ProvisioningError 'error validating:manifest' "Failed to read version from $versionFilePath. Cannot verify provisioning system version."
             }
 
-            $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
-            $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
-        }
-        catch {
-            Write-Host "Failed during key exchange: $_"
-            Throw-ProvisioningError $script:CurrentErrorSummary "Failed during key exchange: $_"
-        }
-        finally {
-            if ($rsa) {
-                $rsa.Dispose()
+            # Normalize expected version: trim whitespace, remove null chars, convert to string
+            $expectedVersion = [string]($expectedVersionRaw -replace "`0", "").Trim()
+            if (-not $expectedVersion) {
+                Write-Host "Version file contains empty or invalid content. Cannot verify provisioning system version."
+                Throw-ProvisioningError 'error validating:manifest' "Version file contains empty or invalid content. Cannot verify provisioning system version."
             }
-        }
 
-        # Get all hlvmm.data keys dynamically instead of using hardcoded list  
-        # Exclude chunked keys (those ending with ._[0-9]) from the main list
-        $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
-        $hlvmmDataKeys = @()
-        
-        try {
-            Set-CurrentErrorSummary 'error reading:provisioning_data'
-            $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
-            if ($regItem) {
-                $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]+$' }
+            Set-CurrentErrorSummary 'error validating:manifest'
+            $manifestRaw = Read-HyperVKvp -Key "hlvmm.meta.version" -ErrorAction SilentlyContinue
+            if (-not $manifestRaw) {
+                Write-Host "Failed to read hlvmm.meta.version from KVP. Cannot verify provisioning system version."
+                Throw-ProvisioningError 'error validating:manifest' "Failed to read hlvmm.meta.version from KVP. Cannot verify provisioning system version."
             }
-        }
-        catch {
-            Write-Host "Error reading hlvmm.data keys from registry: $_"
-            Throw-ProvisioningError $script:CurrentErrorSummary "Error reading hlvmm.data keys from registry: $_"
-        }
 
-        if ($hlvmmDataKeys.Count -eq 0) {
-            Write-Host "No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
-            Throw-ProvisioningError 'error reading:provisioning_data' "No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
-        }
+            # Normalize manifest version: trim whitespace, remove null chars, convert to string
+            $manifest = [string]($manifestRaw -replace "`0", "").Trim()
 
-        Write-Host "Found $($hlvmmDataKeys.Count) hlvmm.data keys to decrypt"
+            if ($manifest -ne $expectedVersion) {
+                Write-Host "Provisioning system manifest mismatch. Expected: '$expectedVersion', Got: '$manifest'."
+                Throw-ProvisioningError 'error validating:manifest' "Provisioning system manifest mismatch. Expected: '$expectedVersion', Got: '$manifest'."
+            }
+            Write-Host "Provisioning system version verified: $expectedVersion"
 
-        # Decrypt and save each key using its actual KVP key name
-        Set-CurrentErrorSummary 'error decrypting:provisioning_data'
-        foreach ($key in $hlvmmDataKeys) {
+            # Generate RSA key pair and keep them in memory
+            $rsa = $null
             try {
-                $decryptedValue = Read-HyperVKvpWithDecryption -Key $key -AesKey $unwrappedAesKey
-                if ($decryptedValue) {
-                    # Save using the actual KVP key name (replacing dots with underscores for valid filenames)
-                    $safeFileName = $key -replace '\.', '_'
-                    $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$safeFileName.txt")
-                    [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
-                    Write-Host "Successfully processed key: $key"
-                } else {
-                    Write-Host "Failed to retrieve value for key: $key. Skipping..."
+                Set-CurrentErrorSummary 'error generating:rsa_keys'
+                $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider(2048)
+                $publicKey = $rsa.ExportCspBlob($false)
+
+                # Convert public key to Base64 and write it to the KVP
+                Set-CurrentErrorSummary 'error publishing:public_key'
+                $publicKeyBase64 = [Convert]::ToBase64String($publicKey)
+                Write-HyperVKvp -Key "hlvmm.meta.guest_provisioning_public_key" -Value $publicKeyBase64
+
+                Set-CurrentErrorSummary 'error publishing:guest_state'
+                Publish-GuestState -Status 'waitingforaeskey' -ErrorSummary ''
+
+                Set-CurrentErrorSummary 'error waiting:provisioning_data'
+                while ($true) {
+                    $state = Read-HyperVKvp -Key "hlvmm.meta.host_provisioning_system_state" -ErrorAction SilentlyContinue
+                    if ($state -eq "provisioningdatapublished") {
+                        break
+                    }
+                    Start-Sleep -Seconds 5
+                }
+
+                # Read the shared AES key from "hlvmm.meta.shared_aes_key"
+                Set-CurrentErrorSummary 'error decrypting:shared_aes_key'
+                $sharedAesKeyBase64 = Read-HyperVKvp -Key "hlvmm.meta.shared_aes_key" -ErrorAction SilentlyContinue
+                if (-not $sharedAesKeyBase64) {
+                    Write-Host "Failed to retrieve shared AES key."
+                    Throw-ProvisioningError 'error decrypting:shared_aes_key' "Failed to retrieve shared AES key from KVP."
+                }
+
+                $sharedAesKey = [Convert]::FromBase64String(($sharedAesKeyBase64 -replace '\s', ''))
+                $unwrappedAesKey = [Convert]::ToBase64String($rsa.Decrypt($sharedAesKey, $false))
+            }
+            catch {
+                Write-Host "Failed during key exchange: $_"
+                Throw-ProvisioningError $script:CurrentErrorSummary "Failed during key exchange: $_"
+            }
+            finally {
+                if ($rsa) {
+                    $rsa.Dispose()
+                }
+            }
+
+            # Get all hlvmm.data keys dynamically instead of using hardcoded list  
+            # Exclude chunked keys (those ending with ._[0-9]) from the main list
+            $regPath = "HKLM:\SOFTWARE\Microsoft\Virtual Machine\External"
+            $hlvmmDataKeys = @()
+            
+            try {
+                Set-CurrentErrorSummary 'error reading:provisioning_data'
+                $regItem = Get-Item -Path $regPath -ErrorAction SilentlyContinue
+                if ($regItem) {
+                    $hlvmmDataKeys = $regItem.GetValueNames() | Where-Object { $_ -like "hlvmm.data.*" -and $_ -notmatch '\._[0-9]+$' }
                 }
             }
             catch {
-                Write-Host "Failed to decrypt key $key : $_"
+                Write-Host "Error reading hlvmm.data keys from registry: $_"
+                Throw-ProvisioningError $script:CurrentErrorSummary "Error reading hlvmm.data keys from registry: $_"
             }
-        }
 
-        # Get all hlvmm.data keys and their decrypted values for checksum verification
-        Set-CurrentErrorSummary 'error decrypting:provisioning_data'
-        $dataKeys = Get-HlvmmDataKeys -AesKey $unwrappedAesKey
-        
-        # Sort keys by name for consistent ordering and concatenate values
-        $sortedDataKeys = $dataKeys | Sort-Object { $_.Key }
-        $concatenatedData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
-
-        $sha256 = $null
-        try {
-            Set-CurrentErrorSummary 'error validating:checksum'
-            $sha256 = [System.Security.Cryptography.SHA256]::Create()
-            $computedHash = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($concatenatedData))
-            $computedHashBase64 = [Convert]::ToBase64String($computedHash)
-        }
-        catch {
-            Write-Host "Failed to compute checksum: $_"
-            Throw-ProvisioningError $script:CurrentErrorSummary "Failed to compute checksum: $_"
-        }
-        finally {
-            if ($sha256) {
-                $sha256.Dispose()
+            if ($hlvmmDataKeys.Count -eq 0) {
+                Write-Host "No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
+                Throw-ProvisioningError 'error reading:provisioning_data' "No hlvmm.data keys found in KVP. Cannot proceed with provisioning."
             }
+
+            Write-Host "Found $($hlvmmDataKeys.Count) hlvmm.data keys to decrypt"
+
+            # Decrypt and save each key using its actual KVP key name
+            Set-CurrentErrorSummary 'error decrypting:provisioning_data'
+            foreach ($key in $hlvmmDataKeys) {
+                try {
+                    $decryptedValue = Read-HyperVKvpWithDecryption -Key $key -AesKey $unwrappedAesKey
+                    if ($decryptedValue) {
+                        # Save using the actual KVP key name (replacing dots with underscores for valid filenames)
+                        $safeFileName = $key -replace '\.', '_'
+                        $outputFilePath = [System.IO.Path]::Combine("C:\ProgramData\HyperV", "$safeFileName.txt")
+                        [System.IO.File]::WriteAllText($outputFilePath, $decryptedValue)
+                        Write-Host "Successfully processed key: $key"
+                    }
+                    else {
+                        Write-Host "Failed to retrieve value for key: $key. Skipping..."
+                    }
+                }
+                catch {
+                    Write-Host "Failed to decrypt key $key : $_"
+                }
+            }
+
+            # Get all hlvmm.data keys and their decrypted values for checksum verification
+            Set-CurrentErrorSummary 'error decrypting:provisioning_data'
+            $dataKeys = Get-HlvmmDataKeys -AesKey $unwrappedAesKey
+            
+            # Sort keys by name for consistent ordering and concatenate values
+            $sortedDataKeys = $dataKeys | Sort-Object { $_.Key }
+            $concatenatedData = ($sortedDataKeys | ForEach-Object { $_.Value }) -join "|"
+
+            $sha256 = $null
+            try {
+                Set-CurrentErrorSummary 'error validating:checksum'
+                $sha256 = [System.Security.Cryptography.SHA256]::Create()
+                $computedHash = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($concatenatedData))
+                $computedHashBase64 = [Convert]::ToBase64String($computedHash)
+            }
+            catch {
+                Write-Host "Failed to compute checksum: $_"
+                Throw-ProvisioningError $script:CurrentErrorSummary "Failed to compute checksum: $_"
+            }
+            finally {
+                if ($sha256) {
+                    $sha256.Dispose()
+                }
+            }
+
+            $provisioningSystemChecksum = Read-HyperVKvp -Key "hlvmm.meta.provisioning_system_checksum" -ErrorAction SilentlyContinue
+
+            if ($computedHashBase64 -ne $provisioningSystemChecksum) {
+                Write-Host "Checksum mismatch."
+                Throw-ProvisioningError 'error validating:checksum' "Checksum mismatch between guest and host provisioning data."
+            }
+
+            # Execute all modules in order
+            Set-CurrentErrorSummary 'error publishing:guest_state'
+            Publish-GuestState -Status 'applying' -ErrorSummary ''
+
+            Set-CurrentErrorSummary 'error applying:modules'
+            Invoke-Modules -DecryptedKeysDir $decryptedKeysDir
+
+            # Clear sensitive variables from memory
+            if (Get-Variable -Name "unwrappedAesKey" -ErrorAction SilentlyContinue) {
+                Remove-Variable -Name "unwrappedAesKey" -Force
+            }
+
+            Set-CurrentErrorSummary 'error publishing:success_state'
+            Publish-ProvisioningSuccess
+
+            Restart-Computer -Force
         }
+        "phase_one" {
+            $script:ProvisioningSucceeded = $true
+            "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
 
-        $provisioningSystemChecksum = Read-HyperVKvp -Key "hlvmm.meta.provisioning_system_checksum" -ErrorAction SilentlyContinue
+            # Check if the "hlvmm.data.guest_domain_join_target" key exists
+            $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_target.txt"
+            if (Test-Path $guestDomainJoinTargetPath) {
+                $guestDomainJoinTarget = Get-Content -Path $guestDomainJoinTargetPath
+                if ($guestDomainJoinTarget) {
+                    # Retrieve the domain join credentials
+                    $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_uid.txt"
+                    $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_pw.txt"
+                    $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_ou.txt"
 
-        if ($computedHashBase64 -ne $provisioningSystemChecksum) {
-            Write-Host "Checksum mismatch."
-            Throw-ProvisioningError 'error validating:checksum' "Checksum mismatch between guest and host provisioning data."
-        }
+                    if ((Test-Path $guestDomainJoinUidPath) -and (Test-Path $guestDomainJoinPwPath) -and (Test-Path $guestDomainJoinOUPath)) {
+                        $guestDomainJoinUid = (Get-Content -Path $guestDomainJoinUidPath).Trim()
+                        $guestDomainJoinPw = (Get-Content -Path $guestDomainJoinPwPath).Trim()
+                        $guestDomainJoinOU = (Get-Content -Path $guestDomainJoinOUPath).Trim()
 
-        # Execute all modules in order
-        Set-CurrentErrorSummary 'error publishing:guest_state'
-        Publish-GuestState -Status 'applying' -ErrorSummary ''
+                        if ($guestDomainJoinUid -and $guestDomainJoinPw -and $guestDomainJoinOU) {
+                            # Attempt to join the domain
+                            try {
+                                $guestDomainJoinPwSecure = ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force
+                                $credential = New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, $guestDomainJoinPwSecure)
 
-        Set-CurrentErrorSummary 'error applying:modules'
-        Invoke-Modules -DecryptedKeysDir $decryptedKeysDir
-
-        # Clear sensitive variables from memory
-        if (Get-Variable -Name "unwrappedAesKey" -ErrorAction SilentlyContinue) {
-            Remove-Variable -Name "unwrappedAesKey" -Force
-        }
-
-        Set-CurrentErrorSummary 'error publishing:success_state'
-        Publish-ProvisioningSuccess
-
-        Restart-Computer -Force
-    }
-    "phase_one" {
-        $script:ProvisioningSucceeded = $true
-        "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
-
-        # Check if the "hlvmm.data.guest_domain_join_target" key exists
-        $guestDomainJoinTargetPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_target.txt"
-        if (Test-Path $guestDomainJoinTargetPath) {
-            $guestDomainJoinTarget = Get-Content -Path $guestDomainJoinTargetPath
-            if ($guestDomainJoinTarget) {
-                # Retrieve the domain join credentials
-                $guestDomainJoinUidPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_uid.txt"
-                $guestDomainJoinPwPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_pw.txt"
-                $guestDomainJoinOUPath = Join-Path -Path $decryptedKeysDir -ChildPath "hlvmm_data_guest_domain_join_ou.txt"
-
-                if ((Test-Path $guestDomainJoinUidPath) -and (Test-Path $guestDomainJoinPwPath) -and (Test-Path $guestDomainJoinOUPath)) {
-                    $guestDomainJoinUid = (Get-Content -Path $guestDomainJoinUidPath).Trim()
-                    $guestDomainJoinPw = (Get-Content -Path $guestDomainJoinPwPath).Trim()
-                    $guestDomainJoinOU = (Get-Content -Path $guestDomainJoinOUPath).Trim()
-
-                    if ($guestDomainJoinUid -and $guestDomainJoinPw -and $guestDomainJoinOU) {
-                        # Attempt to join the domain
-                        try {
-                            $guestDomainJoinPwSecure = ConvertTo-SecureString -String $guestDomainJoinPw -AsPlainText -Force
-                            $credential = New-Object System.Management.Automation.PSCredential ($guestDomainJoinUid, $guestDomainJoinPwSecure)
-
-                            # Wait until the domain controller is reachable via ping
-                            $maxAttempts = 60
-                            $attempt = 0
-                            while ($attempt -lt $maxAttempts) {
-                                if (Test-Connection -ComputerName $guestDomainJoinTarget -Count 1 -Quiet) {
-                                    Write-Host "Domain controller $guestDomainJoinTarget is reachable."
-                                    break
+                                # Wait until the domain controller is reachable via ping
+                                $maxAttempts = 60
+                                $attempt = 0
+                                while ($attempt -lt $maxAttempts) {
+                                    if (Test-Connection -ComputerName $guestDomainJoinTarget -Count 1 -Quiet) {
+                                        Write-Host "Domain controller $guestDomainJoinTarget is reachable."
+                                        break
+                                    }
+                                    else {
+                                        Write-Host "Waiting for domain controller $guestDomainJoinTarget to become reachable..."
+                                        Start-Sleep -Seconds 5
+                                        $attempt++
+                                    }
                                 }
-                                else {
-                                    Write-Host "Waiting for domain controller $guestDomainJoinTarget to become reachable..."
-                                    Start-Sleep -Seconds 5
-                                    $attempt++
+                                if ($attempt -eq $maxAttempts) {
+                                    Write-Host "Domain controller $guestDomainJoinTarget is not reachable after $($maxAttempts * 5) seconds. Skipping domain join."
+                                    return
                                 }
+
+                                # Use Add-Computer instead of netdom for secure domain join
+                                Add-Computer -DomainName $guestDomainJoinTarget -Credential $credential -OUPath $guestDomainJoinOU -Force -ErrorAction Stop
+
+                                Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
+                                "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
+
+                                $TaskName = "ProvisioningService"
+                                Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+                                
+                                Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
+                                Restart-Computer -Force
                             }
-                            if ($attempt -eq $maxAttempts) {
-                                Write-Host "Domain controller $guestDomainJoinTarget is not reachable after $($maxAttempts * 5) seconds. Skipping domain join."
-                                return
+                            catch {
+                                Write-Host "Failed to join the domain: $guestDomainJoinTarget. Error: $_"
                             }
-
-                            # Use Add-Computer instead of netdom for secure domain join
-                            Add-Computer -DomainName $guestDomainJoinTarget -Credential $credential -OUPath $guestDomainJoinOU -Force -ErrorAction Stop
-
-                            Write-Host "Successfully joined the domain: $guestDomainJoinTarget"
-                            "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
-
-                            $TaskName = "ProvisioningService"
-                            Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-                            
-                            Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
-                            Restart-Computer -Force
                         }
-                        catch {
-                            Write-Host "Failed to join the domain: $guestDomainJoinTarget. Error: $_"
+                        else {
+                            Write-Host "Domain join credentials are incomplete. Skipping domain join."
                         }
                     }
                     else {
-                        Write-Host "Domain join credentials are incomplete. Skipping domain join."
+                        Write-Host "Domain join credential files are missing. Skipping domain join."
                     }
                 }
                 else {
-                    Write-Host "Domain join credential files are missing. Skipping domain join."
+                    Write-Host "hlvmm.data.guest_domain_join_target file is empty. Skipping domain join."
                 }
             }
             else {
-                Write-Host "hlvmm.data.guest_domain_join_target file is empty. Skipping domain join."
-            }
-        }
-        else {
-            Write-Host "hlvmm.data.guest_domain_join_target key does not exist. Skipping domain join."
-            "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
-            $TaskName = "ProvisioningService"
-            Write-Host "Disabling scheduled task $TaskName..."
-            Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-            Write-Host "Scheduled task $TaskName has been disabled."
+                Write-Host "hlvmm.data.guest_domain_join_target key does not exist. Skipping domain join."
+                "phase_two" | Set-Content -Path $PhaseFile -Encoding UTF8
+                $TaskName = "ProvisioningService"
+                Write-Host "Disabling scheduled task $TaskName..."
+                Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+                Write-Host "Scheduled task $TaskName has been disabled."
 
-            Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
+                Get-ChildItem -Path $decryptedKeysDir -Filter "hlvmm_data_*.txt" | Remove-Item -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
