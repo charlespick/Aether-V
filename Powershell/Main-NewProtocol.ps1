@@ -1004,7 +1004,8 @@ end {
             # and would not prevent memory exposure in the receiving guest agent.
             if ($resourceSpec.ContainsKey('guest_la_pw') -and $resourceSpec['guest_la_pw']) {
                 $env:GuestLaPw = $resourceSpec['guest_la_pw']
-            } else {
+            }
+            else {
                 throw "guest_la_pw is required for guest initialization"
             }
             if ($resourceSpec.ContainsKey('guest_domain_join_pw') -and $resourceSpec['guest_domain_join_pw']) {
@@ -1026,6 +1027,11 @@ end {
             $logs += "Waiting for guest to complete provisioning..."
             Invoke-ProvisioningWaitForProvisioningCompletion -VMName $vmName -TimeoutSeconds 1800 -PollIntervalSeconds 5
             $logs += "Guest provisioning completed successfully"
+            
+            # Step 7: Clean up provisioning ISO
+            $logs += "Cleaning up provisioning ISO..."
+            Invoke-ProvisioningCleanupIso -VMName $vmName -IsoPath $isoPath
+            $logs += "Provisioning ISO cleanup completed"
             
             $resultData = @{
                 vm_id                 = $vmId
