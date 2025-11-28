@@ -197,7 +197,7 @@ function Publish-GuestState {
         [string]$ErrorSummary
     )
 
-    if ($PSBoundParameters.ContainsKey('ErrorSummary')) {
+    if ($PSBoundParameters.ContainsKey('ErrorSummary') -and (-not [string]::IsNullOrEmpty($ErrorSummary))) {
         Set-GuestProvisioningError -Message $ErrorSummary | Out-Null
     }
 
