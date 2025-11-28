@@ -741,72 +741,52 @@ class SettingsOverlay extends BaseOverlay {
         }
 
         const remote = data.remote_tasks || {};
-        const fast = remote.fast_pool || {};
-        const jobPool = remote.job_pool || {};
+        const shortQueue = remote.short_queue || {};
+        const ioQueue = remote.io_queue || {};
         const jobs = data.jobs || {};
         const inventory = data.inventory || {};
         const hostDeployment = data.host_deployment || {};
-        const cpuPercent = this.formatPercent(remote.cpu_percent);
-        const memoryPercent = this.formatPercent(remote.memory_percent);
-        const maxedOutFor = this.formatDuration(remote.maxed_out_for_seconds);
-        const currentMaxWorkers = remote.current_max_workers ?? fast.max_workers ?? 'n/a';
-        const configuredFastLimit = remote.configured_max_workers ?? 'n/a';
-        const dynamicCeiling = remote.dynamic_ceiling ?? 'n/a';
-        const fastWorkerDisplay =
-            `${this.escapeHtml(String(fast.current_workers ?? 'n/a'))} / ` +
-            `${this.escapeHtml(String(currentMaxWorkers))}`;
-        const fastLimitDisplay =
-            `${this.escapeHtml(String(configuredFastLimit))} / ` +
-            `${this.escapeHtml(String(dynamicCeiling))}`;
+
+        // Calculate totals for display
+        const totalCompleted = (shortQueue.completed ?? 0) + (ioQueue.completed ?? 0);
+        const connectionDisplay = `${remote.total_connections ?? 0} / ${remote.max_connections ?? 'n/a'}`;
 
         return `
             <div class="diagnostics-grid">
                 <div class="diagnostic-card">
-                    <div class="diagnostic-title">Remote Task Pools</div>
+                    <div class="diagnostic-title">Remote Task Queues</div>
                     <div class="diagnostic-metrics">
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Fast queue depth</span>
-                            <span class="metric-value">${this.escapeHtml(String(fast.queue_depth ?? 'n/a'))}</span>
+                            <span class="metric-label">Active connections</span>
+                            <span class="metric-value">${this.escapeHtml(connectionDisplay)}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Fast workers</span>
-                            <span class="metric-value">${fastWorkerDisplay}</span>
+                            <span class="metric-label">Short queue depth</span>
+                            <span class="metric-value">${this.escapeHtml(String(shortQueue.queue_depth ?? 'n/a'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Configured fast limit</span>
-                            <span class="metric-value">${fastLimitDisplay}</span>
+                            <span class="metric-label">Short queue inflight</span>
+                            <span class="metric-value">${this.escapeHtml(String(shortQueue.inflight ?? '0'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">CPU utilisation</span>
-                            <span class="metric-value">${this.escapeHtml(cpuPercent)}</span>
+                            <span class="metric-label">IO queue depth</span>
+                            <span class="metric-value">${this.escapeHtml(String(ioQueue.queue_depth ?? 'n/a'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Memory utilisation</span>
-                            <span class="metric-value">${this.escapeHtml(memoryPercent)}</span>
+                            <span class="metric-label">IO queue inflight</span>
+                            <span class="metric-value">${this.escapeHtml(String(ioQueue.inflight ?? '0'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">At capacity</span>
-                            <span class="metric-value">${this.escapeHtml(maxedOutFor)}</span>
+                            <span class="metric-label">Hosts with active IO</span>
+                            <span class="metric-value">${this.escapeHtml(String(ioQueue.hosts_with_active_io ?? '0'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Job queue depth</span>
-                            <span class="metric-value">${this.escapeHtml(String(jobPool.queue_depth ?? 'n/a'))}</span>
+                            <span class="metric-label">Dispatch interval</span>
+                            <span class="metric-value">${this.escapeHtml(this.formatDuration(remote.dispatch_interval_seconds))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Job workers</span>
-                            <span class="metric-value">${this.escapeHtml(String(jobPool.current_workers ?? 'n/a'))} / ${this.escapeHtml(String(jobPool.configured_workers ?? 'n/a'))}</span>
-                        </div>
-                        <div class="diagnostic-metric">
-                            <span class="metric-label">Average duration</span>
-                            <span class="metric-value">${this.escapeHtml(this.formatDuration(remote.average_duration_seconds))}</span>
-                        </div>
-                        <div class="diagnostic-metric">
-                            <span class="metric-label">Dynamic adjustments</span>
-                            <span class="metric-value">${this.escapeHtml(String(remote.dynamic_adjustments ?? '0'))}</span>
-                        </div>
-                        <div class="diagnostic-metric">
-                            <span class="metric-label">Completed tasks</span>
-                            <span class="metric-value">${this.escapeHtml(String(remote.completed_tasks ?? '0'))}</span>
+                            <span class="metric-label">Total completed</span>
+                            <span class="metric-value">${this.escapeHtml(String(totalCompleted))}</span>
                         </div>
                     </div>
                 </div>
@@ -819,7 +799,7 @@ class SettingsOverlay extends BaseOverlay {
                         </div>
                         <div class="diagnostic-metric">
                             <span class="metric-label">Workers</span>
-                            <span class="metric-value">${this.escapeHtml(String(jobs.worker_count ?? 'n/a'))} / ${this.escapeHtml(String(jobs.configured_concurrency ?? 'n/a'))}</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobs.worker_count ?? 'n/a'))}</span>
                         </div>
                         <div class="diagnostic-metric">
                             <span class="metric-label">Running jobs</span>

@@ -135,6 +135,10 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             ) -> None:
                 self.finalised.append((job_id, vm_name, host, success))
 
+            def get_vm_by_id(self, vm_id: str):
+                """Return None for all VMs in the stub."""
+                return None
+
         return _InventoryStub()
 
     async def test_sync_job_notification_tracks_metadata(self):
@@ -586,11 +590,12 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         finally:
             self.job_service._process_job = original_process
 
-    async def test_only_one_provisioning_job_runs_per_host(self):
+    async def test_only_one_io_job_runs_per_host(self):
+        """Test that IO-intensive jobs (disk operations) are serialized per host."""
         await self.job_service.start()
 
-        # Test with managed_deployment job type (current implementation)
-        original_execute = self.job_service._execute_managed_deployment_job
+        # Test with create_disk job type (IO-intensive)
+        original_execute = self.job_service._execute_create_disk_job
 
         first_job_started = asyncio.Event()
         second_job_started = asyncio.Event()
@@ -606,24 +611,30 @@ class JobServiceTests(IsolatedAsyncioTestCase):
                 second_job_started.set()
 
         # type: ignore[assignment]
-        self.job_service._execute_managed_deployment_job = fake_execute
+        self.job_service._execute_create_disk_job = fake_execute
 
-        request1 = ManagedDeploymentRequest(
+        disk_payload1 = {
+            "schema": {"id": "disk.create", "version": 1},
+            "fields": {"vm_id": "vm-1", "disk_size_gb": 50},
+        }
+
+        job1 = await self.job_service.submit_resource_job(
+            job_type="create_disk",
+            schema_id="disk.create",
+            payload=disk_payload1,
             target_host="hyperv01",
-            vm_spec=VmSpec(vm_name="vm-a", gb_ram=4, cpu_cores=2),
         )
 
-        job1 = await self.job_service.submit_managed_deployment_job(
-            request1
-        )
+        disk_payload2 = {
+            "schema": {"id": "disk.create", "version": 1},
+            "fields": {"vm_id": "vm-2", "disk_size_gb": 100},
+        }
 
-        request2 = ManagedDeploymentRequest(
-            target_host="HYPERV01",
-            vm_spec=VmSpec(vm_name="vm-b", gb_ram=4, cpu_cores=2),
-        )
-
-        job2 = await self.job_service.submit_managed_deployment_job(
-            request2
+        job2 = await self.job_service.submit_resource_job(
+            job_type="create_disk",
+            schema_id="disk.create",
+            payload=disk_payload2,
+            target_host="HYPERV01",  # Same host, different case
         )
 
         try:
@@ -638,12 +649,13 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             await asyncio.wait_for(second_job_started.wait(), timeout=1)
             self.assertEqual(start_order, [job1.job_id, job2.job_id])
         finally:
-            self.job_service._execute_managed_deployment_job = (
+            self.job_service._execute_create_disk_job = (
                 original_execute
             )
             await self.job_service.stop()
 
-    async def test_only_one_delete_job_runs_per_host(self):
+    async def test_delete_jobs_run_concurrently_on_same_host(self):
+        """Test that delete jobs are NOT serialized per host anymore (they use SHORT queue)."""
         await self.job_service.start()
 
         original_execute = self.job_service._execute_delete_job
@@ -673,15 +685,13 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job1 = await self.job_service.submit_delete_job(request1)
             job2 = await self.job_service.submit_delete_job(request2)
 
+            # Both jobs should start without waiting for the other
             await asyncio.wait_for(first_job_started.wait(), timeout=1)
-            self.assertEqual(start_order, [job1.job_id])
-
-            with self.assertRaises(asyncio.TimeoutError):
-                await asyncio.wait_for(second_job_started.wait(), timeout=0.2)
+            await asyncio.wait_for(second_job_started.wait(), timeout=1)
+            
+            # Both jobs started 
+            self.assertEqual(len(start_order), 2)
 
             release_first_job.set()
-
-            await asyncio.wait_for(second_job_started.wait(), timeout=1)
-            self.assertEqual(start_order, [job1.job_id, job2.job_id])
         finally:
             self.job_service._execute_delete_job = original_execute

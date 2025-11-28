@@ -32,16 +32,12 @@ from .inventory_service import inventory_service
 
 logger = logging.getLogger(__name__)
 
-# Job type constants for categorization
-LONG_RUNNING_JOB_TYPES = {
-    "delete_vm", "create_vm", "managed_deployment", "initialize_vm"
-}
-
-SERIALIZED_JOB_TYPES = {
-    "delete_vm", "create_vm", "create_disk",
-    "create_nic", "update_vm", "update_disk",
-    "update_nic", "delete_disk", "delete_nic", "initialize_vm",
-    "managed_deployment"
+# Job types that require per-host serialization in the job queue
+# IO-intensive jobs (disk creation, guest init) are additionally serialized
+# at the remote_task_service level to prevent host IO overload
+IO_INTENSIVE_JOB_TYPES = {
+    "create_disk", "update_disk", "delete_disk",  # Disk operations
+    "initialize_vm",  # Guest configuration
 }
 
 # Common Linux distribution keywords for OS family detection
@@ -186,32 +182,34 @@ class JobService:
     def _get_job_runtime_profile(
         self, job_type: str
     ) -> Tuple[RemoteTaskCategory, float]:
-        """Return the remote execution category and timeout for a job type."""
+        """Return the remote execution category and timeout for a job type.
+        
+        IO-intensive jobs (disk creation, guest initialization):
+        - Use RemoteTaskCategory.IO for per-host serialization
+        - Longer timeout to accommodate disk cloning and guest config
+        
+        Short jobs (everything else):
+        - Use RemoteTaskCategory.SHORT with rate-limited dispatching
+        - Shorter timeout for quick operations
+        """
 
-        # Long-running jobs that create/modify VMs
-        if job_type in LONG_RUNNING_JOB_TYPES:
+        # IO-intensive jobs: disk operations and guest initialization
+        # These require per-host serialization to prevent IO overload
+        io_intensive_types = {
+            "create_disk", "update_disk", "delete_disk",  # Disk cloning/copying
+            "initialize_vm",  # Guest configuration via KVP
+        }
+        if job_type in io_intensive_types:
             return (
-                RemoteTaskCategory.JOB,
-                float(settings.job_long_timeout_seconds),
+                RemoteTaskCategory.IO,
+                float(settings.io_job_timeout_seconds),
             )
 
-        # Disk operations can take several minutes for copying/cloning
-        if job_type in {"create_disk", "update_disk", "delete_disk"}:
-            return (
-                RemoteTaskCategory.GENERAL,
-                float(settings.job_disk_timeout_seconds),
-            )
-
-        # Shorter jobs for NIC operations and VM updates
-        if job_type in {"create_nic", "update_vm", "update_nic", "delete_nic"}:
-            return (
-                RemoteTaskCategory.GENERAL,
-                float(settings.job_short_timeout_seconds),
-            )
-
+        # All other jobs use SHORT category with rate-limited dispatching
+        # This includes: VM CRUD, NIC operations, managed deployments, deletions
         return (
-            RemoteTaskCategory.GENERAL,
-            float(settings.job_short_timeout_seconds),
+            RemoteTaskCategory.SHORT,
+            float(settings.short_job_timeout_seconds),
         )
 
     def _prepare_job_response(self, job: Job) -> Job:
@@ -234,7 +232,8 @@ class JobService:
             return
 
         self._queue = asyncio.Queue()
-        concurrency = max(1, settings.job_worker_concurrency)
+        # Fixed number of job workers - actual WinRM concurrency is controlled by remote_task_service
+        concurrency = 6
         self._worker_tasks = [
             asyncio.create_task(self._worker()) for _ in range(concurrency)
         ]
@@ -473,13 +472,14 @@ class JobService:
         acquired_host = False
 
         try:
-            # Acquire host slot for jobs that need serialization
+            # Acquire host slot for IO-intensive jobs that need serialization
+            # This is in addition to remote_task_service IO queue serialization
             # Child jobs inherit the parent's serialization slot, so skip
             # acquiring a new slot to avoid deadlock when parent waits
             # for child completion
             is_child_job = job.parameters.get("parent_job_id") is not None
             needs_serialization = (
-                job.job_type in SERIALIZED_JOB_TYPES
+                job.job_type in IO_INTENSIVE_JOB_TYPES
                 and host_key
                 and not is_child_job
             )
@@ -1861,7 +1861,6 @@ class JobService:
             "started": self._started,
             "queue_depth": queue_depth,
             "worker_count": len(self._worker_tasks),
-            "configured_concurrency": max(1, settings.job_worker_concurrency),
             "pending_jobs": status_counts.get(JobStatus.PENDING, 0),
             "running_jobs": status_counts.get(JobStatus.RUNNING, 0),
             "completed_jobs": status_counts.get(JobStatus.COMPLETED, 0),

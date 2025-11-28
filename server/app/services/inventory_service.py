@@ -1,7 +1,6 @@
 """Inventory management service for tracking Hyper-V hosts and VMs."""
 
 import asyncio
-import hashlib
 import itertools
 import json
 import logging
@@ -160,7 +159,7 @@ class InventoryService:
 
             loop = asyncio.get_running_loop()
             self._initial_refresh_task = loop.create_task(self._run_initial_refresh())
-            self._refresh_task = loop.create_task(self._staggered_refresh_loop())
+            self._refresh_task = loop.create_task(self._refresh_loop())
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -487,8 +486,12 @@ class InventoryService:
             except Exception as exc:
                 logger.error("Error in dummy inventory refresh: %s", exc)
 
-    async def _staggered_refresh_loop(self):
-        """Spread inventory refreshes across the configured interval."""
+    async def _refresh_loop(self):
+        """Periodically refresh inventory from all configured hosts.
+        
+        The remote_task_service dispatcher naturally spreads jobs by 1 second,
+        so no additional staggering is needed here.
+        """
 
         interval = max(1.0, float(settings.inventory_refresh_interval))
 
@@ -504,13 +507,12 @@ class InventoryService:
                 self._finalise_cycle_refresh([], cycle_start, interval)
                 continue
 
-            ordered_hosts = self._ordered_hosts(host_list)
-            per_host_delay = interval / max(len(ordered_hosts), 1)
+            # Process hosts sequentially - dispatcher rate-limits automatically
             cycle_skipped: List[str] = []
             cycle_refreshed: List[str] = []
 
-            for index, hostname in enumerate(ordered_hosts):
-                rebuild_clusters = index == len(ordered_hosts) - 1
+            for index, hostname in enumerate(host_list):
+                rebuild_clusters = index == len(host_list) - 1
                 try:
                     result = await self.refresh_inventory(
                         [hostname],
@@ -523,11 +525,8 @@ class InventoryService:
                 except Exception as exc:  # pragma: no cover - defensive logging
                     logger.error("Background refresh for %s failed: %s", hostname, exc)
 
-                if index < len(ordered_hosts) - 1:
-                    await asyncio.sleep(per_host_delay)
-
             self._finalise_cycle_refresh(
-                ordered_hosts,
+                host_list,
                 cycle_start,
                 interval,
                 skipped_hosts=cycle_skipped,
@@ -538,12 +537,6 @@ class InventoryService:
             remaining = interval - elapsed
             if remaining > 0:
                 await asyncio.sleep(remaining)
-
-    def _ordered_hosts(self, hosts: Iterable[str]) -> List[str]:
-        return sorted(
-            hosts,
-            key=lambda host: (self._stable_host_hash(host), host.lower()),
-        )
 
     def _finalise_cycle_refresh(
         self,
@@ -667,9 +660,6 @@ class InventoryService:
             level=level,
             metadata=metadata,
         )
-
-    def _stable_host_hash(self, hostname: str) -> int:
-        return int(hashlib.sha1(hostname.encode("utf-8")).hexdigest(), 16)
 
     async def refresh_inventory(
         self,
