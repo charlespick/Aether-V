@@ -93,20 +93,11 @@ class ViewManager {
                 return `/host/${encodeURIComponent(hostname)}`;
             }
             case 'vm': {
-                const vmName = viewData && viewData.name ? String(viewData.name) : '';
-                if (!vmName) {
+                const vmId = viewData && viewData.id ? String(viewData.id) : '';
+                if (!vmId) {
                     return null;
                 }
-                let url = `/virtual-machine/${encodeURIComponent(vmName)}`;
-                if (viewData && viewData.host) {
-                    const params = new URLSearchParams();
-                    params.set('host', String(viewData.host));
-                    const query = params.toString();
-                    if (query) {
-                        url += `?${query}`;
-                    }
-                }
-                return url;
+                return `/virtual-machine/${encodeURIComponent(vmId)}`;
             }
             case 'disconnected-hosts':
                 return '/disconnected-hosts';
@@ -231,11 +222,7 @@ class ViewManager {
         }
 
         if (section === 'virtual-machine' && remainder) {
-            const data = { name: this.safeDecode(remainder) };
-            const hostParam = params.get('host');
-            if (hostParam) {
-                data.host = hostParam;
-            }
+            const data = { id: this.safeDecode(remainder) };
             return { viewName: 'vm', data, matched: true };
         }
 
@@ -377,10 +364,9 @@ class ViewManager {
         } else if (viewName === 'host' && viewData?.hostname) {
             const selector = escapeForSelector(viewData.hostname);
             navItem = document.querySelector(`.sub-item.group-header[data-nav-type="host"][data-hostname="${selector}"]`);
-        } else if (viewName === 'vm' && viewData?.name && viewData?.host) {
-            const nameSelector = escapeForSelector(viewData.name);
-            const hostSelector = escapeForSelector(viewData.host);
-            navItem = document.querySelector(`.vm-item[data-nav-type="vm"][data-vm-name="${nameSelector}"][data-vm-host="${hostSelector}"]`);
+        } else if (viewName === 'vm' && viewData?.id) {
+            const idSelector = escapeForSelector(viewData.id);
+            navItem = document.querySelector(`.vm-item[data-nav-type="vm"][data-vm-id="${idSelector}"]`);
         }
 
         if (navItem) {
@@ -469,15 +455,48 @@ function escapeJsString(value) {
         .replace(/\r/g, '\\r');
 }
 
-function formatVmMemory(memory) {
+function formatMemoryAmount(memory) {
     if (memory === null || typeof memory === 'undefined') {
-        return '—';
+        return null;
     }
     const parsed = Number(memory);
     if (!Number.isFinite(parsed)) {
-        return '—';
+        return null;
     }
     return `${parsed.toFixed(2)} GB`;
+}
+
+function resolveVmMemoryValue(vm) {
+    const assigned = Number(vm?.memory_gb);
+    const startup = Number(vm?.memory_startup_gb);
+
+    if (Number.isFinite(assigned) && assigned > 0) {
+        return assigned;
+    }
+
+    if (Number.isFinite(startup) && startup > 0) {
+        return startup;
+    }
+
+    if (Number.isFinite(assigned)) {
+        return assigned;
+    }
+
+    return null;
+}
+
+function formatVmMemoryDisplay(vm) {
+    const memoryValue = resolveVmMemoryValue(vm);
+    if (memoryValue === null) {
+        return '—';
+    }
+
+    let display = formatMemoryAmount(memoryValue) || '—';
+    if (vm?.dynamic_memory_enabled) {
+        display += ' (dynamic)';
+    }
+
+    return display;
 }
 
 function formatCpuCount(cpu) {
@@ -657,8 +676,8 @@ class ClusterView extends BaseView {
                     <h2>Cluster Resources</h2>
                 </div>
                 <div class="resource-summary">
-                    <p>Total CPU Cores: ${this.calculateTotalCPU(clusterVMs)}</p>
-                    <p>Total Memory: ${this.calculateTotalMemory(clusterVMs)} GB</p>
+                    <p>Total CPU Cores: ${this.calculateTotalCPU(clusterHosts)}</p>
+                    <p>Total Memory: ${this.calculateTotalMemory(clusterHosts)} GB</p>
                 </div>
             </div>
         `;
@@ -699,6 +718,7 @@ class ClusterView extends BaseView {
         const rows = vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
             const vmName = vm.name || 'Virtual Machine';
+            const vmId = vm.id || '';
             const hostName = vm.host || '';
             const hostDisplay = formatHostnamePrefix(hostName);
             const safeHostDisplay = hostDisplay ? sanitizeHtml(hostDisplay) : '—';
@@ -707,14 +727,14 @@ class ClusterView extends BaseView {
                 <tr class="vm-table-row">
                     <td>
                         <button type="button" class="vm-table-link"
-                            onclick="viewManager.switchView('vm', { name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
+                            onclick="viewManager.switchView('vm', { id: '${escapeJsString(vmId)}', name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
                             <span class="vm-status-dot ${meta.dotClass}"></span>
                             <span class="vm-name-text">${sanitizeHtml(vmName)}</span>
                         </button>
                     </td>
                     <td><span class="status ${meta.badgeClass}">${sanitizeHtml(meta.label)}</span></td>
                     <td>${sanitizeHtml(formatCpuCount(vm.cpu_cores))}</td>
-                    <td>${sanitizeHtml(formatVmMemory(vm.memory_gb))}</td>
+                    <td>${sanitizeHtml(formatVmMemoryDisplay(vm))}</td>
                     <td>${hostDisplay ? `<span class="vm-table-host" title="${safeHostTitle}">${safeHostDisplay}</span>` : '<span class="vm-table-host">—</span>'}</td>
                 </tr>
             `;
@@ -740,12 +760,13 @@ class ClusterView extends BaseView {
         `;
     }
 
-    calculateTotalCPU(vms) {
-        return vms.reduce((sum, vm) => sum + (vm.cpu_cores || 0), 0);
+    calculateTotalCPU(hosts) {
+        return hosts.reduce((sum, host) => sum + (host.total_cpu_cores || 0), 0);
     }
 
-    calculateTotalMemory(vms) {
-        return vms.reduce((sum, vm) => sum + (vm.memory_gb || 0), 0).toFixed(2);
+    calculateTotalMemory(hosts) {
+        const total = hosts.reduce((sum, host) => sum + (host.total_memory_gb || 0), 0);
+        return total.toFixed(2);
     }
 
     async fetchInventory() {
@@ -839,19 +860,20 @@ class HostView extends BaseView {
         const rows = vms.map(vm => {
             const meta = getVmStateMeta(vm.state);
             const vmName = vm.name || 'Virtual Machine';
+            const vmId = vm.id || '';
             const hostName = vm.host || fallbackHost || '';
             return `
                 <tr class="vm-table-row">
                     <td>
                         <button type="button" class="vm-table-link"
-                            onclick="viewManager.switchView('vm', { name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
+                            onclick="viewManager.switchView('vm', { id: '${escapeJsString(vmId)}', name: '${escapeJsString(vmName)}', host: '${escapeJsString(hostName)}' })">
                             <span class="vm-status-dot ${meta.dotClass}"></span>
                             <span class="vm-name-text">${sanitizeHtml(vmName)}</span>
                         </button>
                     </td>
                     <td><span class="status ${meta.badgeClass}">${sanitizeHtml(meta.label)}</span></td>
                     <td>${sanitizeHtml(formatCpuCount(vm.cpu_cores))}</td>
-                    <td>${sanitizeHtml(formatVmMemory(vm.memory_gb))}</td>
+                    <td>${sanitizeHtml(formatVmMemoryDisplay(vm))}</td>
                 </tr>
             `;
         }).join('');
@@ -889,20 +911,29 @@ class HostView extends BaseView {
 // VM View
 class VMView extends BaseView {
     async render() {
-        const vmName = this.data.name || 'Unknown VM';
-        const requestedHost = this.data.host || null;
-        const inventory = await this.fetchInventory();
-        const vm = this.findVm(inventory, vmName, requestedHost);
+        const vmId = this.data.id || '';
+        
+        if (!vmId) {
+            return `
+                <h1 class="page-title">VM Not Found</h1>
+                <p class="empty">Virtual machine ID not provided</p>
+            `;
+        }
+        
+        const vm = await this.fetchVmById(vmId);
 
         if (!vm) {
             return `
                 <h1 class="page-title">VM Not Found</h1>
-                <p class="empty">Virtual machine "${vmName}" not found</p>
+                <p class="empty">Virtual machine with ID "${vmId}" not found</p>
             `;
         }
 
         this.vmData = vm;
         this.vmHost = vm.host;
+        
+        // Fetch full inventory for host/cluster context
+        const inventory = await this.fetchInventory();
         this.lastInventory = inventory;
 
         const meta = getVmStateMeta(vm.state);
@@ -910,6 +941,7 @@ class VMView extends BaseView {
         const hostInfo = this.findHost(inventory, vm.host);
         const hostOverview = this.buildHostOverviewValue(vm.host);
         const clusterOverview = this.buildClusterOverviewValue(vm, hostInfo);
+        const memoryItems = this.buildMemoryHardwareItems(vm);
         const overviewItems = [
             { label: 'Hyper-V Host', value: hostOverview.value, isHtml: hostOverview.isHtml },
             { label: 'IP Address(es)', value: this.extractIpAddresses(vm) },
@@ -920,7 +952,7 @@ class VMView extends BaseView {
 
         const hardwareItems = [
             { label: 'CPU Cores', value: this.formatValue(vm.cpu_cores, '—') },
-            { label: 'Memory', value: this.formatMemory(vm.memory_gb) },
+            ...memoryItems,
             { label: 'Generation', value: this.formatValue(vm.generation, '—') },
             { label: 'Configuration Version', value: this.formatValue(vm.version, '—') }
         ];
@@ -934,23 +966,54 @@ class VMView extends BaseView {
                     <td>${this.escapeHtml(disk.type || '—')}</td>
                     <td>${this.escapeHtml(this.formatDiskCapacity(disk))}</td>
                     <td>${this.escapeHtml(disk.path || disk.location || '—')}</td>
+                    <td class="vm-resource-actions">
+                        <button type="button" class="resource-menu-btn" 
+                            data-resource-type="disk" 
+                            data-resource-id="${this.escapeHtml(disk.id || '')}"
+                            aria-label="Disk actions"
+                            title="Actions">
+                            ${icon('more_vert', { size: 20 })}
+                        </button>
+                    </td>
                 </tr>
             `).join('')
             : `
                 <tr class="vm-empty-row">
-                    <td colspan="4">Disk information not available yet.</td>
+                    <td colspan="5">Disk information not available yet.</td>
                 </tr>
             `;
 
         const networkRows = networks.length
-            ? networks.map(adapter => `
+            ? networks.map(adapter => {
+                // Determine network display value
+                let networkDisplay = '—';
+                if (adapter.network_name) {
+                    networkDisplay = adapter.network_name;
+                } else if (adapter.virtual_switch && adapter.vlan) {
+                    networkDisplay = `${adapter.virtual_switch}/${adapter.vlan}`;
+                } else if (adapter.vlan) {
+                    networkDisplay = `VLAN ${adapter.vlan}`;
+                } else if (adapter.virtual_switch) {
+                    networkDisplay = adapter.virtual_switch;
+                }
+                
+                return `
                 <tr>
                     <td>${this.escapeHtml(adapter.adapter_name || adapter.name || 'Adapter')}</td>
                     <td>${this.escapeHtml(this.extractAdapterAddresses(adapter))}</td>
-                    <td>${this.escapeHtml(adapter.vlan || '—')}</td>
-                    <td>${this.escapeHtml(adapter.network || adapter.virtual_switch || '—')}</td>
+                    <td>${this.escapeHtml(networkDisplay)}</td>
+                    <td class="vm-resource-actions">
+                        <button type="button" class="resource-menu-btn" 
+                            data-resource-type="nic" 
+                            data-resource-id="${this.escapeHtml(adapter.id || '')}"
+                            aria-label="Network adapter actions"
+                            title="Actions">
+                            ${icon('more_vert', { size: 20 })}
+                        </button>
+                    </td>
                 </tr>
-            `).join('')
+                `;
+            }).join('')
             : `
                 <tr class="vm-empty-row">
                     <td colspan="4">Network details not available yet.</td>
@@ -1026,12 +1089,19 @@ class VMView extends BaseView {
                                         <th scope="col">Type</th>
                                         <th scope="col">Capacity</th>
                                         <th scope="col">Location</th>
+                                        <th scope="col" class="vm-resource-actions-header">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${diskRows}
                                 </tbody>
                             </table>
+                        </div>
+                        <div class="vm-tab-actions">
+                            <button class="action-btn" data-action="add-disk" onclick="overlayManager.open('disk-create', { vm_id: '${this.escapeHtml(vm.id)}', vm_name: '${this.escapeHtml(vm.name)}', host: '${this.escapeHtml(vm.host)}' })">
+                                ${icon('add_circle', { className: 'action-icon', size: 24 })}
+                                <span>Add Disk</span>
+                            </button>
                         </div>
                     </div>
                     <div class="vm-tab-panel vm-tab-panel--table" data-tab="networks" role="tabpanel" aria-labelledby="vm-tab-networks" hidden>
@@ -1041,14 +1111,20 @@ class VMView extends BaseView {
                                     <tr>
                                         <th scope="col">Adapter</th>
                                         <th scope="col">IP Address</th>
-                                        <th scope="col">VLAN</th>
-                                        <th scope="col">Connected Network</th>
+                                        <th scope="col">Network</th>
+                                        <th scope="col" class="vm-resource-actions-header">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${networkRows}
                                 </tbody>
                             </table>
+                        </div>
+                        <div class="vm-tab-actions">
+                            <button class="action-btn" data-action="add-nic" onclick="overlayManager.open('nic-create', { vm_id: '${this.escapeHtml(vm.id)}', vm_name: '${this.escapeHtml(vm.name)}', host: '${this.escapeHtml(vm.host)}' })">
+                                ${icon('add_circle', { className: 'action-icon', size: 24 })}
+                                <span>Add Network Adapter</span>
+                            </button>
                         </div>
                     </div>
                     <div class="vm-tab-panel vm-tab-panel--notes" data-tab="notes" role="tabpanel" aria-labelledby="vm-tab-notes" hidden>
@@ -1064,11 +1140,13 @@ class VMView extends BaseView {
     init() {
         this.setupTabs();
         this.setupActions();
+        this.setupResourceMenus();
     }
 
     cleanup() {
         this.destroyActionConfirmation(true);
         this.hideActionToast(true);
+        this.cleanupResourceMenus();
     }
 
     setupTabs() {
@@ -1144,6 +1222,17 @@ class VMView extends BaseView {
         }
 
         const action = button.dataset.action;
+        
+        // Handle edit action - open VM edit overlay
+        if (action === 'edit') {
+            overlayManager.open('vm-edit', { 
+                vm_id: this.vmData.id,
+                vm_name: this.vmData.name, 
+                host: this.vmData.host,
+                vm_data: this.vmData  // Pass actual VM data for pre-filling
+            });
+            return;
+        }
 
         if (this.requiresConfirmation(action)) {
             if (this.activeConfirmButton === button && this.activeConfirmAction === action) {
@@ -1342,22 +1431,23 @@ class VMView extends BaseView {
             const viewportHeight = window.innerHeight;
             const scrollY = window.scrollY || document.documentElement.scrollTop;
             const scrollX = window.scrollX || document.documentElement.scrollLeft;
+            const edgeMargin = 20;
 
             let top = scrollY + buttonRect.bottom + 8;
             let alignAbove = false;
 
-            if (top + currentRect.height > scrollY + viewportHeight - 8) {
+            if (top + currentRect.height > scrollY + viewportHeight - edgeMargin) {
                 top = scrollY + buttonRect.top - currentRect.height - 8;
                 alignAbove = true;
             }
 
-            if (top < scrollY + 8) {
-                top = scrollY + 8;
+            if (top < scrollY + edgeMargin) {
+                top = scrollY + edgeMargin;
             }
 
             let left = scrollX + buttonRect.left + (buttonRect.width / 2) - (currentRect.width / 2);
-            const minLeft = scrollX + 8;
-            const maxLeft = scrollX + viewportWidth - currentRect.width - 8;
+            const minLeft = scrollX + edgeMargin;
+            const maxLeft = scrollX + viewportWidth - currentRect.width - edgeMargin;
             if (left < minLeft) {
                 left = minLeft;
             } else if (left > maxLeft) {
@@ -1419,6 +1509,7 @@ class VMView extends BaseView {
     buildVmActionButtons(vm) {
         const availability = this.getActionAvailability(vm && vm.state);
         const actions = [
+            { action: 'edit', iconName: 'edit', tooltip: 'Edit VM', aria: 'Edit virtual machine' },
             { action: 'start', iconName: 'play_circle', tooltip: 'Start', aria: 'Start virtual machine' },
             { action: 'shutdown', iconName: 'power_settings_new', tooltip: 'Shut Down', aria: 'Shut down virtual machine' },
             { action: 'stop', iconName: 'stop_circle', tooltip: 'Turn Off', aria: 'Stop (Turn Off) virtual machine' },
@@ -1444,6 +1535,7 @@ class VMView extends BaseView {
     getActionAvailability(state) {
         const normalized = typeof state === 'string' ? state.toLowerCase() : String(state || '').toLowerCase();
         const availability = {
+            edit: true,  // Edit is always available
             start: false,
             shutdown: false,
             stop: false,
@@ -1452,6 +1544,7 @@ class VMView extends BaseView {
         };
 
         if (this.actionInProgress) {
+            availability.edit = false;  // Disable edit during actions
             return availability;
         }
 
@@ -1561,9 +1654,9 @@ class VMView extends BaseView {
 
     getActionToastDefaults(type) {
         const defaults = {
-            success: { icon: '✅', title: 'Action accepted' },
-            error: { icon: '⚠️', title: 'Action failed' },
-            info: { icon: 'ℹ️', title: 'Working on it' },
+            success: { icon: icon('check_circle', { size: 20 }), title: 'Action accepted' },
+            error: { icon: icon('error', { size: 20 }), title: 'Action failed' },
+            info: { icon: icon('pending', { size: 20 }), title: 'Working on it' },
         };
 
         return defaults[type] || defaults.info;
@@ -1588,7 +1681,7 @@ class VMView extends BaseView {
         toast.classList.add(`vm-action-toast--${type}`);
 
         if (iconEl) {
-            iconEl.textContent = icon;
+            iconEl.innerHTML = icon;
         }
         if (titleEl) {
             titleEl.textContent = title;
@@ -1650,6 +1743,26 @@ class VMView extends BaseView {
         return null;
     }
 
+    enhanceShutdownError(errorMessage) {
+        if (!errorMessage) {
+            return errorMessage;
+        }
+
+        const message = String(errorMessage).toLowerCase();
+        
+        // Check if this looks like a graceful shutdown failure
+        if (message.includes('stop-vm') || message.includes('shutdown')) {
+            if (message.includes('unspecified') || 
+                message.includes('failed') || 
+                message.includes('timeout') ||
+                message.includes('not respond')) {
+                return `${errorMessage}\n\nNote: Graceful shutdown requires the guest OS to be responsive and have working Hyper-V Integration Services. If the VM is unresponsive, use "Turn Off" instead.`;
+            }
+        }
+
+        return errorMessage;
+    }
+
     getDefaultSuccessMessage(action, vmName) {
         const name = vmName || (this.vmData && this.vmData.name) || 'virtual machine';
         switch (action) {
@@ -1702,15 +1815,14 @@ class VMView extends BaseView {
 
         const actionLabel = this.getActionLabel(action);
 
-        const encodedHost = encodeURIComponent(host);
-        const encodedVm = encodeURIComponent(this.vmData.name);
-        const endpoint = `/api/v1/vms/${encodedHost}/${encodedVm}/${action}`;
+        // Use RESTful endpoint with VM ID
+        const endpoint = `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/${action}`;
 
         this.setButtonsBusy(true);
         this.setActionFeedback(`Sending ${actionLabel} request...`, 'info', {
             title: `${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} in progress`,
             persist: true,
-            icon: '⏳',
+            icon: icon('hourglass_top', { size: 20 }),
         });
 
         try {
@@ -1740,10 +1852,20 @@ class VMView extends BaseView {
                 this.updateActionButtonStates();
 
                 setTimeout(() => {
-                    viewManager.switchView('vm', { name: this.vmData.name, host }, { skipHistory: true });
+                    viewManager.switchView('vm', { 
+                        id: this.vmData.id,
+                        name: this.vmData.name, 
+                        host 
+                    }, { skipHistory: true });
                 }, 400);
             } else {
-                const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
+                let detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
+                
+                // Enhance shutdown error messages with helpful guidance
+                if (action === 'shutdown') {
+                    detail = this.enhanceShutdownError(detail);
+                }
+                
                 this.setActionFeedback(`Unable to ${actionLabel} VM: ${detail}`, 'error', {
                     title: 'VM action failed',
                 });
@@ -1767,21 +1889,13 @@ class VMView extends BaseView {
         this.setActionFeedback(`Submitting delete request for ${this.vmData.name}...`, 'info', {
             title: 'Deleting virtual machine',
             persist: true,
-            icon: '⏳',
+            icon: icon('hourglass_top', { size: 20 }),
         });
 
         try {
-            const response = await fetch('/api/v1/vms/delete', {
-                method: 'POST',
+            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}?delete_disks=true&force=false`, {
+                method: 'DELETE',
                 credentials: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    vm_name: this.vmData.name,
-                    hyperv_host: host,
-                    force: false,
-                }),
             });
 
             let payload = null;
@@ -1806,7 +1920,11 @@ class VMView extends BaseView {
                 this.updateActionButtonStates();
 
                 setTimeout(() => {
-                    viewManager.switchView('vm', { name: this.vmData.name, host }, { skipHistory: true });
+                    viewManager.switchView('vm', { 
+                        id: this.vmData.id,
+                        name: this.vmData.name, 
+                        host 
+                    }, { skipHistory: true });
                 }, 400);
             } else {
                 const detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
@@ -1843,15 +1961,51 @@ class VMView extends BaseView {
         return this.formatValue(vm.os_family, 'Unknown');
     }
 
-    formatMemory(memoryGb) {
-        const value = Number(memoryGb);
-        if (Number.isFinite(value) && value > 0) {
-            return `${value.toFixed(2)} GB`;
+    buildMemoryHardwareItems(vm) {
+        const items = [];
+        const resolvedMemory = resolveVmMemoryValue(vm);
+        const isDynamic = vm.dynamic_memory_enabled === true;
+
+        items.push({
+            label: 'Memory',
+            value: this.formatMemory(resolvedMemory, isDynamic)
+        });
+
+        if (isDynamic) {
+            if (typeof vm.memory_startup_gb !== 'undefined') {
+                items.push({
+                    label: 'Startup Memory',
+                    value: this.formatMemory(vm.memory_startup_gb)
+                });
+            }
+            if (typeof vm.memory_min_gb !== 'undefined') {
+                items.push({
+                    label: 'Minimum Memory',
+                    value: this.formatMemory(vm.memory_min_gb)
+                });
+            }
+            if (typeof vm.memory_max_gb !== 'undefined') {
+                items.push({
+                    label: 'Maximum Memory',
+                    value: this.formatMemory(vm.memory_max_gb)
+                });
+            }
         }
-        if (Number.isFinite(value) && value === 0) {
-            return '0 GB';
+
+        return items;
+    }
+
+    formatMemory(memoryGb, isDynamic = false) {
+        const formatted = formatMemoryAmount(memoryGb);
+        if (!formatted) {
+            return '—';
         }
-        return '—';
+
+        if (isDynamic) {
+            return `${formatted} (dynamic)`;
+        }
+
+        return formatted;
     }
 
     formatDiskCapacity(disk) {
@@ -1951,41 +2105,6 @@ class VMView extends BaseView {
         return { value: labelText, isHtml: false };
     }
 
-    findVm(inventory, vmName, requestedHost) {
-        if (!inventory) {
-            return null;
-        }
-
-        const vms = Array.isArray(inventory.vms) ? inventory.vms : [];
-        if (vms.length === 0) {
-            return null;
-        }
-
-        const normalizedName = String(vmName || '').toLowerCase();
-        const normalizedHost = requestedHost ? String(requestedHost).toLowerCase() : null;
-
-        if (normalizedHost) {
-            const hostMatch = vms.find(vm => {
-                if (!vm) {
-                    return false;
-                }
-                const hostValue = String(vm.host || '').toLowerCase();
-                const nameValue = String(vm.name || '').toLowerCase();
-                return nameValue === normalizedName && hostValue === normalizedHost;
-            });
-            if (hostMatch) {
-                return hostMatch;
-            }
-        }
-
-        return vms.find(vm => {
-            if (!vm) {
-                return false;
-            }
-            return String(vm.name || '').toLowerCase() === normalizedName;
-        }) || null;
-    }
-
     findHost(inventory, hostname) {
         if (!inventory || !hostname) {
             return null;
@@ -2074,6 +2193,331 @@ class VMView extends BaseView {
             console.error('Error:', error);
         }
         return { hosts: [], vms: [] };
+    }
+
+    async fetchVmById(vmId) {
+        try {
+            const response = await fetch(`/api/v1/vms/by-id/${encodeURIComponent(vmId)}`, { 
+                credentials: 'same-origin' 
+            });
+            if (response.ok) {
+                return await response.json();
+            }
+        } catch (error) {
+            console.error('Error fetching VM by ID:', error);
+        }
+        return null;
+    }
+
+    setupResourceMenus() {
+        this.resourceMenus = [];
+        this.activeResourceMenu = null;
+        this.boundResourceMenuClickHandler = null;
+        this.boundResourceMenuOutsideHandler = null;
+        this.boundResourceMenuRepositionHandler = null;
+
+        const menuButtons = document.querySelectorAll('.resource-menu-btn');
+        menuButtons.forEach(button => {
+            button.addEventListener('click', (event) => this.handleResourceMenuClick(event));
+        });
+    }
+
+    cleanupResourceMenus() {
+        if (this.activeResourceMenu) {
+            this.closeResourceMenu();
+        }
+        this.resourceMenus = [];
+    }
+
+    handleResourceMenuClick(event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const button = event.currentTarget;
+        const resourceType = button.dataset.resourceType;
+        const resourceId = button.dataset.resourceId;
+
+        if (!resourceType || !resourceId) {
+            return;
+        }
+
+        // Close any existing menu
+        if (this.activeResourceMenu) {
+            this.closeResourceMenu();
+        }
+
+        this.showResourceMenu(button, resourceType, resourceId);
+    }
+
+    showResourceMenu(button, resourceType, resourceId) {
+        const menu = document.createElement('div');
+        menu.className = 'resource-menu';
+        menu.setAttribute('role', 'menu');
+        
+        const editLabel = resourceType === 'disk' ? 'Edit Disk' : 'Edit Network Adapter';
+        const deleteLabel = resourceType === 'disk' ? 'Delete Disk' : 'Delete Network Adapter';
+        
+        menu.innerHTML = `
+            <button type="button" class="resource-menu-item" data-action="edit" role="menuitem">
+                ${icon('edit', { size: 18 })}
+                <span>${editLabel}</span>
+            </button>
+            <button type="button" class="resource-menu-item resource-menu-item--danger" data-action="delete" role="menuitem">
+                ${icon('delete', { size: 18 })}
+                <span>${deleteLabel}</span>
+            </button>
+        `;
+
+        document.body.appendChild(menu);
+        this.activeResourceMenu = { menu, button, resourceType, resourceId };
+
+        // Position the menu with viewport boundary detection
+        menu.style.position = 'absolute';
+        menu.style.visibility = 'hidden';
+        menu.style.opacity = '0';
+
+        // Add event listeners
+        menu.querySelectorAll('.resource-menu-item').forEach(item => {
+            item.addEventListener('click', (event) => {
+                const action = event.currentTarget.dataset.action;
+                this.handleResourceAction(action, resourceType, resourceId);
+                this.closeResourceMenu();
+            });
+        });
+
+        // Close menu when clicking outside
+        this.boundResourceMenuOutsideHandler = (event) => {
+            if (!this.activeResourceMenu) return;
+            if (!menu.contains(event.target) && !button.contains(event.target)) {
+                this.closeResourceMenu();
+            }
+        };
+        
+        setTimeout(() => {
+            document.addEventListener('click', this.boundResourceMenuOutsideHandler, true);
+        }, 0);
+
+        // Reposition menu on scroll/resize
+        this.boundResourceMenuRepositionHandler = () => {
+            if (this.activeResourceMenu && this.activeResourceMenu.menu === menu) {
+                this.positionResourceMenu(menu, button);
+            }
+        };
+        
+        window.addEventListener('scroll', this.boundResourceMenuRepositionHandler, true);
+        window.addEventListener('resize', this.boundResourceMenuRepositionHandler, true);
+
+        // Position and show menu after measuring
+        requestAnimationFrame(() => {
+            this.positionResourceMenu(menu, button);
+            menu.style.visibility = 'visible';
+            menu.style.opacity = '';
+            menu.classList.add('visible');
+        });
+    }
+
+    closeResourceMenu() {
+        if (!this.activeResourceMenu) return;
+
+        const { menu } = this.activeResourceMenu;
+        menu.classList.remove('visible');
+        
+        if (this.boundResourceMenuOutsideHandler) {
+            document.removeEventListener('click', this.boundResourceMenuOutsideHandler, true);
+            this.boundResourceMenuOutsideHandler = null;
+        }
+
+        if (this.boundResourceMenuRepositionHandler) {
+            window.removeEventListener('scroll', this.boundResourceMenuRepositionHandler, true);
+            window.removeEventListener('resize', this.boundResourceMenuRepositionHandler, true);
+            this.boundResourceMenuRepositionHandler = null;
+        }
+
+        setTimeout(() => {
+            if (menu && menu.parentNode) {
+                menu.parentNode.removeChild(menu);
+            }
+        }, 200);
+
+        this.activeResourceMenu = null;
+    }
+
+    positionResourceMenu(menu, button) {
+        const buttonRect = button.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        const scrollY = window.scrollY || document.documentElement.scrollTop;
+        const scrollX = window.scrollX || document.documentElement.scrollLeft;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const edgeMargin = 20;
+        
+        // Default positioning: below the button, aligned to the left
+        let top = scrollY + buttonRect.bottom + 4;
+        let left = scrollX + buttonRect.left;
+        
+        // Check if menu would extend past right edge of viewport
+        if (left + menuRect.width > viewportWidth - edgeMargin) {
+            // Align to the right edge of the button instead
+            left = scrollX + buttonRect.right - menuRect.width;
+        }
+        
+        // Ensure menu doesn't go past left edge
+        if (left < edgeMargin) {
+            left = edgeMargin;
+        }
+        
+        // Check if menu would extend past bottom edge of viewport
+        if (buttonRect.bottom + menuRect.height > viewportHeight - edgeMargin) {
+            // Position above the button instead
+            top = scrollY + buttonRect.top - menuRect.height - 4;
+        }
+        
+        // Ensure menu doesn't go past top edge
+        if (top < scrollY + edgeMargin) {
+            top = scrollY + edgeMargin;
+        }
+        
+        // Apply final position
+        menu.style.top = `${Math.round(top)}px`;
+        menu.style.left = `${Math.round(left)}px`;
+    }
+
+    handleResourceAction(action, resourceType, resourceId) {
+        if (action === 'edit') {
+            // Find the actual resource data to pass to the overlay
+            let resourceData = null;
+            if (resourceType === 'disk') {
+                resourceData = this.vmData.disks.find(d => d.id === resourceId);
+            } else if (resourceType === 'nic') {
+                resourceData = this.vmData.networks.find(n => n.id === resourceId);
+            }
+            
+            const overlayName = resourceType === 'disk' ? 'disk-edit' : 'nic-edit';
+            overlayManager.open(overlayName, {
+                vm_id: this.vmData.id,
+                vm_name: this.vmData.name,
+                host: this.vmData.host,
+                resource_id: resourceId,
+                resource_type: resourceType,
+                resource_data: resourceData  // Pass actual resource data
+            });
+        } else if (action === 'delete') {
+            this.confirmResourceDelete(resourceType, resourceId);
+        }
+    }
+
+    confirmResourceDelete(resourceType, resourceId) {
+        const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
+        const title = `Confirm ${resourceName} deletion`;
+        const message = `Delete this ${resourceName}? This action cannot be undone.`;
+        
+        // Create confirmation dialog
+        const overlay = document.createElement('div');
+        overlay.className = 'resource-delete-confirm';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        
+        overlay.innerHTML = `
+            <div class="resource-delete-backdrop"></div>
+            <div class="resource-delete-dialog">
+                <div class="resource-delete-header">
+                    <h3>${this.escapeHtml(title)}</h3>
+                </div>
+                <div class="resource-delete-body">
+                    <p>${this.escapeHtml(message)}</p>
+                </div>
+                <div class="resource-delete-actions">
+                    <button type="button" class="btn btn-secondary" data-action="cancel">Cancel</button>
+                    <button type="button" class="btn btn-danger" data-action="confirm">Delete</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(overlay);
+        document.body.style.overflow = 'hidden';
+        
+        const confirmBtn = overlay.querySelector('[data-action="confirm"]');
+        const cancelBtn = overlay.querySelector('[data-action="cancel"]');
+        const backdrop = overlay.querySelector('.resource-delete-backdrop');
+        
+        const close = () => {
+            overlay.classList.remove('visible');
+            document.body.style.overflow = '';
+            setTimeout(() => {
+                if (overlay.parentNode) {
+                    overlay.parentNode.removeChild(overlay);
+                }
+            }, 200);
+        };
+        
+        confirmBtn.addEventListener('click', async () => {
+            close();
+            await this.executeResourceDelete(resourceType, resourceId);
+        });
+        
+        cancelBtn.addEventListener('click', close);
+        backdrop.addEventListener('click', close);
+        
+        requestAnimationFrame(() => {
+            overlay.classList.add('visible');
+            confirmBtn.focus();
+        });
+    }
+
+    async executeResourceDelete(resourceType, resourceId) {
+        const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
+        const endpoint = resourceType === 'disk' 
+            ? `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/disks/${encodeURIComponent(resourceId)}`
+            : `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/nics/${encodeURIComponent(resourceId)}`;
+
+        this.setActionFeedback(`Deleting ${resourceName}...`, 'info', {
+            title: 'Deleting resource',
+            persist: true,
+            icon: icon('hourglass_top', { size: 20 }),
+        });
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'DELETE',
+                credentials: 'same-origin',
+            });
+
+            let payload = null;
+            try {
+                payload = await response.json();
+            } catch (err) {
+                payload = null;
+            }
+
+            if (response.ok) {
+                const message = payload && payload.message 
+                    ? payload.message 
+                    : `${resourceName.charAt(0).toUpperCase() + resourceName.slice(1)} deletion queued.`;
+                this.setActionFeedback(message, 'success', {
+                    title: 'Resource deletion queued',
+                });
+
+                // Refresh the view after a short delay
+                setTimeout(() => {
+                    viewManager.switchView('vm', { 
+                        id: this.vmData.id,
+                        name: this.vmData.name, 
+                        host: this.vmData.host 
+                    }, { skipHistory: true });
+                }, 400);
+            } else {
+                const detail = (payload && payload.detail) || response.statusText || 'Request failed';
+                const errorMsg = typeof detail === 'string' ? detail : (detail.message || JSON.stringify(detail));
+                this.setActionFeedback(`Failed to delete ${resourceName}: ${errorMsg}`, 'error', {
+                    title: 'Deletion failed',
+                });
+            }
+        } catch (error) {
+            console.error('Resource delete error:', error);
+            this.setActionFeedback(`Failed to delete ${resourceName}: ${error.message}`, 'error', {
+                title: 'Deletion failed',
+            });
+        }
     }
 }
 

@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "version": 1,
+  "schema_name": "hostresources",
+  "description": "Schema for host resource configuration including storage classes and networks",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Schema version number"
+    },
+    "schema_name": {
+      "type": "string",
+      "description": "Name of the schema"
+    },
+    "storage_classes": {
+      "type": "array",
+      "description": "List of available storage classes on this host",
+      "items": {
+        "type": "object",
+        "required": ["name", "path"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique identifier for the storage class"
+          },
+          "path": {
+            "type": "string",
+            "description": "Filesystem path where VM disks will be stored"
+          }
+        }
+      }
+    },
+    "networks": {
+      "type": "array",
+      "description": "List of available networks on this host",
+      "items": {
+        "type": "object",
+        "required": ["name", "model", "configuration"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique identifier for the network"
+          },
+          "model": {
+            "type": "string",
+            "enum": ["vlan"],
+            "description": "Network model type (currently only 'vlan' is supported)"
+          },
+          "configuration": {
+            "type": "object",
+            "description": "Model-specific configuration data",
+            "oneOf": [
+              {
+                "title": "VLAN Configuration",
+                "required": ["virtual_switch", "vlan_id"],
+                "properties": {
+                  "virtual_switch": {
+                    "type": "string",
+                    "description": "Name of the Hyper-V virtual switch"
+                  },
+                  "vlan_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4094,
+                    "description": "VLAN identifier"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "virtual_machines_path": {
+      "type": "string",
+      "description": "Default filesystem path where VM configuration files will be stored"
+    }
+  },
+  "required": ["version", "schema_name", "storage_classes", "networks", "virtual_machines_path"]
+}

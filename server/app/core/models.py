@@ -64,6 +64,8 @@ class Host(BaseModel):
     connected: bool = False
     last_seen: Optional[datetime] = None
     error: Optional[str] = None
+    total_cpu_cores: int = 0
+    total_memory_gb: float = 0.0
 
 
 class Notification(BaseModel):
@@ -81,13 +83,55 @@ class Notification(BaseModel):
 
 class VM(BaseModel):
     """Virtual machine information."""
+    id: Optional[str] = None
     name: str
     host: str
     state: VMState
     cpu_cores: int = 0
     memory_gb: float = 0.0
+    memory_startup_gb: Optional[float] = None
+    memory_min_gb: Optional[float] = None
+    memory_max_gb: Optional[float] = None
+    dynamic_memory_enabled: Optional[bool] = None
+    ip_address: Optional[str] = None
+    ip_addresses: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
     os_family: Optional[OSFamily] = None
+    os_name: Optional[str] = None
+    generation: Optional[int] = None
+    version: Optional[str] = None
     created_at: Optional[datetime] = None
+    disks: List["VMDisk"] = Field(default_factory=list)
+    networks: List["VMNetworkAdapter"] = Field(default_factory=list)
+
+
+class VMDisk(BaseModel):
+    """Virtual disk attached to a VM."""
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    path: Optional[str] = None
+    location: Optional[str] = None
+    type: Optional[str] = None
+    size_gb: Optional[float] = None
+    file_size_gb: Optional[float] = None
+
+
+class VMNetworkAdapter(BaseModel):
+    """Network adapter attached to a VM."""
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    adapter_name: Optional[str] = None
+    network: Optional[str] = None
+    virtual_switch: Optional[str] = None
+    vlan: Optional[str] = None
+    network_name: Optional[str] = None
+    ip_addresses: List[str] = Field(default_factory=list)
+    mac_address: Optional[str] = None
+
+
+VM.model_rebuild()
 
 
 class VMDeleteRequest(BaseModel):
@@ -96,12 +140,95 @@ class VMDeleteRequest(BaseModel):
     hyperv_host: str
     force: bool = Field(
         False, description="Force delete even if VM is running")
+    delete_disks: bool = Field(
+        False, description="Delete all attached disks with the VM (validates no shared disks)")
+
+
+class ResourceCreateRequest(BaseModel):
+    """Base class for resource creation requests."""
+    values: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Field values keyed by schema field id",
+    )
+    target_host: str = Field(
+        ...,
+        description="Hostname of the connected Hyper-V host that will execute the job",
+    )
+
+
+class DiskCreateRequest(ResourceCreateRequest):
+    """Request to create a new disk."""
+    pass
+
+
+class NicCreateRequest(ResourceCreateRequest):
+    """Request to create a new network adapter."""
+    pass
+
+
+class ResourceUpdateRequest(ResourceCreateRequest):
+    """Request to update an existing resource."""
+
+    resource_id: str = Field(
+        ..., description="Hyper-V ID of the resource being updated"
+    )
+
+
+class ResourceDeleteRequest(BaseModel):
+    """Request to delete a resource by ID."""
+    resource_id: str = Field(...,
+                             description="Hyper-V ID of the resource to delete")
+    hyperv_host: str = Field(...,
+                             description="Host where the resource is located")
+
+
+class VMInitializationRequest(BaseModel):
+    """Request to initialize an existing VM with guest configuration."""
+
+    target_host: str = Field(
+        ..., description="Hostname of the connected Hyper-V host that will execute the job"
+    )
+    guest_configuration: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Pre-formed guest configuration values to apply to the VM. External callers "
+            "must persist and supply these values when triggering initialization."
+        ),
+    )
+
+
+class NoopTestRequest(BaseModel):
+    """Request to execute a noop-test job using the JobRequest envelope protocol.
+
+    Validates the round-trip communication between server and host agent
+    without performing actual operations.
+    """
+
+    target_host: str = Field(
+        ...,
+        description="Hostname of the connected Hyper-V host that will execute the test",
+    )
+    resource_spec: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Test data to echo back through the new protocol",
+    )
+    correlation_id: Optional[str] = Field(
+        None,
+        description="Optional correlation ID for tracking the request",
+    )
+
+
+class JobResult(BaseModel):
+    """Result of a job submission that returns immediately."""
+    job_id: str
+    status: str = "queued"
+    message: str
 
 
 class Job(BaseModel):
     """Job execution tracking."""
     job_id: str
-    job_type: str  # "provision_vm", "delete_vm", etc.
+    job_type: str  # "create_vm", "delete_vm", "managed_deployment", etc.
     status: JobStatus
     created_at: datetime
     started_at: Optional[datetime] = None
@@ -111,6 +238,7 @@ class Job(BaseModel):
     output: List[str] = Field(default_factory=list)
     error: Optional[str] = None
     notification_id: Optional[str] = None
+    child_jobs: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class InventoryResponse(BaseModel):
@@ -134,6 +262,7 @@ class BuildInfo(BaseModel):
     git_commit: Optional[str] = None
     git_ref: Optional[str] = None
     git_state: Optional[str] = None
+    github_repository: Optional[str] = None
     build_time: Optional[datetime] = None
     build_host: Optional[str] = None
 
@@ -162,54 +291,63 @@ class NotificationsResponse(BaseModel):
     unread_count: int
 
 
-class JobSubmission(BaseModel):
-    """Schema-driven job submission payload."""
+class OSSPackage(BaseModel):
+    """Information about an open source package."""
 
-    schema_version: int = Field(..., description="Version of the job schema used")
-    values: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Field values keyed by schema field id",
-    )
-    target_host: Optional[str] = Field(
-        default=None,
-        description="Hostname of the connected Hyper-V host that will execute the job",
-    )
+    name: str
+    version: str
+    license: str
+    author: Optional[str] = None
+    url: Optional[str] = None
+    ecosystem: str
 
 
-class RemoteTaskPoolMetrics(BaseModel):
-    """Snapshot of a remote task worker pool."""
+class OSSLicenseSummary(BaseModel):
+    """Summary statistics for OSS license information."""
+
+    total: int
+    python: int
+    javascript: int
+
+
+class OSSLicenseResponse(BaseModel):
+    """Response containing OSS license information."""
+
+    packages: List[OSSPackage]
+    summary: OSSLicenseSummary
+
+
+class ShortQueueMetrics(BaseModel):
+    """Metrics for the short job queue (rate-limited)."""
 
     queue_depth: int
     inflight: int
-    current_workers: int
-    min_workers: Optional[int] = None
-    max_workers: Optional[int] = None
-    configured_workers: Optional[int] = None
+    completed: int
+
+
+class IOQueueMetrics(BaseModel):
+    """Metrics for the IO job queue (per-host serialized)."""
+
+    queue_depth: int
+    inflight: int
+    completed: int
+    hosts_with_active_io: int
 
 
 class RemoteTaskMetrics(BaseModel):
-    """Aggregated diagnostics for the remote task service."""
+    """Aggregated diagnostics for the remote task service.
+    
+    The service uses static concurrency limits with two queues:
+    - SHORT queue: Rate-limited dispatch for quick operations
+    - IO queue: Per-host serialization for disk/guest-init operations
+    """
 
     started: bool
-    average_duration_seconds: float
-    completed_tasks: int
-    scale_up_backlog_threshold: int
-    scale_up_duration_threshold_seconds: float
-    idle_timeout_seconds: float
-    cpu_percent: float
-    memory_percent: float
-    configured_max_workers: int
-    current_max_workers: int
-    dynamic_ceiling: int
-    dynamic_scale_increment: int
-    resource_scale_interval_seconds: float
-    resource_observation_window_seconds: float
-    resource_cpu_threshold_percent: float
-    resource_memory_threshold_percent: float
-    dynamic_adjustments: int
-    maxed_out_for_seconds: float
-    fast_pool: RemoteTaskPoolMetrics
-    job_pool: RemoteTaskPoolMetrics
+    max_connections: int
+    total_connections: int
+    dispatch_interval_seconds: float
+    short_queue: ShortQueueMetrics
+    io_queue: IOQueueMetrics
 
 
 class JobServiceMetrics(BaseModel):
@@ -218,7 +356,6 @@ class JobServiceMetrics(BaseModel):
     started: bool
     queue_depth: int
     worker_count: int
-    configured_concurrency: int
     pending_jobs: int
     running_jobs: int
     completed_jobs: int

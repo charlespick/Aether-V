@@ -45,3 +45,4 @@ htmlcov/
 # Build artifacts - generated during Docker build
 app/static/icons/
 app/static/swagger-ui/
+oss-licenses.json

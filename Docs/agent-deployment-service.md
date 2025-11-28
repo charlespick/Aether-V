@@ -40,7 +40,7 @@ HOST_INSTALL_DIRECTORY=\\FileServer\Share\AetherV
 - Host deployment steps:
   1. `_collect_script_files()` / `_collect_iso_files()` enumerate artifacts under `/app/agent` so new assets ship automatically with each container build.
   2. `_clear_host_install_directory()` and `_verify_install_directory_empty()` reset the target directory via WinRM.
-  3. `_download_file_to_host()` streams each artifact over HTTP using `Invoke-WebRequest`, respecting retry/back-off settings when downloads fail.
+  3. `_deploy_all_artifacts_parallel()` deploys all artifacts (scripts, ISOs, and version file) in a single WinRM session using PowerShell background jobs for parallel downloads. Each download uses `Invoke-WebRequest` and respects retry/back-off settings (`AGENT_DOWNLOAD_MAX_ATTEMPTS` and `AGENT_DOWNLOAD_RETRY_INTERVAL`) when downloads fail.
   4. `_verify_expected_artifacts_present()` ensures every expected file exists before declaring success.
   5. `ensure_host_setup()` caches the matched version for subsequent readiness checks.
 
@@ -68,7 +68,7 @@ Each host receives a consistent layout inside `{HOST_INSTALL_DIRECTORY}`:
 
 ### Version management and transport
 - The container embeds its canonical version inside `/app/agent/version`. Hosts store their last deployed version inside `{HOST_INSTALL_DIRECTORY}\version`, and comparisons use semantic version ordering.
-- Artifact downloads always originate from the orchestrator. Hosts fetch files via HTTP(S) using `Invoke-WebRequest`, so even large ISOs avoid WinRM payload limits. Retries honour `AGENT_DOWNLOAD_MAX_ATTEMPTS` and `AGENT_DOWNLOAD_RETRY_INTERVAL` to tolerate transient ingress warm-ups.
+- Artifact downloads use a single WinRM connection with parallel PowerShell background jobs (`Start-Job`), dramatically reducing deployment time by eliminating repeated WinRM connection overhead. Each job downloads its artifact via HTTP(S) using `Invoke-WebRequest`, so even large ISOs avoid WinRM payload limits. Downloads retry up to `AGENT_DOWNLOAD_MAX_ATTEMPTS` with `AGENT_DOWNLOAD_RETRY_INTERVAL` delays to tolerate transient ingress warm-ups.
 - Because the deployment service enumerates `/app/agent` at runtime, any new script or asset added during the build automatically participates in rollout without code changes.
 
 ## Notifications, readiness, and inventory integration

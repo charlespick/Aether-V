@@ -2,6 +2,9 @@ function Invoke-ProvisioningRegisterVm {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $true)]
+        [string]$VMName,
+
+        [Parameter(Mandatory = $true)]
         [string]$OSFamily,
 
         [Parameter(Mandatory = $true)]
@@ -13,19 +16,31 @@ function Invoke-ProvisioningRegisterVm {
         [Parameter(Mandatory = $true)]
         [string]$VMDataFolder,
 
-        [Nullable[int]]$VLANId
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string]$VhdxPath
     )
 
-    $vmName = Split-Path -Path $VMDataFolder -Leaf
-    if (-not $vmName) {
-        throw "Unable to derive VM name from data folder '$VMDataFolder'."
+    # VMDataFolder is now the base path where all VMs are created
+    # Hyper-V will automatically create VM-specific subdirectories
+    
+    # Ensure the VM base path exists - create it if it doesn't
+    if (-not (Test-Path -LiteralPath $VMDataFolder -PathType Container)) {
+        try {
+            # Use .NET method to handle paths with spaces correctly
+            $null = [System.IO.Directory]::CreateDirectory($VMDataFolder)
+            Write-Host "Created VM base path: $VMDataFolder" -ForegroundColor Green
+        }
+        catch {
+            throw "Failed to create VM base path '$VMDataFolder': $_"
+        }
     }
 
     try {
-        $vm = New-VM -Name $vmName -MemoryStartupBytes ($GBRam * 1GB) -Generation 2 -BootDevice VHD -Path (Split-Path -Path $VMDataFolder -Parent)
+        $vm = New-VM -Name $VMName -MemoryStartupBytes ($GBRam * 1GB) -Generation 2 -BootDevice VHD -Path $VMDataFolder
     }
     catch {
-        throw "Failed to create VM '$vmName': $_"
+        throw "Failed to create VM '$VMName': $_"
     }
 
     $normalizedFamily = $OSFamily.ToLowerInvariant()
@@ -45,67 +60,49 @@ function Invoke-ProvisioningRegisterVm {
         throw "Failed to configure CPU cores for VM '$vmName': $_"
     }
 
-    $vhdxPath = Get-ChildItem -LiteralPath $VMDataFolder -Filter *.vhdx -File | Select-Object -First 1
-    if (-not $vhdxPath) {
-        throw "No VHDX found in $VMDataFolder for VM '$vmName'."
-    }
+    # Attach boot disk if provided (in split component model, disk is attached separately)
+    if (-not [string]::IsNullOrWhiteSpace($VhdxPath)) {
+        if (-not (Test-Path -LiteralPath $VhdxPath -PathType Leaf)) {
+            throw "VHDX not found at '$VhdxPath' for VM '$vmName'."
+        }
 
-    try {
-        Add-VMHardDiskDrive -VM $vm -Path $vhdxPath.FullName
-    }
-    catch {
-        throw "Failed to attach VHDX '$($vhdxPath.FullName)' to VM '$vmName': $_"
-    }
-
-    $networkSwitch = Get-VMSwitch | Select-Object -First 1
-    if (-not $networkSwitch) {
-        throw "No virtual switch is available to attach VM '$vmName'."
-    }
-
-    $adapter = Get-VMNetworkAdapter -VM $vm | Select-Object -First 1
-    if (-not $adapter) {
-        throw "No network adapter found on VM '$vmName'."
-    }
-
-    try {
-        Connect-VMNetworkAdapter -VMNetworkAdapter $adapter -VMSwitch $networkSwitch
-    }
-    catch {
-        throw "Failed to connect VM '$vmName' to switch '$($networkSwitch.Name)': $_"
-    }
-
-    if ($VLANId -ne $null) {
         try {
-            Set-VMNetworkAdapterVlan -VMNetworkAdapter $adapter -Access -VlanId $VLANId
+            Add-VMHardDiskDrive -VM $vm -Path $VhdxPath
         }
         catch {
-            throw "Failed to assign VLAN $VLANId to VM '$vmName': $_"
+            throw "Failed to attach VHDX '$VhdxPath' to VM '$vmName': $_"
         }
     }
 
-    $isoFile = Get-ChildItem -LiteralPath $VMDataFolder -Filter *.iso -File | Select-Object -First 1
-    if ($isoFile) {
+    # Remove the default network adapter that PowerShell creates automatically
+    # Network adapters will be added via the NIC create operation
+    $defaultAdapter = Get-VMNetworkAdapter -VM $vm | Select-Object -First 1
+    if ($defaultAdapter) {
         try {
-            Add-VMDvdDrive -VM $vm -Path $isoFile.FullName
+            Remove-VMNetworkAdapter -VMNetworkAdapter $defaultAdapter -ErrorAction Stop
+            Write-Host "Removed default network adapter (will be added via NIC create operation)" -ForegroundColor Green
         }
         catch {
-            throw "Failed to mount provisioning ISO '$($isoFile.FullName)' to VM '$vmName': $_"
+            Write-Warning "Failed to remove default network adapter: $_"
         }
     }
 
-    try {
-        Set-VMFirmware -VM $vm -FirstBootDevice (Get-VMHardDiskDrive -VM $vm | Select-Object -First 1)
-    }
-    catch {
-        throw "Failed to set boot order for VM '$vmName': $_"
+    # Set boot order to boot from the first hard disk (if one is attached)
+    # In split component model, disk may be attached later, so this is optional
+    $bootDisk = Get-VMHardDiskDrive -VM $vm | Select-Object -First 1
+    if ($bootDisk) {
+        try {
+            Set-VMFirmware -VM $vm -FirstBootDevice $bootDisk
+        }
+        catch {
+            throw "Failed to set boot order for VM '$vmName': $_"
+        }
     }
 
-    try {
-        Start-VM -VM $vm | Out-Null
-    }
-    catch {
-        throw "Failed to start VM '$vmName': $_"
-    }
+    # Note: In split component model, VM is created but NOT started
+    # The initialization job will start the VM after disk and NIC are attached
+    # Network adapters and provisioning ISO are added during the initialization phase
+    Write-Host "VM '$vmName' created successfully (not started - will be started during initialization)" -ForegroundColor Green
 
     return $vm
 }

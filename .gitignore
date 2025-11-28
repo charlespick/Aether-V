@@ -1,6 +1,10 @@
 ﻿ISOs
 build/
 
+# Python virtual environment
+.venv/
+venv/
+
 # Docker development files
 .env.local
 docker-compose.override.yml
@@ -11,3 +15,8 @@ StartupProfileData-NonInteractive
 .vscode/
 server/node_modules/
 server/app/static/icons/
+
+# Test artifacts
+testResults.xml
+*.trx
+coverage.xml

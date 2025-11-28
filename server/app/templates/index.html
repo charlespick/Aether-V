@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ (environment_name or app_name or 'Aether-V') }} — Dashboard</title>
+    <link rel="preload" href="/assets/Logo.png" as="image">
     <link rel="stylesheet" href="/static/main.css">
 </head>
 <body>
@@ -204,12 +205,13 @@
             "auth_enabled": {{ auth_enabled | tojson }},
             "websocket_refresh_time": {{ websocket_refresh_time | tojson }},
             "websocket_ping_interval": {{ websocket_ping_interval | tojson }},
-            "job_schema": {{ job_schema | tojson }},
             "agent_deployment": {{ agent_deployment | tojson }},
             "build": {{ build_metadata_payload | tojson }}
         }
     </script>
     <script src="/static/icons.js"></script>
+    <script src="/static/pydantic-form-builder.js"></script>
+    <script src="/static/provision-form-pydantic.js"></script>
     <script src="/static/websocket.js"></script>
     <script src="/static/overlay.js"></script>
     <script src="/static/views.js"></script>

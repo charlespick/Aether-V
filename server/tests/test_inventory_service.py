@@ -2,7 +2,10 @@ import asyncio
 
 from datetime import datetime
 
+import asyncio
 import pytest
+
+# Kerberos is disabled via environment variables in conftest.py
 
 try:  # pragma: no cover - environment guard for optional server package
     from app.core.config import settings
@@ -259,3 +262,52 @@ async def test_refresh_inventory_prunes_unconfigured_hosts(monkeypatch):
     assert slow_key not in notification_service._system_notification_ids
     assert preparing_id not in notification_service.notifications
     assert slow_id not in notification_service.notifications
+
+
+@pytest.mark.anyio("asyncio")
+async def test_get_vm_by_id_uses_global_index(monkeypatch):
+    if (
+        InventoryService is None
+        or settings is None
+        or host_deployment_service is None
+    ):  # pragma: no cover - environment guard
+        pytest.skip("server package unavailable")
+
+    service = InventoryService()
+
+    monkeypatch.setattr(settings, "hyperv_hosts", "test-host")
+    monkeypatch.setattr(host_deployment_service, "_deployment_enabled", False, raising=False)
+
+    payloads = [
+        {
+            "Host": {"ClusterName": "Default"},
+            "VirtualMachines": [
+                {"Name": "vm-one", "State": "Running", "Id": "ABC-123"},
+            ],
+        },
+        {
+            "Host": {"ClusterName": "Default"},
+            "VirtualMachines": [],
+        },
+    ]
+
+    async def fake_collect(self, hostname: str):
+        return payloads.pop(0)
+
+    monkeypatch.setattr(
+        service,
+        "_collect_with_recovery",
+        fake_collect.__get__(service, InventoryService),
+    )
+
+    await service.refresh_inventory(hostnames=["test-host"], rebuild_clusters=False)
+
+    vm = service.get_vm_by_id("abc-123")
+    assert vm is not None
+    assert vm.name == "vm-one"
+    assert service.vms_by_id["abc-123"] is vm
+
+    await service.refresh_inventory(hostnames=["test-host"], rebuild_clusters=False)
+
+    assert service.get_vm_by_id("abc-123") is None
+    assert "abc-123" not in service.vms_by_id

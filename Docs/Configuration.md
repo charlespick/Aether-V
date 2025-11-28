@@ -4,6 +4,17 @@ This document describes all configuration inputs that the Aether-V Server reads
 from environment variables. Values can be provided by a local `.env` file, Docker
 runtime configuration, or Kubernetes ConfigMap/Secret objects.
 
+## Kerberos Authentication
+
+Aether-V requires Kerberos authentication for WinRM connectivity to support secure double-hop operations and Hyper-V cluster management. 
+
+**For comprehensive Kerberos setup instructions, see [Kerberos-Authentication.md](Kerberos-Authentication.md)** which covers:
+- Why Kerberos is required (double-hop, cluster operations, security)
+- Keytab generation procedures
+- Resource-Based Constrained Delegation (RBCD) configuration
+- Migration from legacy NTLM/Basic/CredSSP authentication
+- Security advisories and best practices
+
 ## Non-secret settings
 
 These values normally live in `server/k8s/configmap.yaml` or `.env` files. The
@@ -36,28 +47,19 @@ for the UI banner.
 | `COOKIE_SECURE`                 | `true`                       | No                      | Set the secure flag on cookies. Leave `true` unless developing over HTTP.                                            |
 | `COOKIE_SAMESITE`               | `lax`                        | No                      | SameSite policy for cookies. Use `none` for cross-site scenarios (requires HTTPS).                                   |
 | `HYPERV_HOSTS`                  | _(empty)_                    | Recommended             | Comma-separated list of Hyper-V hostnames. Without hosts no workloads can be managed.                                |
-| `WINRM_TRANSPORT`               | `ntlm`                       | No                      | WinRM authentication mechanism (`ntlm`, `basic`, or `credssp`).                                                      |
+| `WINRM_KERBEROS_PRINCIPAL`      | _(unset)_                    | Yes                     | Kerberos principal for the service account UPN used to generate the keytab (e.g., `svc-aetherv@AD.EXAMPLE.COM`). If you prefer a service SPN such as `HTTP/aetherv.example.com@AD.EXAMPLE.COM`, ensure that SPN is registered to the same account and present in the keytab.                   |
+| `WINRM_KERBEROS_REALM`          | _(unset)_                    | No                      | Optional Kerberos realm override. Defaults to the realm portion of `WINRM_KERBEROS_PRINCIPAL` when left unset.        |
+| `WINRM_KERBEROS_KDC`            | _(unset)_                    | No                      | Optional KDC server override. When provided the server writes a temporary `krb5.conf` so GSSAPI/kinit honour the host. |
 | `WINRM_PORT`                    | `5985`                       | No                      | WinRM port on Hyper-V hosts. Use `5986` when enforcing HTTPS.                                                        |
 | `WINRM_OPERATION_TIMEOUT`       | `15.0`                       | No                      | Seconds to wait for individual WinRM operations before cancelling the request.    |
 | `WINRM_CONNECTION_TIMEOUT`      | `30.0`                       | No                      | Network connect timeout (seconds) when establishing WinRM sessions.               |
 | `WINRM_READ_TIMEOUT`            | `30.0`                       | No                      | Maximum time (seconds) to wait for WinRM responses before retrying.               |
 | `WINRM_POLL_INTERVAL_SECONDS`   | `1.0`                        | No                      | Interval (seconds) between WinRM runspace status checks during long operations.   |
 | `INVENTORY_REFRESH_INTERVAL`    | `60`                         | No                      | Seconds between background host refreshes. Increase to reduce polling frequency.                                     |
-| `JOB_WORKER_CONCURRENCY`        | `6`                          | No                      | Maximum number of provisioning jobs executed simultaneously.                                                         |
-| `JOB_LONG_TIMEOUT_SECONDS`      | `900.0`                        | No                      | Timeout applied to long-running orchestration jobs such as VM provisioning or deletion.                              |
-| `JOB_SHORT_TIMEOUT_SECONDS`     | `60.0`                         | No                      | Timeout applied to quick orchestration jobs (power actions, script triggers).                                        |
-| `REMOTE_TASK_MIN_CONCURRENCY`   | `6`                          | No                      | Initial number of concurrent WinRM/PowerShell operations the orchestrator will run.                                  |
-| `REMOTE_TASK_MAX_CONCURRENCY`   | `24`                         | No                      | Baseline upper bound on simultaneous remote operations before dynamic scaling considers resource headroom.          |
-| `REMOTE_TASK_DYNAMIC_CEILING`   | `48`                         | No                      | Hard ceiling for automatic fast-pool expansion driven by local resource utilisation.                                 |
-| `REMOTE_TASK_SCALE_UP_BACKLOG`  | `2`                          | No                      | Minimum queued remote tasks required before scaling worker threads above the baseline.                               |
-| `REMOTE_TASK_IDLE_SECONDS`      | `30.0`                       | No                      | Idle period (seconds) before surplus remote workers are released.                                                    |
-| `REMOTE_TASK_SCALE_UP_DURATION_THRESHOLD` | `30.0`            | No                      | Historical average duration metric retained for diagnostics; no longer blocks scaling decisions.                     |
-| `REMOTE_TASK_JOB_CONCURRENCY`   | `6`                          | No                      | Dedicated worker slots reserved for long-running job operations.                                                     |
-| `REMOTE_TASK_RESOURCE_SCALE_INTERVAL_SECONDS` | `15.0`        | No                      | Frequency (seconds) of local resource sampling and scaling evaluation.                                               |
-| `REMOTE_TASK_RESOURCE_OBSERVATION_WINDOW_SECONDS` | `45.0`    | No                      | Continuous period the pool must sit at capacity with backlog before increasing the max limit.                       |
-| `REMOTE_TASK_RESOURCE_CPU_THRESHOLD` | `60.0`                 | No                      | Maximum average CPU utilisation during the observation window to permit scaling.                                     |
-| `REMOTE_TASK_RESOURCE_MEMORY_THRESHOLD` | `70.0`              | No                      | Maximum average memory utilisation during the observation window to permit scaling.                                  |
-| `REMOTE_TASK_RESOURCE_SCALE_INCREMENT` | `2`                  | No                      | Number of additional fast-pool workers granted when the resource checks allow an expansion.                          |
+| `MAX_WINRM_CONNECTIONS`         | `48`                         | No                      | Global maximum number of concurrent WinRM connections to all hosts.                                                  |
+| `IO_JOB_TIMEOUT_SECONDS`        | `900.0`                      | No                      | Timeout for IO-intensive jobs (disk creation, guest initialization). Per-host serialization prevents IO overload.   |
+| `SHORT_JOB_TIMEOUT_SECONDS`     | `60.0`                       | No                      | Timeout for short jobs (inventory, VM actions, CRUD). Rate-limited at one per second to prevent spikes.             |
+| `SHORT_JOB_DISPATCH_INTERVAL_SECONDS` | `1.0`                 | No                      | Interval between short job dispatches (seconds). Spreads load to prevent connection spikes.                         |
 | `WEBSOCKET_TIMEOUT`             | `1800`                       | No                      | Idle timeout (seconds) before closing WebSocket sessions. Default is 30 minutes.                                     |
 | `WEBSOCKET_PING_INTERVAL`       | `30`                         | No                      | Heartbeat ping interval in seconds. Align with load balancer expectations.                                           |
 | `WEBSOCKET_REFRESH_TIME`        | `1500`                       | No                      | Client reconnect hint (seconds). Default is 25 minutes.                                                              |
@@ -76,12 +78,11 @@ for the UI banner.
 Sensitive values should be stored in a Kubernetes Secret or a secrets manager and
 never committed to source control.
 
-| Variable             | Purpose                                   | Notes                                                                                                                                    |
-| -------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `OIDC_CLIENT_SECRET` | Client secret for the OIDC application.   | Required when using interactive login.                                                                                                   |
-| `SESSION_SECRET_KEY` | Key used to sign session cookies.         | Optional for development; required in production to keep sessions stable across restarts.                                                |
-| `WINRM_USERNAME`     | Username for connecting to Hyper-V hosts. | Typically a domain account with necessary privileges.                                                                                    |
-| `WINRM_PASSWORD`     | Password for the WinRM account.           | Consider using certificates for enhanced security.                                                                                       |
+| Variable                   | Purpose                                          | Notes                                                                                                                                    |
+| -------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `OIDC_CLIENT_SECRET`       | Client secret for the OIDC application.          | Required when using interactive login.                                                                                                   |
+| `SESSION_SECRET_KEY`       | Key used to sign session cookies.                | Optional for development; required in production to persist authenticated sessions across restarts.                                      |
+| `WINRM_KEYTAB_B64`         | Base64-encoded Kerberos keytab for WinRM access. | Required for Kerberos authentication. Generate with `base64 < service.keytab \| tr -d '\n'` and set as single-line value.                |
 
 Service principals and other non-interactive callers authenticate by requesting OAuth tokens directly from the identity provider (for example, using a Microsoft Entra application client ID and secret) and presenting those bearer tokens to Aether-V. Access tokens should be requested with the API audience (for example `api://<client-id>/.default`) so the resulting token contains the configured app roles. No static API keys are required or supported.
 

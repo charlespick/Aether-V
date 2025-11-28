@@ -85,6 +85,8 @@ jobs:
         cache-to: type=gha,mode=max
         provenance: false
         sbom: false
+        build-args: |
+          GITHUB_REPOSITORY=${{ github.repository }}
 
     - name: Run server smoke tests
       run: |

@@ -1,7 +1,8 @@
 // Get configuration from backend
 const configData = JSON.parse(document.getElementById('config-data').textContent);
 window.appConfig = configData;
-window.jobSchema = configData.job_schema || null;
+// Schema system is deprecated - forms now use Pydantic models directly
+window.jobSchema = null;
 const authEnabled = configData.auth_enabled;
 
 if (window.viewManager && typeof window.viewManager.setAppName === 'function') {
@@ -495,19 +496,19 @@ let connectionStatusState = {
 // Configuration for different connection states
 const CONNECTION_STATES = {
     disconnected: {
-        icon: '⚠️',
+        icon: icon('error', { size: 20 }),
         title: 'Disconnected',
         message: 'Connection to server lost, attempting to reconnect...',
         buttonText: 'Reconnect Now'
     },
     reconnecting: {
-        icon: '⚠️',
+        icon: icon('error', { size: 20 }),
         title: 'Disconnected',
         message: 'Trying to reconnect...',
         buttonText: 'Reconnect Now'
     },
     failed: {
-        icon: '❌',
+        icon: icon('error', { size: 20 }),
         title: 'Connection Failed',
         message: 'Failed to reconnect to server after multiple attempts',
         buttonText: 'Refresh Page'
@@ -560,7 +561,7 @@ function updateConnectionContent(status, data, iconEl, titleEl, messageEl, retry
         connectionStatusState.currentStatus = status;
         
         // Update all content (no DOM visibility changes)
-        iconEl.textContent = stateConfig.icon;
+        iconEl.innerHTML = stateConfig.icon;
         titleEl.textContent = stateConfig.title;
         retryBtn.textContent = stateConfig.buttonText;
     }
@@ -725,6 +726,7 @@ async function checkAuthenticationStatus() {
 
             if (data.authenticated) {
                 userInfo = data.user;
+                window.userInfo = userInfo;
 
                 // Ensure profile button is visible when auth is enabled
                 const profileBtn = document.getElementById('profile-btn');
@@ -739,6 +741,7 @@ async function checkAuthenticationStatus() {
                 console.log('Not authenticated:', data.reason);
                 // Clear any local state
                 userInfo = null;
+                window.userInfo = null;
                 localStorage.removeItem('authToken'); // Clean up any old localStorage
 
                 // Always show profile button, even if auth disabled
@@ -840,6 +843,7 @@ async function logout() {
 
     // Clear local state
     userInfo = null;
+    window.userInfo = null;
 
     updateProfileOverlayContent(userInfo);
 
@@ -1402,8 +1406,9 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
                         <ul class="sub-sub-list">
                             ${hostVMs.map(vm => {
                                 const meta = getVmStateMeta(vm.state);
+                                const vmId = vm.id || '';
                                 return `
-                                    <li class="vm-item" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
+                                    <li class="vm-item" data-nav-type="vm" data-vm-id="${vmId}" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
                                         <span class="vm-status">${meta.icon}</span>
                                         <span class="vm-name">${vm.name}</span>
                                     </li>
@@ -1425,8 +1430,9 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
         return allVMs.map(vm => {
             const meta = getVmStateMeta(vm.state);
             const hostShort = vm.host.split('.')[0];
+            const vmId = vm.id || '';
             return `
-                <li class="vm-item direct" data-nav-type="vm" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
+                <li class="vm-item direct" data-nav-type="vm" data-vm-id="${vmId}" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
                     <span class="vm-status">${meta.icon}</span>
                     <span class="vm-name">${vm.name}</span>
                     <span class="vm-host">(${hostShort})</span>
@@ -1487,6 +1493,7 @@ function attachNavigationEventListeners() {
                     }
                     viewManager.switchView('host', { hostname: hostname });
                 } else if (navType === 'vm') {
+                    const vmId = navItem.dataset.vmId;
                     const vmName = navItem.dataset.vmName;
                     const vmHost = navItem.dataset.vmHost;
                     const hostGroup = navItem.closest('.nav-group[data-host]');
@@ -1497,7 +1504,7 @@ function attachNavigationEventListeners() {
                     if (parentClusterGroup && !parentClusterGroup.classList.contains('expanded')) {
                         parentClusterGroup.classList.add('expanded');
                     }
-                    viewManager.switchView('vm', { name: vmName, host: vmHost });
+                    viewManager.switchView('vm', { id: vmId, name: vmName, host: vmHost });
                 }
             }
         };
