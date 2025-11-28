@@ -749,8 +749,7 @@ class SettingsOverlay extends BaseOverlay {
 
         // Calculate totals for display
         const totalCompleted = (shortQueue.completed ?? 0) + (ioQueue.completed ?? 0);
-        const totalInflight = (shortQueue.inflight ?? 0) + (ioQueue.inflight ?? 0);
-        const connectionDisplay = `${totalInflight} / ${remote.max_connections ?? 48}`;
+        const connectionDisplay = `${remote.total_connections ?? 0} / ${remote.max_connections ?? 'n/a'}`;
 
         return `
             <div class="diagnostics-grid">
