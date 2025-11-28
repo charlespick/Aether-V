@@ -1660,13 +1660,13 @@ class NotificationsOverlay extends BaseOverlay {
 
     getIcon(type) {
         const icons = {
-            'success': '✅',
-            'error': '❌',
-            'warning': '⚠️',
-            'info': 'ℹ️',
-            'job': '⚙️'
+            'success': icon('check_circle', { size: 20 }),
+            'error': icon('error', { size: 20 }),
+            'warning': icon('warning', { size: 20 }),
+            'info': icon('pending', { size: 20 }),
+            'job': icon('settings', { size: 20 })
         };
-        return icons[type] || 'ℹ️';
+        return icons[type] || icon('pending', { size: 20 });
     }
 
     async fetchNotifications() {

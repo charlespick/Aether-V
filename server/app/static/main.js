@@ -496,19 +496,19 @@ let connectionStatusState = {
 // Configuration for different connection states
 const CONNECTION_STATES = {
     disconnected: {
-        icon: '⚠️',
+        icon: icon('error', { size: 20 }),
         title: 'Disconnected',
         message: 'Connection to server lost, attempting to reconnect...',
         buttonText: 'Reconnect Now'
     },
     reconnecting: {
-        icon: '⚠️',
+        icon: icon('error', { size: 20 }),
         title: 'Disconnected',
         message: 'Trying to reconnect...',
         buttonText: 'Reconnect Now'
     },
     failed: {
-        icon: '❌',
+        icon: icon('error', { size: 20 }),
         title: 'Connection Failed',
         message: 'Failed to reconnect to server after multiple attempts',
         buttonText: 'Refresh Page'

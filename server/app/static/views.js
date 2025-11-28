@@ -1654,9 +1654,9 @@ class VMView extends BaseView {
 
     getActionToastDefaults(type) {
         const defaults = {
-            success: { icon: '✅', title: 'Action accepted' },
-            error: { icon: '⚠️', title: 'Action failed' },
-            info: { icon: 'ℹ️', title: 'Working on it' },
+            success: { icon: icon('check_circle', { size: 20 }), title: 'Action accepted' },
+            error: { icon: icon('error', { size: 20 }), title: 'Action failed' },
+            info: { icon: icon('pending', { size: 20 }), title: 'Working on it' },
         };
 
         return defaults[type] || defaults.info;
@@ -1756,7 +1756,7 @@ class VMView extends BaseView {
                 message.includes('failed') || 
                 message.includes('timeout') ||
                 message.includes('not respond')) {
-                return `${errorMessage}\n\nℹ️ Graceful shutdown requires the guest OS to be responsive and have working Hyper-V Integration Services. If the VM is unresponsive, use "Turn Off" instead.`;
+                return `${errorMessage}\n\nNote: Graceful shutdown requires the guest OS to be responsive and have working Hyper-V Integration Services. If the VM is unresponsive, use "Turn Off" instead.`;
             }
         }
 
@@ -1822,7 +1822,7 @@ class VMView extends BaseView {
         this.setActionFeedback(`Sending ${actionLabel} request...`, 'info', {
             title: `${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} in progress`,
             persist: true,
-            icon: '⏳',
+            icon: icon('hourglass_top', { size: 20 }),
         });
 
         try {
@@ -1889,7 +1889,7 @@ class VMView extends BaseView {
         this.setActionFeedback(`Submitting delete request for ${this.vmData.name}...`, 'info', {
             title: 'Deleting virtual machine',
             persist: true,
-            icon: '⏳',
+            icon: icon('hourglass_top', { size: 20 }),
         });
 
         try {
@@ -2473,7 +2473,7 @@ class VMView extends BaseView {
         this.setActionFeedback(`Deleting ${resourceName}...`, 'info', {
             title: 'Deleting resource',
             persist: true,
-            icon: '⏳',
+            icon: icon('hourglass_top', { size: 20 }),
         });
 
         try {
