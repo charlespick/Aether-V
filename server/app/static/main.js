@@ -561,7 +561,7 @@ function updateConnectionContent(status, data, iconEl, titleEl, messageEl, retry
         connectionStatusState.currentStatus = status;
         
         // Update all content (no DOM visibility changes)
-        iconEl.textContent = stateConfig.icon;
+        iconEl.innerHTML = stateConfig.icon;
         titleEl.textContent = stateConfig.title;
         retryBtn.textContent = stateConfig.buttonText;
     }

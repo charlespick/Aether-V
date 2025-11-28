@@ -1681,7 +1681,7 @@ class VMView extends BaseView {
         toast.classList.add(`vm-action-toast--${type}`);
 
         if (iconEl) {
-            iconEl.textContent = icon;
+            iconEl.innerHTML = icon;
         }
         if (titleEl) {
             titleEl.textContent = title;
