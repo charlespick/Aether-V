@@ -317,40 +317,37 @@ class OSSLicenseResponse(BaseModel):
     summary: OSSLicenseSummary
 
 
-class RemoteTaskPoolMetrics(BaseModel):
-    """Snapshot of a remote task worker pool."""
+class ShortQueueMetrics(BaseModel):
+    """Metrics for the short job queue (rate-limited)."""
 
     queue_depth: int
     inflight: int
-    current_workers: int
-    min_workers: Optional[int] = None
-    max_workers: Optional[int] = None
-    configured_workers: Optional[int] = None
+    completed: int
+
+
+class IOQueueMetrics(BaseModel):
+    """Metrics for the IO job queue (per-host serialized)."""
+
+    queue_depth: int
+    inflight: int
+    completed: int
+    hosts_with_active_io: int
 
 
 class RemoteTaskMetrics(BaseModel):
-    """Aggregated diagnostics for the remote task service."""
+    """Aggregated diagnostics for the remote task service.
+    
+    The service uses static concurrency limits with two queues:
+    - SHORT queue: Rate-limited dispatch for quick operations
+    - IO queue: Per-host serialization for disk/guest-init operations
+    """
 
     started: bool
-    average_duration_seconds: float
-    completed_tasks: int
-    scale_up_backlog_threshold: int
-    scale_up_duration_threshold_seconds: float
-    idle_timeout_seconds: float
-    cpu_percent: float
-    memory_percent: float
-    configured_max_workers: int
-    current_max_workers: int
-    dynamic_ceiling: int
-    dynamic_scale_increment: int
-    resource_scale_interval_seconds: float
-    resource_observation_window_seconds: float
-    resource_cpu_threshold_percent: float
-    resource_memory_threshold_percent: float
-    dynamic_adjustments: int
-    maxed_out_for_seconds: float
-    fast_pool: RemoteTaskPoolMetrics
-    job_pool: RemoteTaskPoolMetrics
+    max_connections: int
+    total_connections: int
+    dispatch_interval_seconds: float
+    short_queue: ShortQueueMetrics
+    io_queue: IOQueueMetrics
 
 
 class JobServiceMetrics(BaseModel):
@@ -359,7 +356,6 @@ class JobServiceMetrics(BaseModel):
     started: bool
     queue_depth: int
     worker_count: int
-    configured_concurrency: int
     pending_jobs: int
     running_jobs: int
     completed_jobs: int
