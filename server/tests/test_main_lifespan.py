@@ -1,6 +1,6 @@
 """Tests for FastAPI lifespan behaviour in main application."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
@@ -72,7 +72,7 @@ def test_startup_short_circuits_when_configuration_invalid(monkeypatch):
 
     monkeypatch.setattr(app_config, "_config_validation_result", None, raising=False)
 
-    config_result = config_validation.ConfigValidationResult(checked_at=datetime.utcnow())
+    config_result = config_validation.ConfigValidationResult(checked_at=datetime.now(timezone.utc))
     config_result.errors.append(config_validation.ConfigIssue(message="auth misconfigured"))
     app_config.set_config_validation_result(config_result)
 
@@ -116,7 +116,7 @@ def test_kerberos_failures_force_misconfigured_mode(monkeypatch):
 
     assert main.settings.has_kerberos_config() is True
 
-    clean_result = config_validation.ConfigValidationResult(checked_at=datetime.utcnow())
+    clean_result = config_validation.ConfigValidationResult(checked_at=datetime.now(timezone.utc))
     app_config.set_config_validation_result(clean_result)
 
     def _provide_clean_result():
@@ -164,7 +164,7 @@ def test_host_deployment_service_stops_during_shutdown(monkeypatch):
 
     monkeypatch.setattr(app_config, "_config_validation_result", None, raising=False)
 
-    clean_result = config_validation.ConfigValidationResult(checked_at=datetime.utcnow())
+    clean_result = config_validation.ConfigValidationResult(checked_at=datetime.now(timezone.utc))
     monkeypatch.setattr(main, "run_config_checks", lambda: clean_result)
 
     # Avoid real external calls during the test

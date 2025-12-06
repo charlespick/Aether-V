@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Set
 
 from .config import (
@@ -61,7 +61,7 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
         if cached is not None:
             return cached
 
-    result = ConfigValidationResult(checked_at=datetime.utcnow())
+    result = ConfigValidationResult(checked_at=datetime.now(timezone.utc))
     provided_fields = settings.model_fields_set
 
     # ENVIRONMENT_NAME should be explicitly provided and non-empty for clarity.

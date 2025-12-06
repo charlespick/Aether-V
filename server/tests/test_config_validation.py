@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -68,7 +68,7 @@ def test_run_config_checks_requires_allow_dev_auth_when_auth_disabled(monkeypatc
 
 def test_run_config_checks_returns_cached_result(monkeypatch):
     cached_result = config_validation.ConfigValidationResult(
-        checked_at=datetime.utcnow()
+        checked_at=datetime.now(timezone.utc)
     )
 
     def fake_get_cached():

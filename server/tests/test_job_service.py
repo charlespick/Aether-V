@@ -2,7 +2,7 @@ import asyncio
 import sys
 import types
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Tuple
 from unittest import IsolatedAsyncioTestCase, skipIf
 from unittest.mock import patch, MagicMock
@@ -53,7 +53,7 @@ class StubNotificationService:
             message=kwargs.get("message", ""),
             level=kwargs.get("level", NotificationLevel.INFO),
             category=NotificationCategory.JOB,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             read=False,
             related_entity=job_id,
             metadata=kwargs.get("metadata", {}),
@@ -146,7 +146,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_id="job-sync-1",
             job_type="create_vm",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             parameters={
                 "definition": {
                     "schema": {"id": "vm-create", "version": 1},
@@ -178,7 +178,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_id="job-stream-1",
             job_type="create_vm",
             status=JobStatus.RUNNING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             parameters={"definition": {"schema": {
                 "id": "vm-create", "version": 1}}},
             output=[],
@@ -224,7 +224,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_id="job-stream-xml",
             job_type="create_vm",
             status=JobStatus.RUNNING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             parameters={"definition": {}},
             output=[],
         )
@@ -280,7 +280,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_id="job-stream-split",
             job_type="create_vm",
             status=JobStatus.RUNNING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             parameters={"definition": {"schema": {
                 "id": "vm-create", "version": 1}}},
             output=[],
@@ -320,7 +320,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_id="job-secret-1",
             job_type="create_vm",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             parameters={
                 "definition": {
                     "schema": {"id": "vm-create", "version": 1},
@@ -370,7 +370,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_id="job-secret-fail",
             job_type="create_vm",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             parameters={
                 "definition": {
                     "schema": {"id": "vm-create", "version": 1},
@@ -423,7 +423,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_id="job-delete-1",
             job_type="delete_vm",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host="hyperv01",
             parameters={"vm_name": "app-server"},
             output=[],
@@ -438,7 +438,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         await self.job_service._update_job(
             job.job_id,
             status=JobStatus.RUNNING,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
         self.assertIn((job.job_id, "app-server", "hyperv01"),
                       self.inventory_stub.deleting)
@@ -446,7 +446,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         await self.job_service._update_job(
             job.job_id,
             status=JobStatus.COMPLETED,
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
         )
         self.assertIn((job.job_id, "app-server", "hyperv01",
                       True), self.inventory_stub.finalised)
@@ -456,7 +456,7 @@ class JobServiceTests(IsolatedAsyncioTestCase):
             job_id="job-delete-2",
             job_type="delete_vm",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host="hyperv02",
             parameters={"vm_name": "db-server"},
             output=[],
@@ -471,13 +471,13 @@ class JobServiceTests(IsolatedAsyncioTestCase):
         await self.job_service._update_job(
             job.job_id,
             status=JobStatus.RUNNING,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
         await self.job_service._update_job(
             job.job_id,
             status=JobStatus.FAILED,
             error="boom",
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
         )
 
         self.assertIn((job.job_id, "db-server", "hyperv02",

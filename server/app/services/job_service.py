@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PureWindowsPath
 from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
@@ -283,7 +283,7 @@ class JobService:
             job_id=job_id,
             job_type="delete_vm",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host=request.hyperv_host,
             parameters=request.model_dump(),
         )
@@ -319,7 +319,7 @@ class JobService:
             job_id=job_id,
             job_type=job_type,
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host=target_host,
             parameters={
                 "definition": payload,
@@ -365,7 +365,7 @@ class JobService:
             job_id=job_id,
             job_type="noop_test",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host=target_host,
             parameters={
                 "resource_spec": resource_spec,
@@ -411,7 +411,7 @@ class JobService:
             job_id=job_id,
             job_type="managed_deployment",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host=target_host,
             parameters={
                 "request": request.model_dump(),
@@ -488,7 +488,7 @@ class JobService:
                 acquired_host = True
 
             await self._update_job(
-                job_id, status=JobStatus.RUNNING, started_at=datetime.utcnow()
+                job_id, status=JobStatus.RUNNING, started_at=datetime.now(timezone.utc)
             )
 
             try:
@@ -526,7 +526,7 @@ class JobService:
                 await self._update_job(
                     job_id,
                     status=JobStatus.FAILED,
-                    completed_at=datetime.utcnow(),
+                    completed_at=datetime.now(timezone.utc),
                     error=str(exc),
                 )
                 return
@@ -534,7 +534,7 @@ class JobService:
             await self._update_job(
                 job_id,
                 status=JobStatus.COMPLETED,
-                completed_at=datetime.utcnow(),
+                completed_at=datetime.now(timezone.utc),
             )
         finally:
             if acquired_host:

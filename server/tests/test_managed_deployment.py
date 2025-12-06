@@ -15,7 +15,7 @@ for validation and the JobRequest/JobResult envelope for host communication.
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.core.pydantic_models import (
     ManagedDeploymentRequest,
@@ -222,7 +222,7 @@ class TestManagedDeploymentExecution:
             job_id="test-job-1",
             job_type="managed_deployment",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host="hyperv-01",
             parameters={"request": request.model_dump()},
         )
@@ -295,7 +295,7 @@ class TestManagedDeploymentExecution:
             job_id="test-job-2",
             job_type="managed_deployment",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host="hyperv-01",
             parameters={"request": request.model_dump()},
         )
@@ -310,7 +310,7 @@ class TestManagedDeploymentExecution:
                 job_type=job_type,
                 schema_id=schema_id,
                 status=JobStatus.PENDING,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
                 parameters=payload,
                 target_host=parent_job.target_host,
                 output=[],
@@ -334,7 +334,7 @@ class TestManagedDeploymentExecution:
                 job_type=job_type,
                 schema_id=f"{job_type.replace('_', '.')}.v1",
                 status=JobStatus.COMPLETED,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
                 parameters={},
                 target_host="hyperv-01",
                 output=output,
@@ -422,7 +422,7 @@ class TestManagedDeploymentExecution:
             job_id="test-validation-job",
             job_type="managed_deployment",
             status=JobStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             target_host="hyperv-01",
             parameters={"request": request.model_dump()},
         )
