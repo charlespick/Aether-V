@@ -136,7 +136,6 @@ async def lifespan(app: FastAPI):
                     hosts=hyperv_hosts,
                     realm=kerberos_realm,
                     clusters=None,  # Will be validated later after inventory refresh
-                    service_principal=settings.winrm_kerberos_principal,
                 )
 
                 # Log and collect validation issues
@@ -277,7 +276,6 @@ async def lifespan(app: FastAPI):
                         hosts=[],  # Already validated SPNs at startup
                         realm=kerberos_realm_for_delegation,
                         clusters=clusters_dict,
-                        service_principal=settings.winrm_kerberos_principal,
                     )
 
                     # Log any delegation issues found

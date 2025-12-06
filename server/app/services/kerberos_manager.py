@@ -666,11 +666,6 @@ def _extract_domain_from_principal(principal: Optional[str]) -> Optional[str]:
     return PrincipalTokenizer.extract_domain_from_principal(principal)
 
 
-def _candidate_domains_for_ldap(realm: Optional[str]) -> List[str]:
-    """Gather potential AD domains (deprecated - use PrincipalTokenizer)."""
-    return PrincipalTokenizer.candidate_domains_for_ldap(realm)
-
-
 def _discover_ldap_server_hosts(realm: Optional[str]) -> List[str]:
     """Discover LDAP hosts by querying AD domain controller SRV records."""
 
@@ -1278,7 +1273,6 @@ def validate_host_kerberos_setup(
     hosts: List[str],
     realm: Optional[str] = None,
     clusters: Optional[Dict[str, List[str]]] = None,
-    service_principal: Optional[str] = None,
 ) -> Dict[str, List[str]]:
     """
     Validate Kerberos setup for configured Hyper-V hosts.
@@ -1293,7 +1287,6 @@ def validate_host_kerberos_setup(
         hosts: List of hostnames to validate
         realm: Kerberos realm (optional, auto-detected from principal if not provided)
         clusters: Optional dict mapping cluster names to list of member hostnames
-        service_principal: Optional WinRM service account principal override
 
     Returns:
         Dictionary with 'errors', 'warnings', 'spn_errors', and 'delegation_errors' lists

@@ -441,40 +441,6 @@ class InventoryService:
         self.last_refresh = now
         logger.info("Dummy data initialized successfully")
 
-    async def _deploy_artifacts_to_hosts(self):
-        """Deploy scripts and ISOs to all configured hosts."""
-        logger.info("Deploying artifacts to Hyper-V hosts")
-
-        host_list = settings.get_hyperv_hosts_list()
-
-        if not host_list:
-            logger.warning("No Hyper-V hosts configured")
-            return
-
-        if not host_deployment_service.is_enabled:
-            logger.warning(
-                "Host deployment service is disabled; skipping artifact deployment to hosts"
-            )
-            return
-
-        container_version = host_deployment_service.get_container_version()
-        logger.info(f"Container version: {container_version}")
-
-        successful, failed = await host_deployment_service.deploy_to_all_hosts(
-            host_list
-        )
-
-        if failed > 0:
-            logger.warning(
-                f"Artifact deployment completed with "
-                f"{failed} failure(s) and {successful} success(es)"
-            )
-        else:
-            logger.info(
-                f"Artifact deployment completed successfully "
-                f"to all {successful} host(s)"
-            )
-
     async def _dummy_refresh_loop(self):
         """Periodically refresh dummy inventory data for development mode."""
         while True:
