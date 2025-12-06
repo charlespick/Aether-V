@@ -57,9 +57,14 @@ class Settings(BaseSettings):
 
     # Hyper-V Host settings
     hyperv_hosts: str = ""  # Comma-separated list of hosts
-    winrm_username: Optional[str] = None
-    winrm_password: Optional[str] = None
-    winrm_transport: str = "ntlm"  # ntlm, basic, or credssp
+    
+    # WinRM Kerberos authentication settings
+    winrm_kerberos_principal: Optional[str] = None  # Service principal (e.g., user@REALM)
+    winrm_keytab_b64: Optional[str] = None  # Base64-encoded keytab file
+    winrm_kerberos_realm: Optional[str] = None  # Optional Kerberos realm override
+    winrm_kerberos_kdc: Optional[str] = None  # Optional KDC server override
+    
+    # WinRM connection settings
     winrm_port: int = 5985
     winrm_operation_timeout: float = 15.0  # seconds to wait for WinRM calls
     winrm_connection_timeout: float = 30.0  # network connect timeout in seconds
@@ -69,24 +74,11 @@ class Settings(BaseSettings):
     # Inventory settings
     inventory_refresh_interval: int = 60  # seconds
 
-    # Job execution settings
-    job_worker_concurrency: int = 6  # Maximum concurrent provisioning jobs
-    job_long_timeout_seconds: float = 900.0  # 15 minutes for provisioning/deletion
-    job_short_timeout_seconds: float = 60.0  # 1 minute for quick power actions
-
-    # Remote task execution settings
-    remote_task_min_concurrency: int = 6
-    remote_task_max_concurrency: int = 24
-    remote_task_scale_up_backlog: int = 2
-    remote_task_idle_seconds: float = 30.0
-    remote_task_scale_up_duration_threshold: float = 30.0
-    remote_task_job_concurrency: int = 6
-    remote_task_dynamic_ceiling: int = 48
-    remote_task_resource_scale_interval_seconds: float = 15.0
-    remote_task_resource_observation_window_seconds: float = 45.0
-    remote_task_resource_cpu_threshold: float = 60.0
-    remote_task_resource_memory_threshold: float = 70.0
-    remote_task_resource_scale_increment: int = 2
+    # Job execution settings - static concurrency limits
+    max_winrm_connections: int = 48  # Global maximum open WinRM connections
+    io_job_timeout_seconds: float = 900.0  # 15 minutes for IO-intensive jobs (disk creation, guest init)
+    short_job_timeout_seconds: float = 60.0  # 1 minute for short jobs (inventory, VM actions, CRUD)
+    short_job_dispatch_interval_seconds: float = 1.0  # Rate limit: one short job per second
 
     # WebSocket settings
     # WebSocket connection timeout in seconds (30 minutes)
@@ -132,6 +124,38 @@ class Settings(BaseSettings):
         if not self.hyperv_hosts:
             return []
         return [h.strip() for h in self.hyperv_hosts.split(",") if h.strip()]
+
+    def get_keytab_bytes(self) -> Optional[bytes]:
+        """Decode base64-encoded keytab data if configured."""
+        if not self.winrm_keytab_b64:
+            return None
+
+        import base64
+        import logging
+
+        try:
+            return base64.b64decode(self.winrm_keytab_b64)
+        except Exception as e:
+            logging.error(
+                f"Failed to decode WINRM_KEYTAB_B64: {type(e).__name__}: {e}"
+            )
+            return None
+
+    def get_kerberos_realm(self) -> Optional[str]:
+        """Return the configured or derived Kerberos realm if available."""
+
+        if self.winrm_kerberos_realm and self.winrm_kerberos_realm.strip():
+            return self.winrm_kerberos_realm.strip()
+
+        principal = (self.winrm_kerberos_principal or "").strip()
+        if "@" in principal:
+            return principal.rsplit("@", 1)[1]
+
+        return None
+
+    def has_kerberos_config(self) -> bool:
+        """Check if Kerberos authentication is configured."""
+        return bool(self.winrm_kerberos_principal and self.winrm_keytab_b64)
 
 
 settings = Settings()

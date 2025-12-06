@@ -130,10 +130,9 @@ class VMControlService:
     ) -> str:
         """Format a PowerShell command for Hyper-V VM control."""
 
-        host_arg = VMControlService._ps_single_quote(hostname)
         vm_arg = VMControlService._ps_single_quote(vm_name)
 
-        parameter_segment = "-ComputerName $hostName -Name $vmName"
+        parameter_segment = "-Name $vmName"
         if extra_parameters:
             parameter_segment = f"{parameter_segment} {extra_parameters.strip()}"
 
@@ -142,7 +141,6 @@ class VMControlService:
             "$ProgressPreference = 'SilentlyContinue'",
             "Import-Module Hyper-V -ErrorAction Stop | Out-Null",
             "",
-            f"$hostName = {host_arg}",
             f"$vmName = {vm_arg}",
             "",
             "try {",

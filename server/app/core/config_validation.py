@@ -1,8 +1,10 @@
 """Configuration validation utilities."""
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Set
 
 from .config import (
@@ -59,7 +61,7 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
         if cached is not None:
             return cached
 
-    result = ConfigValidationResult(checked_at=datetime.utcnow())
+    result = ConfigValidationResult(checked_at=datetime.now(timezone.utc))
     provided_fields = settings.model_fields_set
 
     # ENVIRONMENT_NAME should be explicitly provided and non-empty for clarity.
@@ -170,25 +172,80 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             "Set HYPERV_HOSTS to a comma-separated list so workloads can be managed.",
         )
 
-    # WinRM credentials - warn when missing or partially configured.
-    if settings.winrm_username and not settings.winrm_password:
+    # Check for legacy WinRM configuration (NTLM/Basic/CredSSP) from environment
+    legacy_fields = []
+    if os.getenv("WINRM_USERNAME"):
+        legacy_fields.append("WINRM_USERNAME")
+    if os.getenv("WINRM_PASSWORD"):
+        legacy_fields.append("WINRM_PASSWORD")
+    if os.getenv("WINRM_TRANSPORT"):
+        legacy_fields.append("WINRM_TRANSPORT")
+    
+    if legacy_fields:
+        _error(
+            result,
+            f"Legacy WinRM configuration detected: {', '.join(legacy_fields)}. "
+            "NTLM/Basic/CredSSP authentication is no longer supported.",
+            "Migrate to Kerberos authentication by:\n"
+            "1. Generate a keytab for your service account: ktutil or AD tools\n"
+            "2. Base64 encode it: base64 < service.keytab | tr -d '\\n'\n"
+            "3. Set WINRM_KERBEROS_PRINCIPAL (e.g., svc-aetherv@AD.EXAMPLE.COM)\n"
+            "4. Set WINRM_KEYTAB_B64 to the base64-encoded keytab\n"
+            "5. Remove WINRM_USERNAME, WINRM_PASSWORD, and WINRM_TRANSPORT\n"
+            "6. Configure Resource-Based Constrained Delegation (RBCD) for double-hop\n"
+            "See documentation for detailed migration instructions.",
+        )
+
+    # Kerberos credentials - warn when missing or partially configured.
+    if settings.winrm_kerberos_principal and not settings.winrm_keytab_b64:
         _warn(
             result,
-            "WINRM_USERNAME is set but WINRM_PASSWORD is missing.",
-            "Set WINRM_PASSWORD so hosts can be managed.",
+            "WINRM_KERBEROS_PRINCIPAL is set but WINRM_KEYTAB_B64 is missing.",
+            "Set WINRM_KEYTAB_B64 with base64-encoded keytab so hosts can be managed.",
         )
-    elif settings.winrm_password and not settings.winrm_username:
+    elif settings.winrm_keytab_b64 and not settings.winrm_kerberos_principal:
         _warn(
             result,
-            "WINRM_PASSWORD is set but WINRM_USERNAME is missing.",
-            "Set WINRM_USERNAME so hosts can be managed.",
+            "WINRM_KEYTAB_B64 is set but WINRM_KERBEROS_PRINCIPAL is missing.",
+            "Set WINRM_KERBEROS_PRINCIPAL to the service principal name (e.g., user@REALM).",
         )
-    elif not settings.winrm_username and not settings.winrm_password:
+    elif not settings.winrm_kerberos_principal and not settings.winrm_keytab_b64:
         _warn(
             result,
-            "WINRM credentials are not configured.",
-            "Provide WINRM_USERNAME and WINRM_PASSWORD to manage Hyper-V hosts.",
+            "Kerberos credentials are not configured.",
+            "Provide WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64 to manage Hyper-V hosts.",
         )
+    elif settings.winrm_kerberos_principal and settings.winrm_keytab_b64:
+        # Validate principal format (user@REALM or service/host@REALM)
+        principal = settings.winrm_kerberos_principal
+        # Kerberos principal format: [primary[/instance]]@REALM
+        # Examples: user@REALM, HTTP/server.example.com@REALM, svc-aetherv@AD.EXAMPLE.COM
+        principal_pattern = r'^[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)?@[A-Z0-9._-]+$'
+        if not re.match(principal_pattern, principal):
+            _error(
+                result,
+                f"WINRM_KERBEROS_PRINCIPAL '{principal}' is not in valid Kerberos principal format.",
+                "Use format: user@REALM or service/host@REALM (e.g., svc-aetherv@AD.EXAMPLE.COM or HTTP/server.example.com@REALM). "
+                "Realm must be uppercase.",
+            )
+        else:
+            # Warn if realm is not all uppercase (common mistake)
+            realm = principal.split('@')[-1]
+            if realm != realm.upper():
+                _warn(
+                    result,
+                    f"WINRM_KERBEROS_PRINCIPAL realm '{realm}' is not all uppercase.",
+                    "Kerberos realms should typically be uppercase. If this is intentional, ignore this warning.",
+                )
+        
+        # Validate keytab can be decoded
+        keytab_bytes = settings.get_keytab_bytes()
+        if keytab_bytes is None:
+            _error(
+                result,
+                "WINRM_KEYTAB_B64 is not valid base64-encoded data.",
+                "Ensure the keytab is properly base64-encoded before setting WINRM_KEYTAB_B64.",
+            )
 
     set_config_validation_result(result)
     return result

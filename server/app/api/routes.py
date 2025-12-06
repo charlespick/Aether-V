@@ -1,6 +1,7 @@
 """API route handlers."""
 import asyncio
 import base64
+import copy
 import json
 import logging
 import traceback
@@ -8,25 +9,50 @@ import secrets
 import uuid
 import zlib
 from urllib.parse import urlencode, urlsplit, urlunsplit
-from fastapi import APIRouter, Depends, HTTPException, status, Request, WebSocket, WebSocketDisconnect
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
 from typing import Awaitable, Callable, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from ..core.models import (
     Host,
     VM,
+    VMDisk,
+    VMNetworkAdapter,
     Job,
     VMDeleteRequest,
     InventoryResponse,
     HealthResponse,
     NotificationsResponse,
-    JobSubmission,
     AboutResponse,
     BuildInfo,
     VMState,
     ServiceDiagnosticsResponse,
+    ResourceCreateRequest,
+    DiskCreateRequest,
+    NicCreateRequest,
+    ResourceUpdateRequest,
+    VMInitializationRequest,
+    NoopTestRequest,
+    JobResult,
+    RemoteTaskMetrics,
+    JobServiceMetrics,
+    InventoryServiceMetrics,
+    HostDeploymentMetrics,
+    OSSLicenseResponse,
+    OSSPackage,
+    OSSLicenseSummary,
+    NotificationLevel,
+    NotificationCategory,
+)
+from ..core.pydantic_models import (
+    ManagedDeploymentRequest,
+    VmSpec,
+    DiskSpec,
+    NicSpec,
+    GuestConfigSpec,
 )
 from ..core.auth import (
     Permission,
@@ -43,11 +69,6 @@ from ..core.auth import (
 )
 from ..core.config import settings, get_config_validation_result
 from ..core.build_info import build_metadata
-from ..core.job_schema import (
-    SchemaValidationError,
-    get_job_schema,
-    validate_job_submission,
-)
 from ..services.inventory_service import inventory_service
 from ..services.job_service import job_service
 from ..services.host_deployment_service import host_deployment_service
@@ -88,7 +109,7 @@ def _decode_logout_token(packed_token: Optional[str]) -> Optional[str]:
         return None
 
     if packed_token.startswith(_LOGOUT_TOKEN_PREFIX):
-        payload = packed_token[len(_LOGOUT_TOKEN_PREFIX) :]
+        payload = packed_token[len(_LOGOUT_TOKEN_PREFIX):]
         try:
             compressed = base64.urlsafe_b64decode(payload.encode("ascii"))
             return zlib.decompress(compressed).decode("utf-8")
@@ -97,6 +118,8 @@ def _decode_logout_token(packed_token: Optional[str]) -> Optional[str]:
             return None
 
     return packed_token
+
+
 router = APIRouter()
 
 
@@ -151,21 +174,48 @@ def _normalize_vm_state(state: Optional[object]) -> VMState:
     return VMState.UNKNOWN
 
 
+def _ensure_connected_host(hostname: str) -> None:
+    """Validate that the specified host is connected."""
+
+    host_record = inventory_service.hosts.get(hostname)
+    if not host_record or not host_record.connected:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Host {hostname} is not currently connected",
+        )
+
+
+def _get_vm_or_404(vm_id: str) -> VM:
+    """Return a VM by ID or raise a 404 error."""
+
+    vm = inventory_service.get_vm_by_id(vm_id)
+    if not vm:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"VM with ID {vm_id} not found",
+        )
+    return vm
+
+
+def _find_vm_disk(vm: VM, disk_id: str) -> Optional[VMDisk]:
+    """Locate a disk by ID on a VM."""
+
+    return next((disk for disk in vm.disks if disk.id == disk_id), None)
+
+
+def _find_vm_nic(vm: VM, nic_id: str) -> Optional[VMNetworkAdapter]:
+    """Locate a NIC by ID on a VM."""
+
+    return next((nic for nic in vm.networks if nic.id == nic_id), None)
+
+
 async def _handle_vm_action(
-    action: str, hostname: str, vm_name: str
+    action: str, vm_id: str
 ) -> Dict[str, str]:
     """Execute a lifecycle action for the specified VM."""
 
     rule = VM_ACTION_RULES[action]
-    vm = inventory_service.get_vm(hostname, vm_name)
-
-    if not vm:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "message": f"VM {vm_name} not found on host {hostname}",
-            },
-        )
+    vm = _get_vm_or_404(vm_id)
 
     current_state = _normalize_vm_state(vm.state)
     if current_state not in rule.allowed_states:
@@ -181,7 +231,7 @@ async def _handle_vm_action(
         )
 
     try:
-        await rule.executor(hostname, vm_name)
+        await rule.executor(vm.host, vm.name)
     except VMControlError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -211,6 +261,7 @@ def _current_build_info() -> BuildInfo:
         git_commit=build_metadata.git_commit,
         git_ref=build_metadata.git_ref,
         git_state=build_metadata.git_state,
+        github_repository=build_metadata.github_repository,
         build_time=build_metadata.build_time,
         build_host=build_metadata.build_host,
     )
@@ -266,7 +317,8 @@ def _build_idp_logout_url(
     """Construct an IdP logout URL when single logout is supported."""
 
     context = logout_context or {}
-    endpoint = context.get("end_session_endpoint") or get_end_session_endpoint()
+    endpoint = context.get(
+        "end_session_endpoint") or get_end_session_endpoint()
     if not endpoint:
         return None
 
@@ -300,13 +352,13 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         version=build_metadata.version,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         build=_current_build_info(),
     )
 
 
 @router.get("/readyz", response_model=HealthResponse, tags=["Health"])
-async def readiness_check():
+async def readiness_check(response: Response):
     """Readiness check endpoint."""
 
     # When startup detected configuration errors we still want the
@@ -314,19 +366,21 @@ async def readiness_check():
     # application and the user can see the configuration warning page.
     config_result = get_config_validation_result()
     if config_result and config_result.has_errors:
+        response.status_code = status.HTTP_200_OK
         return HealthResponse(
             status="config_error",
             version=build_metadata.version,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             build=_current_build_info(),
         )
 
     readiness_status = "ready"
 
+    response.status_code = status.HTTP_200_OK
     return HealthResponse(
         status=readiness_status,
         version=build_metadata.version,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         build=_current_build_info(),
     )
 
@@ -347,11 +401,114 @@ async def get_service_diagnostics(
     host_metrics = await host_deployment_service.get_metrics()
 
     return ServiceDiagnosticsResponse(
-        remote_tasks=remote_metrics,
-        jobs=job_metrics,
-        inventory=inventory_metrics,
-        host_deployment=host_metrics,
+        remote_tasks=RemoteTaskMetrics(**remote_metrics),
+        jobs=JobServiceMetrics(**job_metrics),
+        inventory=InventoryServiceMetrics(**inventory_metrics),
+        host_deployment=HostDeploymentMetrics(**host_metrics),
     )
+
+
+@router.post(
+    "/api/v1/admin/redeploy",
+    tags=["Admin"],
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def trigger_redeploy(
+    user: dict = Depends(require_permission(Permission.ADMIN)),
+):
+    """Trigger redeployment of host scripts to all configured hosts.
+
+    This endpoint waits for all running jobs to complete, then triggers
+    a force redeployment of provisioning scripts to all Hyper-V hosts.
+    During redeployment, inventory refresh is paused and VM provisioning
+    operations are unavailable.
+
+    Requires admin role.
+    """
+    # Check if already in progress
+    if host_deployment_service.is_startup_in_progress():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A redeployment is already in progress",
+        )
+
+    # Get configured hosts
+    host_list = settings.get_hyperv_hosts_list()
+    if not host_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Hyper-V hosts are configured",
+        )
+
+    # Check that deployment service is enabled
+    if not host_deployment_service.is_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Host deployment service is disabled because "
+                "AGENT_DOWNLOAD_BASE_URL is not configured"
+            ),
+        )
+
+    # Get running job count
+    running_jobs = await job_service.get_running_jobs_count()
+
+    # Start the redeployment process in the background
+    asyncio.create_task(_execute_redeploy(host_list, running_jobs))
+
+    return {
+        "status": "accepted",
+        "message": (
+            f"Redeployment initiated. Waiting for {running_jobs} running job(s) "
+            "to complete before starting redeployment."
+            if running_jobs > 0
+            else "Redeployment initiated. Starting immediately."
+        ),
+        "running_jobs": running_jobs,
+        "target_hosts": len(host_list),
+    }
+
+
+async def _execute_redeploy(host_list: List[str], running_jobs: int) -> None:
+    """Background task to execute the redeployment process."""
+    try:
+        if running_jobs > 0:
+            logger.info(
+                "Waiting for %d running job(s) to complete before redeploying",
+                running_jobs,
+            )
+            # Wait for running jobs with a reasonable timeout
+            jobs_completed = await job_service.wait_for_running_jobs(
+                timeout=600.0,  # 10 minutes max wait
+                poll_interval=2.0,
+            )
+            if not jobs_completed:
+                logger.warning(
+                    "Not all jobs completed within timeout; proceeding with redeployment anyway"
+                )
+
+        # Stop inventory service to prevent interference during redeployment
+        logger.info("Stopping inventory service for redeployment")
+        await inventory_service.stop()
+
+        try:
+            logger.info("Starting force redeployment to %d host(s)",
+                        len(host_list))
+            await host_deployment_service.force_redeploy_all_hosts(host_list)
+            logger.info("Force redeployment completed successfully")
+        finally:
+            # Always restart inventory service, even if redeployment fails
+            logger.info("Restarting inventory service")
+            await inventory_service.start()
+
+    except Exception as exc:
+        logger.exception("Force redeployment failed: %s", exc)
+        notification_service.create_notification(
+            title="Host Script Redeployment Failed",
+            message=f"Failed to redeploy host scripts: {exc}",
+            level=NotificationLevel.ERROR,
+            category=NotificationCategory.HOST,
+        )
 
 
 @router.get("/api/v1/about", response_model=AboutResponse, tags=["About"])
@@ -363,6 +520,62 @@ async def get_about(user: dict = Depends(require_permission(Permission.READER)))
         description="Hyper-V Virtual Machine Management Platform",
         build=_current_build_info(),
     )
+
+
+@router.get("/api/v1/oss-licenses", response_model=OSSLicenseResponse, tags=["About"])
+async def get_oss_licenses(user: dict = Depends(require_permission(Permission.READER))):
+    """Return OSS license information for third-party packages.
+
+    This endpoint provides license information for all open source packages
+    used by the application, including both Python and JavaScript dependencies.
+    """
+    # Look for the license file in expected locations
+    app_dir = Path(__file__).resolve().parent.parent
+    license_paths = [
+        app_dir.parent / "oss-licenses.json",  # Container: /app/oss-licenses.json
+        # Development: server/oss-licenses.json
+        app_dir.parent.parent / "oss-licenses.json",
+    ]
+
+    license_data = None
+    for path in license_paths:
+        if path.exists():
+            try:
+                license_data = json.loads(path.read_text(encoding="utf-8"))
+                break
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(
+                    "Failed to read OSS licenses from %s: %s", path, e)
+
+    if license_data is None:
+        # Return empty response if no license file is found
+        logger.warning("OSS license file not found in expected locations")
+        return OSSLicenseResponse(
+            packages=[],
+            summary=OSSLicenseSummary(total=0, python=0, javascript=0),
+        )
+
+    # Parse the packages and summary from the file
+    packages = [
+        OSSPackage(
+            name=pkg.get("name", ""),
+            version=pkg.get("version", ""),
+            license=pkg.get("license", "Unknown"),
+            author=pkg.get("author"),
+            url=pkg.get("url"),
+            ecosystem=pkg.get("ecosystem", "unknown"),
+        )
+        for pkg in license_data.get("packages", [])
+    ]
+
+    summary_data = license_data.get("summary", {})
+    summary = OSSLicenseSummary(
+        total=summary_data.get("total", len(packages)),
+        python=summary_data.get("python", 0),
+        javascript=summary_data.get("javascript", 0),
+    )
+
+    return OSSLicenseResponse(packages=packages, summary=summary)
 
 
 @router.get("/api/v1/inventory", response_model=InventoryResponse, tags=["Inventory"])
@@ -398,202 +611,80 @@ async def list_host_vms(hostname: str, user: dict = Depends(require_permission(P
     return inventory_service.get_host_vms(hostname)
 
 
+@router.get("/api/v1/vms/by-id/{vm_id}", response_model=VM, tags=["VMs"])
+async def get_vm_by_id(vm_id: str, user: dict = Depends(require_permission(Permission.READER))):
+    """Get details of a specific VM by its ID."""
+    vm = inventory_service.get_vm_by_id(vm_id)
+
+    if not vm:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"VM with ID {vm_id} not found"
+        )
+
+    return vm
+
+
 @router.get("/api/v1/vms", response_model=List[VM], tags=["VMs"])
 async def list_vms(user: dict = Depends(require_permission(Permission.READER))):
     """List all VMs across all hosts."""
     return inventory_service.get_all_vms()
 
 
-@router.get("/api/v1/vms/{hostname}/{vm_name}", response_model=VM, tags=["VMs"])
-async def get_vm(hostname: str, vm_name: str, user: dict = Depends(require_permission(Permission.READER))):
-    """Get details of a specific VM."""
-    vm = inventory_service.get_vm(hostname, vm_name)
-
-    if not vm:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"VM {vm_name} not found on host {hostname}"
-        )
-
-    return vm
-
-
 @router.post(
-    "/api/v1/vms/{hostname}/{vm_name}/start",
+    "/api/v1/resources/vms/{vm_id}/start",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["VMs"],
+    tags=["Resources"],
 )
 async def start_vm_action(
-    hostname: str,
-    vm_name: str,
+    vm_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Start a powered-off virtual machine."""
 
-    return await _handle_vm_action("start", hostname, vm_name)
+    return await _handle_vm_action("start", vm_id)
 
 
 @router.post(
-    "/api/v1/vms/{hostname}/{vm_name}/shutdown",
+    "/api/v1/resources/vms/{vm_id}/shutdown",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["VMs"],
+    tags=["Resources"],
 )
 async def shutdown_vm_action(
-    hostname: str,
-    vm_name: str,
+    vm_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Shut down a running virtual machine via guest OS request."""
 
-    return await _handle_vm_action("shutdown", hostname, vm_name)
+    return await _handle_vm_action("shutdown", vm_id)
 
 
 @router.post(
-    "/api/v1/vms/{hostname}/{vm_name}/stop",
+    "/api/v1/resources/vms/{vm_id}/stop",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["VMs"],
+    tags=["Resources"],
 )
 async def stop_vm_action(
-    hostname: str,
-    vm_name: str,
+    vm_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Immediately turn off a virtual machine."""
 
-    return await _handle_vm_action("stop", hostname, vm_name)
+    return await _handle_vm_action("stop", vm_id)
 
 
 @router.post(
-    "/api/v1/vms/{hostname}/{vm_name}/reset",
+    "/api/v1/resources/vms/{vm_id}/reset",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["VMs"],
+    tags=["Resources"],
 )
 async def reset_vm_action(
-    hostname: str,
-    vm_name: str,
+    vm_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Reset (power cycle) a running virtual machine."""
 
-    return await _handle_vm_action("reset", hostname, vm_name)
-
-
-@router.get("/api/v1/schema/job-inputs", tags=["Schema"])
-async def get_job_input_schema(user: dict = Depends(require_permission(Permission.READER))):
-    """Return the active job input schema."""
-    return get_job_schema()
-
-
-@router.post("/api/v1/jobs/provision", response_model=Job, tags=["Jobs"])
-async def submit_provisioning_job(
-    submission: JobSubmission,
-    user: dict = Depends(require_permission(Permission.WRITER))
-):
-    """Accept a schema-driven provisioning request."""
-
-    schema = get_job_schema()
-    if submission.schema_version != schema.get("version"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Schema version mismatch",
-                "expected": schema.get("version"),
-                "received": submission.schema_version,
-            },
-        )
-
-    try:
-        validated_values = validate_job_submission(submission.values, schema)
-    except SchemaValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": exc.errors})
-
-    if not host_deployment_service.is_provisioning_available():
-        summary = host_deployment_service.get_startup_summary()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "message": "Provisioning agents are still deploying. VM provisioning is temporarily unavailable.",
-                "agent_deployment": summary,
-            },
-        )
-
-    target_host = (submission.target_host or "").strip()
-    if not target_host:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Target host is required",
-        )
-
-    connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next((host for host in connected_hosts if host.hostname == target_host), None)
-    if not host_match:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host {target_host} is not currently connected",
-        )
-
-    vm_name = validated_values.get("vm_name")
-    if vm_name:
-        existing_vm = inventory_service.get_vm(target_host, vm_name)
-        if existing_vm:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"VM {vm_name} already exists on host {target_host}",
-            )
-
-    schema_id = schema.get("id", "vm-provisioning") if schema else "vm-provisioning"
-    job_definition = {
-        "schema": {
-            "id": schema_id,
-            "version": submission.schema_version,
-        },
-        "fields": validated_values,
-    }
-    job = await job_service.submit_provisioning_job(submission, job_definition, target_host)
-    return job
-
-
-@router.post("/api/v1/vms/delete", response_model=Job, tags=["VMs"])
-async def delete_vm(
-    request: VMDeleteRequest,
-    user: dict = Depends(require_permission(Permission.WRITER)),
-):
-    """Delete a VM."""
-    # Check if VM exists
-    vm = inventory_service.get_vm(request.hyperv_host, request.vm_name)
-    if not vm:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"VM {request.vm_name} not found on host {request.hyperv_host}"
-        )
-
-    if vm.host != request.hyperv_host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"VM {request.vm_name} is tracked on host {vm.host}, not {request.hyperv_host}"
-            ),
-        )
-
-    host_record = inventory_service.hosts.get(request.hyperv_host)
-    if not host_record or not host_record.connected:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Host {request.hyperv_host} is not currently connected",
-        )
-
-    if vm.state != VMState.OFF and not request.force:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Virtual machine must be turned off before deletion. "
-                "Set force=true to override when using the API."
-            ),
-        )
-
-    # Create job
-    job = await job_service.submit_delete_job(request)
-    return job
+    return await _handle_vm_action("reset", vm_id)
 
 
 @router.get("/api/v1/jobs", response_model=List[Job], tags=["Jobs"])
@@ -617,6 +708,868 @@ async def get_job(
         )
 
     return job
+
+
+# New Resource-based API endpoints
+
+@router.get("/api/v1/resources/vms", response_model=List[VM], tags=["Resources"])
+async def list_vm_resources(
+    user: dict = Depends(require_permission(Permission.READER)),
+):
+    """List all VM resources."""
+
+    return inventory_service.get_all_vms()
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}", response_model=VM, tags=["Resources"]
+)
+async def get_vm_resource(
+    vm_id: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """Fetch a VM resource by its ID."""
+
+    return _get_vm_or_404(vm_id)
+
+
+@router.post("/api/v1/resources/vms", response_model=JobResult, tags=["Resources"])
+async def create_vm_resource(
+    request: ResourceCreateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Create a new virtual machine (without disk or NIC)."""
+
+    # Validate using Pydantic instead of schema
+    try:
+        vm_spec = VmSpec(**request.values)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": [str(exc)]}
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. VM creation is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next(
+        (host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    vm_name = vm_spec.vm_name
+    if vm_name:
+        existing_vm = inventory_service.get_vm(target_host, vm_name)
+        if existing_vm:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"VM {vm_name} already exists on host {target_host}",
+            )
+
+    # Use the validated Pydantic model's dict for the job payload
+    job_definition = {
+        "schema": {
+            "id": "vm-create",
+            "version": 1,  # Static version, not schema-based
+        },
+        "fields": vm_spec.model_dump(),
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="create_vm",
+        schema_id="vm-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"VM creation job queued for host {target_host}",
+    )
+
+
+@router.put(
+    "/api/v1/resources/vms/{vm_id}", response_model=JobResult, tags=["Resources"]
+)
+async def update_vm_resource(
+    vm_id: str,
+    request: ResourceUpdateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Update an existing virtual machine."""
+
+    vm = _get_vm_or_404(vm_id)
+
+    # Validate using Pydantic instead of schema
+    try:
+        vm_spec = VmSpec(**request.values)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": [str(exc)]},
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. VM updates are temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    _ensure_connected_host(target_host)
+
+    # Add vm_id to the validated values
+    validated_values = vm_spec.model_dump()
+    validated_values["vm_id"] = vm_id
+
+    job_definition = {
+        "schema": {
+            "id": "vm-create",
+            "version": 1,
+        },
+        "fields": validated_values,
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="update_vm",
+        schema_id="vm-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"VM update job queued for {vm.name}",
+    )
+
+
+@router.delete(
+    "/api/v1/resources/vms/{vm_id}", response_model=JobResult, tags=["Resources"]
+)
+async def delete_vm_resource(
+    vm_id: str,
+    force: bool = False,
+    delete_disks: bool = False,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Delete a VM by ID using the job queue."""
+
+    vm = _get_vm_or_404(vm_id)
+    _ensure_connected_host(vm.host)
+
+    normalized_state = _normalize_vm_state(vm.state)
+    if normalized_state != VMState.OFF and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Virtual machine must be turned off before deletion. "
+                "Set force=true to override when using the API."
+            ),
+        )
+
+    # Validate disk handling
+    if vm.disks and len(vm.disks) > 0 and not delete_disks:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"VM {vm.name} has {len(vm.disks)} disk(s) attached. "
+                "Set delete_disks=true to delete them with the VM, or manually detach them first."
+            ),
+        )
+
+    delete_request = VMDeleteRequest(
+        vm_name=vm.name, hyperv_host=vm.host, force=force, delete_disks=delete_disks
+    )
+    job = await job_service.submit_delete_job(delete_request)
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"VM deletion job queued for {vm.name}",
+    )
+
+
+@router.post("/api/v1/resources/disks", response_model=JobResult, tags=["Resources"])
+async def create_disk_resource(
+    request: DiskCreateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Create and attach a new disk to an existing VM."""
+
+    # Validate using Pydantic instead of schema
+    try:
+        disk_spec = DiskSpec(**request.values)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": [str(exc)]}
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Disk creation is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next(
+        (host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    # Validate that VM exists
+    vm_id = disk_spec.vm_id
+    if not vm_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VM ID is required for disk creation",
+        )
+
+    vm = _get_vm_or_404(vm_id)
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    job_definition = {
+        "schema": {
+            "id": "disk-create",
+            "version": 1,
+        },
+        "fields": disk_spec.model_dump(),
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="create_disk",
+        schema_id="disk-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Disk creation job queued for VM {vm_id}",
+    )
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}/disks",
+    response_model=List[VMDisk],
+    tags=["Resources"],
+)
+async def list_vm_disks(
+    vm_id: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """List disks attached to a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    return vm.disks
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
+    response_model=VMDisk,
+    tags=["Resources"],
+)
+async def get_vm_disk(
+    vm_id: str,
+    disk_id: str,
+    user: dict = Depends(require_permission(Permission.READER)),
+):
+    """Get a specific disk attached to a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    disk = _find_vm_disk(vm, disk_id)
+    if not disk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Disk {disk_id} not found on VM {vm_id}",
+        )
+    return disk
+
+
+@router.put(
+    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def update_disk_resource(
+    vm_id: str,
+    disk_id: str,
+    request: ResourceUpdateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Update an existing disk resource."""
+
+    vm = _get_vm_or_404(vm_id)
+    disk = _find_vm_disk(vm, disk_id)
+    if not disk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Disk {disk_id} not found on VM {vm_id}",
+        )
+
+    if request.resource_id != disk_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resource ID in payload does not match disk in path",
+        )
+
+    # Validate using Pydantic instead of schema
+    try:
+        values_with_vm = {**request.values, "vm_id": vm_id}
+        disk_spec = DiskSpec(**values_with_vm)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": [str(exc)]},
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Disk updates are temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    _ensure_connected_host(target_host)
+
+    validated_values = disk_spec.model_dump()
+    validated_values["resource_id"] = request.resource_id
+
+    job_definition = {
+        "schema": {
+            "id": "disk-create",
+            "version": 1,
+        },
+        "fields": validated_values,
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="update_disk",
+        schema_id="disk-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Disk update job queued for VM {vm_id}",
+    )
+
+
+@router.delete(
+    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def delete_disk_resource(
+    vm_id: str,
+    disk_id: str,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Delete a disk resource from a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    disk = _find_vm_disk(vm, disk_id)
+    if not disk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Disk {disk_id} not found on VM {vm_id}",
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Disk deletion is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    _ensure_connected_host(vm.host)
+
+    job_definition = {
+        "schema": {"id": "disk-delete", "version": 1},
+        "fields": {"vm_id": vm_id, "resource_id": disk_id},
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="delete_disk",
+        schema_id="disk-delete",
+        payload=job_definition,
+        target_host=vm.host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Disk deletion job queued for VM {vm_id}",
+    )
+
+
+@router.post("/api/v1/resources/nics", response_model=JobResult, tags=["Resources"])
+async def create_nic_resource(
+    request: NicCreateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Create and attach a new network adapter to an existing VM."""
+
+    # Validate using Pydantic instead of schema
+    try:
+        nic_spec = NicSpec(**request.values)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": [str(exc)]}
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. NIC creation is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next(
+        (host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    # Validate that VM exists
+    vm_id = nic_spec.vm_id
+    if not vm_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VM ID is required for NIC creation",
+        )
+
+    vm = _get_vm_or_404(vm_id)
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    job_definition = {
+        "schema": {
+            "id": "nic-create",
+            "version": 1,
+        },
+        "fields": nic_spec.model_dump(),
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="create_nic",
+        schema_id="nic-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"NIC creation job queued for VM {vm_id}",
+    )
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}/nics",
+    response_model=List[VMNetworkAdapter],
+    tags=["Resources"],
+)
+async def list_vm_nics(
+    vm_id: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """List NICs attached to a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    return vm.networks
+
+
+@router.get(
+    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
+    response_model=VMNetworkAdapter,
+    tags=["Resources"],
+)
+async def get_vm_nic(
+    vm_id: str,
+    nic_id: str,
+    user: dict = Depends(require_permission(Permission.READER)),
+):
+    """Get a specific NIC attached to a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    nic = _find_vm_nic(vm, nic_id)
+    if not nic:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"NIC {nic_id} not found on VM {vm_id}",
+        )
+    return nic
+
+
+@router.put(
+    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def update_nic_resource(
+    vm_id: str,
+    nic_id: str,
+    request: ResourceUpdateRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Update an existing NIC resource."""
+
+    vm = _get_vm_or_404(vm_id)
+    nic = _find_vm_nic(vm, nic_id)
+    if not nic:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"NIC {nic_id} not found on VM {vm_id}",
+        )
+
+    if request.resource_id != nic_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resource ID in payload does not match NIC in path",
+        )
+
+    # Validate using Pydantic instead of schema
+    try:
+        values_with_vm = {**request.values, "vm_id": vm_id}
+        nic_spec = NicSpec(**values_with_vm)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": [str(exc)]},
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. NIC updates are temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    _ensure_connected_host(target_host)
+
+    validated_values = nic_spec.model_dump()
+    validated_values["resource_id"] = request.resource_id
+
+    job_definition = {
+        "schema": {
+            "id": "nic-create",
+            "version": 1,
+        },
+        "fields": validated_values,
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="update_nic",
+        schema_id="nic-create",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"NIC update job queued for VM {vm_id}",
+    )
+
+
+@router.delete(
+    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def delete_nic_resource(
+    vm_id: str,
+    nic_id: str,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Delete a NIC resource from a VM."""
+
+    vm = _get_vm_or_404(vm_id)
+    nic = _find_vm_nic(vm, nic_id)
+    if not nic:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"NIC {nic_id} not found on VM {vm_id}",
+        )
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. NIC deletion is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    _ensure_connected_host(vm.host)
+
+    job_definition = {
+        "schema": {"id": "nic-delete", "version": 1},
+        "fields": {"vm_id": vm_id, "resource_id": nic_id},
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="delete_nic",
+        schema_id="nic-delete",
+        payload=job_definition,
+        target_host=vm.host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"NIC deletion job queued for VM {vm_id}",
+    )
+
+
+@router.post(
+    "/api/v1/resources/vms/{vm_id}/initialize",
+    response_model=JobResult,
+    tags=["Resources"],
+)
+async def initialize_vm_resource(
+    vm_id: str,
+    request: VMInitializationRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Trigger guest initialization for an existing VM."""
+
+    vm = _get_vm_or_404(vm_id)
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Initialization is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    target_host = request.target_host.strip()
+    if target_host != vm.host:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+        )
+
+    _ensure_connected_host(target_host)
+
+    if not request.guest_configuration:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "guest_configuration is required for initialization and must not be empty"
+            },
+        )
+
+    fields = {"vm_id": vm_id}
+    fields.update(request.guest_configuration)
+    fields["vm_id"] = vm_id
+
+    if not fields.get("vm_name"):
+        fields["vm_name"] = vm.name
+
+    job_definition = {
+        "schema": {
+            "id": "initialize-vm",
+        },
+        "fields": fields,
+    }
+
+    job = await job_service.submit_resource_job(
+        job_type="initialize_vm",
+        schema_id="initialize-vm",
+        payload=job_definition,
+        target_host=target_host,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Initialization job queued for VM {vm_id}",
+    )
+
+
+@router.post("/api/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
+async def create_managed_deployment(
+    request: ManagedDeploymentRequest,
+    user: dict = Depends(require_permission(Permission.WRITER))
+):
+    """Create a complete VM deployment using the Pydantic-based protocol.
+
+    This endpoint orchestrates VM creation, disk attachment, NIC attachment, and guest 
+    configuration using the JobRequest/JobResult protocol with strict Pydantic validation.
+
+    The workflow:
+    1. Validate input with Pydantic (ManagedDeploymentRequest)
+    2. Create VM via vm.create operation
+    3. Create Disk via disk.create operation
+    4. Create NIC via nic.create operation
+    5. Generate guest config dict using generate_guest_config()
+    6. Send guest config through existing KVP mechanism
+
+    This endpoint bypasses schemas entirely. The request is validated by Pydantic
+    and the component operations are executed via the protocol.
+    """
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. VM provisioning is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    # Ensure the target host is connected
+    target_host = request.target_host.strip()
+    if not target_host:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target host is required",
+        )
+
+    connected_hosts = inventory_service.get_connected_hosts()
+    host_match = next(
+        (host for host in connected_hosts if host.hostname == target_host), None)
+    if not host_match:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {target_host} is not currently connected",
+        )
+
+    # Check if VM already exists
+    vm_name = request.vm_spec.vm_name
+    existing_vm = inventory_service.get_vm(target_host, vm_name)
+    if existing_vm:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm_name} already exists on host {target_host}",
+        )
+
+    # Submit the managed deployment job
+    job = await job_service.submit_managed_deployment_job(
+        request=request,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Managed deployment queued for host {target_host}",
+    )
+
+
+@router.post("/api/v1/noop-test", response_model=JobResult, tags=["Testing"])
+async def submit_noop_test(
+    request: NoopTestRequest,
+    user: dict = Depends(require_permission(Permission.WRITER)),
+):
+    """Execute a noop-test operation using the JobRequest/JobResult protocol.
+
+    This endpoint validates the round-trip communication between server and host agent
+    without performing any actual operations. Useful for testing connectivity and
+    protocol compatibility.
+    """
+
+    if not host_deployment_service.is_provisioning_available():
+        summary = host_deployment_service.get_startup_summary()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Provisioning agents are still deploying. Noop-test is temporarily unavailable.",
+                "agent_deployment": summary,
+            },
+        )
+
+    # Ensure the target host is connected
+    _ensure_connected_host(request.target_host)
+
+    # Submit the noop-test job
+    job = await job_service.submit_noop_test_job(
+        target_host=request.target_host,
+        resource_spec=request.resource_spec,
+        correlation_id=request.correlation_id,
+    )
+
+    return JobResult(
+        job_id=job.job_id,
+        status="queued",
+        message=f"Noop-test job queued for host {request.target_host}",
+    )
 
 
 @router.get("/api/v1/notifications", response_model=NotificationsResponse, tags=["Notifications"])
@@ -798,7 +1751,8 @@ async def auth_callback(request: Request):
         if access_token:
             try:
                 user_info = await authenticate_with_token(access_token, client_ip)
-                logger.debug("Access token provided sufficient permissions for session establishment")
+                logger.debug(
+                    "Access token provided sufficient permissions for session establishment")
             except HTTPException as exc:
                 validation_errors.append(f"access_token:{exc.detail}")
                 logger.warning(
@@ -807,7 +1761,8 @@ async def auth_callback(request: Request):
                     exc.detail,
                 )
             except Exception as exc:
-                validation_errors.append(f"access_token_error:{type(exc).__name__}")
+                validation_errors.append(
+                    f"access_token_error:{type(exc).__name__}")
                 logger.error(
                     "Access token validation error during OAuth callback from %s: %s",
                     client_ip,
@@ -816,7 +1771,8 @@ async def auth_callback(request: Request):
 
         if not user_info and id_token:
             try:
-                logger.info("Falling back to ID token validation for OAuth callback")
+                logger.info(
+                    "Falling back to ID token validation for OAuth callback")
                 claims = await validate_oidc_token(id_token)
                 enriched = enrich_identity(claims)
                 if not enriched.get("permissions"):
@@ -833,7 +1789,8 @@ async def auth_callback(request: Request):
                     exc.detail,
                 )
             except Exception as exc:
-                validation_errors.append(f"id_token_error:{type(exc).__name__}")
+                validation_errors.append(
+                    f"id_token_error:{type(exc).__name__}")
                 logger.error(
                     "ID token validation error during OAuth callback from %s: %s",
                     client_ip,
@@ -841,7 +1798,8 @@ async def auth_callback(request: Request):
                 )
 
         if not user_info:
-            detail = "; ".join(validation_errors) if validation_errors else "No tokens available"
+            detail = "; ".join(
+                validation_errors) if validation_errors else "No tokens available"
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Unable to establish session: {detail}",
@@ -948,11 +1906,12 @@ async def get_auth_token(request: Request):
                             "identity_type": user_info.get("identity_type"),
                         }
                     }
-            except Exception as e:
+            except Exception:
                 # Session is invalid, clear it
                 request.session.pop("user_info", None)
                 # Log the stack trace for debugging, but do not return details to the user
-                logger.error("Exception during session validation:\n%s", traceback.format_exc())
+                logger.error(
+                    "Exception during session validation:\n%s", traceback.format_exc())
                 response_data = {"authenticated": False,
                                  "reason": "Session error"}
     # Create response with cache control headers
@@ -977,10 +1936,12 @@ async def logout(request: Request):
 
     idp_logout_url: Optional[str] = None
     if request.method == "POST":
-        idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+        idp_logout_url = _build_idp_logout_url(
+            request, logout_context, post_logout_redirect)
     elif logout_context:
         # Treat GET requests with stored logout context as user-initiated logouts.
-        idp_logout_url = _build_idp_logout_url(request, logout_context, post_logout_redirect)
+        idp_logout_url = _build_idp_logout_url(
+            request, logout_context, post_logout_redirect)
 
     # Clear session data regardless of logout method
     request.session.clear()
@@ -1008,7 +1969,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     client_id = str(uuid.uuid4())
     client_ip = websocket.client.host if websocket.client else "unknown"
-    connection_start = datetime.utcnow()
+    connection_start = datetime.now(timezone.utc)
     MAX_CONNECTION_TIME = settings.websocket_timeout
 
     try:
@@ -1064,7 +2025,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             try:
                 # Check connection time limit
-                connection_age = (datetime.utcnow() -
+                connection_age = (datetime.now(timezone.utc) -
                                   connection_start).total_seconds()
                 if connection_age > MAX_CONNECTION_TIME:
                     logger.info(
@@ -1072,7 +2033,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.close(code=1000, reason="Connection time limit reached")
                     break
 
-                data = await websocket.receive_json()
+                try:
+                    data = await asyncio.wait_for(
+                        websocket.receive_json(), timeout=MAX_CONNECTION_TIME
+                    )
+                except asyncio.TimeoutError:
+                    logger.info(
+                        f"WebSocket idle timeout reached for {client_id} ({username})"
+                    )
+                    await websocket.close(code=1000, reason="Connection idle timeout")
+                    break
                 await websocket_manager.handle_client_message(client_id, data)
             except WebSocketDisconnect:
                 logger.info(f"Client {client_id} ({username}) disconnected")

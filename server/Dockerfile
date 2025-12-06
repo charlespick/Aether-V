@@ -15,10 +15,13 @@ WORKDIR /app
 # Stage 2: Dependencies
 FROM base AS dependencies
 
-# Install system dependencies
+# Install build-time dependencies for Python wheels
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
+    python3-dev \
+    libkrb5-dev \
+    libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -27,6 +30,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 3: Capture build metadata
 FROM base AS build-info
+
+# Accept GITHUB_REPOSITORY as a build argument
+ARG GITHUB_REPOSITORY
 
 WORKDIR /src
 
@@ -41,6 +47,7 @@ RUN set -eux; \
     python - <<'PY'
 import datetime
 import json
+import os
 import socket
 import subprocess
 from pathlib import Path
@@ -80,6 +87,11 @@ if Path(".git").exists():
 else:
     metadata["source_control"] = "absent"
 
+# Capture GitHub repository from CI environment
+github_repo = os.environ.get("GITHUB_REPOSITORY")
+if github_repo:
+    metadata["github_repository"] = f"https://github.com/{github_repo}"
+
 version_file = Path("version")
 metadata["version"] = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "unknown"
 
@@ -90,7 +102,38 @@ output_path = Path("/out/build-info.json")
 output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 PY
 
-# Stage 4: Collect agent artifacts (scripts, ISOs, version)
+# Stage 4: Collect OSS license information
+FROM base AS license-collector
+
+WORKDIR /src
+
+# Install Node.js for license-checker and build dependencies for Python wheels
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    nodejs \
+    npm \
+    gcc \
+    python3-dev \
+    libkrb5-dev \
+    libsasl2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install pip-licenses
+COPY server/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt pip-licenses
+
+# Copy package.json and install npm dependencies for license-checker
+COPY server/package.json server/package-lock.json ./
+RUN npm install --omit=dev && \
+    npm install --save-dev license-checker
+
+# Copy the license collection script and run it
+COPY server/scripts/collect_licenses.py ./scripts/
+RUN mkdir -p /out && \
+    python scripts/collect_licenses.py && \
+    cp oss-licenses.json /out/
+
+# Stage 5: Collect agent artifacts (scripts, ISOs, version)
 FROM base AS agent-artifacts
 
 WORKDIR /src
@@ -103,29 +146,38 @@ COPY ISOs/ ./ISOs/
 RUN set -eux; \
     mkdir -p /artifacts; \
     if [ ! -f ./version ]; then \
-        echo "Missing version file in repository root" >&2; \
-        exit 1; \
+    echo "Missing version file in repository root" >&2; \
+    exit 1; \
     fi; \
     cp ./version /artifacts/version; \
     script_count="$(find ./Powershell -maxdepth 1 -type f -name '*.ps1' | wc -l | tr -d '[:space:]')"; \
     if [ "${script_count}" -eq 0 ]; then \
-        echo "No PowerShell scripts found in Powershell/." >&2; \
-        exit 1; \
+    echo "No PowerShell scripts found in Powershell/." >&2; \
+    exit 1; \
     fi; \
     find ./Powershell -maxdepth 1 -type f -name '*.ps1' -exec cp {} /artifacts/ \;; \
     if [ ! -d ./ISOs ]; then \
-        echo "Missing ISOs directory. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
-        exit 1; \
+    echo "Missing ISOs directory. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
+    exit 1; \
     fi; \
     iso_count="$(find ./ISOs -maxdepth 1 -type f -name '*.iso' | wc -l | tr -d '[:space:]')"; \
     if [ "${iso_count}" -eq 0 ]; then \
-        echo "No ISO artifacts found in ISOs/. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
-        exit 1; \
+    echo "No ISO artifacts found in ISOs/. Run Scripts/Build-ProvisioningISOs.ps1 before building." >&2; \
+    exit 1; \
     fi; \
     find ./ISOs -maxdepth 1 -type f -name '*.iso' -exec cp {} /artifacts/ \;
 
-# Stage 5: Application
+# Stage 6: Application
 FROM base AS application
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    krb5-user \
+    libkrb5-3 \
+    libgssapi-krb5-2 \
+    libk5crypto3 \
+    libcomerr2 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy Python dependencies from previous stage
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
@@ -147,6 +199,9 @@ RUN mkdir -p /app/agent
 # Copy build metadata and the curated agent artifacts (scripts, ISOs, version)
 COPY --from=build-info /out/build-info.json /app/agent/build-info.json
 COPY --from=agent-artifacts /artifacts/ /app/agent/
+
+# Copy OSS license information
+COPY --from=license-collector /out/oss-licenses.json /app/oss-licenses.json
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \

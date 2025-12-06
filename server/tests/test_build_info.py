@@ -24,6 +24,7 @@ def test_refresh_build_metadata_loads_version_and_metadata(tmp_path, monkeypatch
         "git_commit": "abc123",
         "git_ref": "main",
         "git_state": "clean",
+        "github_repository": "https://github.com/testorg/testrepo",
         "build_time": "2024-01-02T03:04:05Z",
         "build_host": "builder-01",
     }
@@ -39,6 +40,7 @@ def test_refresh_build_metadata_loads_version_and_metadata(tmp_path, monkeypatch
     assert metadata.git_commit == "abc123"
     assert metadata.git_ref == "main"
     assert metadata.git_state == "clean"
+    assert metadata.github_repository == "https://github.com/testorg/testrepo"
     assert metadata.build_host == "builder-01"
     assert metadata.build_time == datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     assert metadata.build_time_iso == "2024-01-02T03:04:05Z"

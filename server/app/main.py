@@ -9,8 +9,8 @@ from pathlib import Path
 import secrets
 import uvicorn
 from fastapi import FastAPI, Request, status
-from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -23,15 +23,22 @@ from .core.config import (
     AGENT_HTTP_MOUNT_PATH,
 )
 from .core.build_info import build_metadata
-from .core.config_validation import run_config_checks
+from .core.config_validation import ConfigIssue, run_config_checks
 from .api.routes import router
 from .services.inventory_service import inventory_service
 from .services.host_deployment_service import host_deployment_service
 from .services.job_service import job_service
 from .services.notification_service import notification_service
 from .services.remote_task_service import remote_task_service
+from .services.update_checker_service import update_checker_service
 from .services.websocket_service import websocket_manager
-from .core.job_schema import load_job_schema, get_job_schema, SchemaValidationError
+from .services.kerberos_manager import (
+    initialize_kerberos,
+    cleanup_kerberos,
+    KerberosManagerError,
+    validate_host_kerberos_setup,
+)
+from .core.models import NotificationLevel
 
 # Configure logging
 logging.basicConfig(
@@ -41,7 +48,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-PROJECT_GITHUB_URL = "https://github.com/aether-v/Aether-V"
 API_REFERENCE_URL = "/docs"
 
 
@@ -54,6 +60,7 @@ def _build_metadata_payload() -> dict:
         "git_commit": build_metadata.git_commit,
         "git_ref": build_metadata.git_ref,
         "git_state": build_metadata.git_state,
+        "github_repository": build_metadata.github_repository,
         "build_time": build_metadata.build_time_iso,
         "build_host": build_metadata.build_host,
     }
@@ -67,12 +74,6 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Authentication enabled: {settings.auth_enabled}")
 
-    try:
-        load_job_schema()
-    except SchemaValidationError as exc:
-        logger.error("Failed to load job schema: %s", "; ".join(exc.errors))
-        raise
-
     config_result = run_config_checks()
 
     if config_result.has_errors:
@@ -80,6 +81,9 @@ async def lifespan(app: FastAPI):
             logger.error("Configuration error: %s", issue.message)
             if issue.hint:
                 logger.error("Hint: %s", issue.hint)
+        logger.error(
+            "Configuration errors detected; application will start in a degraded, misconfigured state"
+        )
 
     if config_result.has_warnings:
         for issue in config_result.warnings:
@@ -87,13 +91,117 @@ async def lifespan(app: FastAPI):
             if issue.hint:
                 logger.warning("Hint: %s", issue.hint)
 
+    kerberos_failed = False
+    kerberos_initialized = False
+    kerberos_realm = settings.get_kerberos_realm()
+
+    # Initialize Kerberos if configured
+    if not config_result.has_errors and settings.has_kerberos_config():
+        logger.info("Initializing Kerberos authentication for principal: %s",
+                    settings.winrm_kerberos_principal)
+        try:
+            # has_kerberos_config() ensures these are not None
+            assert settings.winrm_kerberos_principal is not None
+            assert settings.winrm_keytab_b64 is not None
+            initialize_kerberos(
+                principal=settings.winrm_kerberos_principal,
+                keytab_b64=settings.winrm_keytab_b64,
+                realm=kerberos_realm,
+                kdc=settings.winrm_kerberos_kdc,
+            )
+        except KerberosManagerError as exc:
+            kerberos_failed = True
+            logger.error(
+                "Failed to initialize Kerberos authentication: %s", exc)
+            config_result.errors.append(
+                ConfigIssue(
+                    message=f"Kerberos initialization failed: {exc}",
+                    hint="Verify Kerberos principal, keytab, realm, and KDC settings.",
+                )
+            )
+        else:
+            kerberos_initialized = True
+            logger.info("Kerberos authentication initialized successfully")
+
+            # Validate host Kerberos setup (WSMAN SPNs and delegation)
+            # We need to get cluster information for delegation checking
+            hyperv_hosts = settings.get_hyperv_hosts_list()
+            if hyperv_hosts:
+                logger.info(
+                    "Validating Kerberos setup for %d configured host(s)", len(hyperv_hosts))
+
+                # Import inventory service to get cluster information after it's started
+                # For now, do initial validation without cluster info (will re-validate later)
+                validation_result = validate_host_kerberos_setup(
+                    hosts=hyperv_hosts,
+                    realm=kerberos_realm,
+                    clusters=None,  # Will be validated later after inventory refresh
+                )
+
+                # Log and collect validation issues
+                for warning in validation_result.get("warnings", []):
+                    logger.warning("Kerberos host validation: %s", warning)
+
+                # Add errors with specific hints based on error type
+                if validation_result.get("errors"):
+                    # Handle SPN errors
+                    for error in validation_result.get("spn_errors", []):
+                        logger.warning("Kerberos SPN validation: %s", error)
+                        config_result.warnings.append(
+                            ConfigIssue(
+                                message=error,
+                                hint="Ensure WSMAN SPNs are registered in Active Directory for all Hyper-V hosts. "
+                                     "Use 'setspn -S WSMAN/<hostname> <hostname>' on a domain controller. "
+                                     "WinRM operations will fail until WSMAN SPNs are registered.",
+                            )
+                        )
+
+                    # Handle delegation errors
+                    for error in validation_result.get("delegation_errors", []):
+                        logger.warning(
+                            "Kerberos delegation validation: %s", error)
+                        config_result.warnings.append(
+                            ConfigIssue(
+                                message=error,
+                                hint=(
+                                    "Ensure the cluster CNO grants RBCD to the Hyper-V host computer accounts and that hosts "
+                                    "are not configured for legacy/unconstrained delegation. "
+                                    "Example: Set-ADComputer <ClusterName> -PrincipalsAllowedToDelegateToAccount @((Get-ADComputer "
+                                    "<hyperv01>),(Get-ADComputer <hyperv02>))."
+                                ),
+                            )
+                        )
+
+                    logger.warning(
+                        "Kerberos validation found %d issue(s) (%d SPN, %d delegation); application will start in degraded mode",
+                        len(validation_result["errors"]),
+                        len(validation_result.get("spn_errors", [])),
+                        len(validation_result.get("delegation_errors", []))
+                    )
+                else:
+                    logger.info(
+                        "Kerberos host validation completed successfully")
+    elif settings.has_kerberos_config():
+        logger.error(
+            "Skipping Kerberos initialization because configuration errors were detected"
+        )
+    else:
+        logger.warning(
+            "Kerberos credentials not configured; WinRM operations will fail")
+
     remote_started = False
     notifications_started = False
+    update_checker_started = False
     job_started = False
     inventory_started = False
 
-    await remote_task_service.start()
-    remote_started = True
+    if not kerberos_failed and not config_result.has_errors:
+        await remote_task_service.start()
+        remote_started = True
+    else:
+        logger.error(
+            "Skipping remote task service startup because Kerberos authentication is unavailable or configuration is invalid"
+        )
 
     await notification_service.start()
     notifications_started = True
@@ -103,24 +211,32 @@ async def lifespan(app: FastAPI):
 
     notification_service.publish_startup_configuration_result(config_result)
 
-    await host_deployment_service.start_startup_deployment(
-        settings.get_hyperv_hosts_list()
-    )
+    # Start update checker service (checks GitHub for new releases)
+    await update_checker_service.start()
+    update_checker_started = True
 
-    async def _log_startup_deployment_summary() -> None:
-        try:
-            await host_deployment_service.wait_for_startup()
-            deployment_summary = host_deployment_service.get_startup_summary()
-            logger.info(
-                "Startup agent deployment finished with status=%s (success=%d failed=%d)",
-                deployment_summary.get("status"),
-                deployment_summary.get("successful_hosts", 0),
-                deployment_summary.get("failed_hosts", 0),
-            )
-        except Exception:  # pragma: no cover - defensive logging
-            logger.exception("Failed to record startup deployment summary")
+    if not kerberos_failed and not config_result.has_errors:
+        await host_deployment_service.start_startup_deployment(
+            settings.get_hyperv_hosts_list()
+        )
 
-    asyncio.create_task(_log_startup_deployment_summary())
+        async def _log_startup_deployment_summary() -> None:
+            try:
+                await host_deployment_service.wait_for_startup()
+                deployment_summary = host_deployment_service.get_startup_summary()
+                logger.info(
+                    "Startup agent deployment finished with status=%s (success=%d failed=%d)",
+                    deployment_summary.get("status"),
+                    deployment_summary.get("successful_hosts", 0),
+                    deployment_summary.get("failed_hosts", 0),
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to record startup deployment summary")
+
+        asyncio.create_task(_log_startup_deployment_summary())
+    else:
+        logger.error(
+            "Skipping host deployment startup because Kerberos authentication is unavailable")
 
     if not config_result.has_errors:
         await inventory_service.start()
@@ -130,6 +246,92 @@ async def lifespan(app: FastAPI):
         logger.info(
             "Application services initialised; inventory refresh will continue in the background"
         )
+
+        # Schedule delegation validation after initial inventory refresh
+        # This allows us to check RBCD on discovered cluster objects
+        kerberos_realm_for_delegation = kerberos_realm
+
+        async def _validate_delegation_after_inventory() -> None:
+            try:
+                # Wait for initial inventory refresh to complete
+                await inventory_service.wait_for_initial_refresh()
+
+                # Get cluster information from inventory
+                clusters_dict = {}
+                for cluster in inventory_service.clusters.values():
+                    if cluster.name != "Default":  # Skip non-clustered hosts
+                        clusters_dict[cluster.name] = cluster.hosts
+
+                if clusters_dict and settings.has_kerberos_config():
+                    cluster_host_set = {
+                        host
+                        for hosts in clusters_dict.values()
+                        for host in (hosts or [])
+                    }
+                    logger.info(
+                        "Running delegation validation for %d discovered host(s)",
+                        len(cluster_host_set),
+                    )
+                    delegation_validation = validate_host_kerberos_setup(
+                        hosts=[],  # Already validated SPNs at startup
+                        realm=kerberos_realm_for_delegation,
+                        clusters=clusters_dict,
+                    )
+
+                    # Log any delegation issues found
+                    for error in delegation_validation.get("delegation_errors", []):
+                        logger.warning(
+                            "Kerberos delegation validation: %s", error)
+
+                    for warning in delegation_validation.get("warnings", []):
+                        logger.warning(
+                            "Kerberos delegation validation: %s", warning)
+
+                    if delegation_validation.get("delegation_errors") or delegation_validation.get("warnings"):
+                        issues = []
+                        for error in delegation_validation.get("delegation_errors", []):
+                            issues.append(f"Error: {error}")
+                        for warning in delegation_validation.get("warnings", []):
+                            issues.append(f"Warning: {warning}")
+
+                        level = (
+                            NotificationLevel.ERROR
+                            if delegation_validation.get("delegation_errors")
+                            else NotificationLevel.WARNING
+                        )
+                        title = (
+                            "Kerberos delegation errors detected"
+                            if level is NotificationLevel.ERROR
+                            else "Kerberos delegation warnings"
+                        )
+
+                        notification_service.upsert_system_notification(
+                            "kerberos-delegation-validation",
+                            title=title,
+                            message="\n".join(issues),
+                            level=level,
+                            metadata={
+                                "clusters_checked": len(clusters_dict),
+                                "hosts_checked": len(cluster_host_set),
+                                "errors": len(delegation_validation.get("delegation_errors", [])),
+                                "warnings": len(delegation_validation.get("warnings", [])),
+                            },
+                        )
+                    else:
+                        logger.info(
+                            "Kerberos delegation validation completed successfully")
+                        notification_service.clear_system_notification(
+                            "kerberos-delegation-validation"
+                        )
+                else:
+                    notification_service.clear_system_notification(
+                        "kerberos-delegation-validation"
+                    )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to validate cluster delegation")
+
+        asyncio.create_task(_validate_delegation_after_inventory())
+
     else:
         logger.error(
             "Skipping job and inventory service startup because configuration errors were detected."
@@ -140,6 +342,9 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("Shutting down application")
+        await host_deployment_service.stop()
+        if update_checker_started:
+            await update_checker_service.stop()
         if inventory_started:
             await inventory_service.stop()
         if job_started:
@@ -148,6 +353,12 @@ async def lifespan(app: FastAPI):
             await notification_service.stop()
         if remote_started:
             await remote_task_service.stop()
+
+        # Clean up Kerberos resources
+        if kerberos_initialized:
+            logger.info("Cleaning up Kerberos resources")
+            cleanup_kerberos()
+
         logger.info("Application stopped")
 
 
@@ -201,6 +412,27 @@ else:  # pragma: no cover - filesystem dependent
     )
 
 # Add security headers and audit logging middleware
+
+
+@app.middleware("http")
+async def misconfiguration_guard(request: Request, call_next):
+    """Short-circuit API calls when startup configuration errors exist."""
+
+    config_result = get_config_validation_result()
+    if config_result and config_result.has_errors:
+        path = request.url.path
+        if path.startswith("/api") or path.startswith("/ws"):
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "detail": (
+                        "Application configuration is invalid. Resolve startup errors "
+                        "and restart the server."
+                    )
+                },
+            )
+
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -322,11 +554,13 @@ app.add_middleware(
 app.include_router(router)
 
 # Custom Swagger UI endpoint using local assets to avoid CSP issues
+
+
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
     """Serve Swagger UI with local assets instead of CDN."""
     return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
+        openapi_url=app.openapi_url or "/openapi.json",
         title=f"{app.title} - API Documentation",
         swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
         swagger_css_url="/static/swagger-ui/swagger-ui.css",
@@ -372,10 +606,13 @@ async def root(request: Request):
 
             # Check authentication status to determine which view to render
             session_user = request.session.get("user_info")
-            is_authenticated = bool(session_user and session_user.get("authenticated"))
+            is_authenticated = bool(
+                session_user and session_user.get("authenticated"))
 
             if not is_authenticated:
-                logger.info("Unauthenticated request for UI; rendering login page")
+                logger.info(
+                    "Unauthenticated request for UI; rendering login page")
+
                 response = templates.TemplateResponse(
                     "login.html",
                     {
@@ -385,13 +622,13 @@ async def root(request: Request):
                         "app_name": settings.app_name,
                         "build_metadata": build_metadata,
                         "build_metadata_payload": _build_metadata_payload(),
-                        "github_url": PROJECT_GITHUB_URL,
                         "api_reference_url": API_REFERENCE_URL,
                     },
                     status_code=status.HTTP_200_OK,
                 )
             else:
-                username = session_user.get("preferred_username", "unknown")
+                username = session_user.get(
+                    "preferred_username", "unknown") if session_user else "unknown"
                 logger.info(f"Authenticated request from user: {username}")
 
                 response = templates.TemplateResponse(
@@ -404,7 +641,6 @@ async def root(request: Request):
                         "websocket_refresh_time": settings.websocket_refresh_time * 1000,
                         # Convert to milliseconds
                         "websocket_ping_interval": settings.websocket_ping_interval * 1000,
-                        "job_schema": get_job_schema(),
                         "agent_deployment": host_deployment_service.get_startup_summary(),
                         "build_metadata": build_metadata,
                         "build_metadata_payload": _build_metadata_payload(),
@@ -442,10 +678,10 @@ async def host_page(hostname: str, request: Request):
     return await root(request)
 
 
-@app.get("/virtual-machine/{vm_name}", response_class=HTMLResponse, tags=["UI"])
-async def vm_page(vm_name: str, request: Request):
+@app.get("/virtual-machine/{vm_id}", response_class=HTMLResponse, tags=["UI"])
+async def vm_page(vm_id: str, request: Request):
     """Serve the main UI for VM-specific routes."""
-    del vm_name  # Path parameter is used for routing only
+    del vm_id  # Path parameter is used for routing only
     return await root(request)
 
 

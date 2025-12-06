@@ -3,7 +3,10 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.testclient import TestClient
+
+# Kerberos is disabled via environment variables in conftest.py
 
 from app.api import routes
 from app.core.models import BuildInfo, VMState
@@ -41,6 +44,7 @@ def test_current_build_info_returns_model(monkeypatch):
         git_commit="abc",
         git_ref="main",
         git_state="clean",
+        github_repository="https://github.com/test/repo",
         build_time=datetime(2024, 1, 2),
         build_host="builder",
     )
@@ -60,6 +64,7 @@ async def test_health_check_includes_build_metadata(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )
@@ -80,6 +85,7 @@ async def test_readiness_check_reflects_config_errors(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )
@@ -90,7 +96,10 @@ async def test_readiness_check_reflects_config_errors(monkeypatch):
 
     monkeypatch.setattr(routes, "get_config_validation_result", lambda: DummyResult())
 
-    response = await routes.readiness_check()
+    api_response = Response()
+
+    response = await routes.readiness_check(api_response)
+    assert api_response.status_code == status.HTTP_200_OK
     assert response.status == "config_error"
 
 
@@ -102,18 +111,57 @@ async def test_readiness_check_without_errors_reports_ready(monkeypatch):
         git_commit=None,
         git_ref=None,
         git_state=None,
+        github_repository=None,
         build_time=None,
         build_host=None,
     )
     monkeypatch.setattr(routes, "build_metadata", fake_metadata)
     monkeypatch.setattr(routes, "get_config_validation_result", lambda: None)
 
-    response = await routes.readiness_check()
+    api_response = Response()
+
+    response = await routes.readiness_check(api_response)
+    assert api_response.status_code == status.HTTP_200_OK
     assert response.status == "ready"
+
+
+def test_vm_lookup_by_id_route_uses_global_search(monkeypatch):
+    app = FastAPI()
+    app.include_router(routes.router)
+
+    dummy_vm = routes.VM(
+        id="abc",
+        name="vm-one",
+        host="host01",
+        state=routes.VMState.RUNNING,
+    )
+
+    by_id_calls: list[str] = []
+
+    def fake_get_vm_by_id(vm_id: str):
+        by_id_calls.append(vm_id)
+        return dummy_vm
+
+    def fail_get_vm(hostname: str, vm_name: str):  # pragma: no cover - regression guard
+        raise AssertionError("Host-scoped VM lookup should not be used for by-id route")
+
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", fake_get_vm_by_id)
+    monkeypatch.setattr(routes.inventory_service, "get_vm", fail_get_vm)
+    monkeypatch.setattr(routes.settings, "auth_enabled", False, raising=False)
+    monkeypatch.setattr(routes.settings, "allow_dev_auth", True, raising=False)
+
+    client = TestClient(app)
+    response = client.get("/api/v1/vms/by-id/abc")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["id"] == "abc"
+    assert by_id_calls == ["abc"]
 
 
 @pytest.mark.anyio("asyncio")
 async def test_handle_vm_action_success(monkeypatch):
+    vm_id = "12345678-1234-1234-1234-123456789abc"
     hostname = "host01"
     vm_name = "vm01"
 
@@ -130,7 +178,9 @@ async def test_handle_vm_action_success(monkeypatch):
         success_message="Start command accepted for VM {vm_name}.",
     )
     monkeypatch.setitem(routes.VM_ACTION_RULES, "start", rule)
-    monkeypatch.setattr(routes.inventory_service, "get_vm", lambda h, v: DummyVM(vm_name, VMState.OFF))
+    
+    dummy_vm = SimpleNamespace(id=vm_id, name=vm_name, host=hostname, state=VMState.OFF)
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", lambda vid: dummy_vm)
 
     async def fake_refresh():
         fake_refresh.invoked = True
@@ -146,7 +196,7 @@ async def test_handle_vm_action_success(monkeypatch):
 
     monkeypatch.setattr(routes.asyncio, "create_task", fake_create_task)
 
-    result = await routes._handle_vm_action("start", hostname, vm_name)
+    result = await routes._handle_vm_action("start", vm_id)
 
     assert result["status"] == "accepted"
     assert result["action"] == "start"
@@ -173,10 +223,10 @@ async def test_handle_vm_action_vm_not_found(monkeypatch):
             success_message="",
         ),
     )
-    monkeypatch.setattr(routes.inventory_service, "get_vm", lambda h, v: None)
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", lambda vid: None)
 
     with pytest.raises(HTTPException) as exc:
-        await routes._handle_vm_action("start", "host", "vm")
+        await routes._handle_vm_action("start", "invalid-vm-id")
 
     assert exc.value.status_code == status.HTTP_404_NOT_FOUND
 
@@ -196,10 +246,11 @@ async def test_handle_vm_action_rejects_disallowed_state(monkeypatch):
             success_message="",
         ),
     )
-    monkeypatch.setattr(routes.inventory_service, "get_vm", lambda h, v: DummyVM("vm", VMState.RUNNING))
+    dummy_vm = SimpleNamespace(id="vm-id", name="vm", host="host", state=VMState.RUNNING)
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", lambda vid: dummy_vm)
 
     with pytest.raises(HTTPException) as exc:
-        await routes._handle_vm_action("start", "host", "vm")
+        await routes._handle_vm_action("start", "vm-id")
 
     assert exc.value.status_code == status.HTTP_409_CONFLICT
     assert exc.value.detail["vm_state"] == VMState.RUNNING.value
@@ -220,10 +271,11 @@ async def test_handle_vm_action_wraps_vm_control_error(monkeypatch):
             success_message="",
         ),
     )
-    monkeypatch.setattr(routes.inventory_service, "get_vm", lambda h, v: DummyVM("vm", VMState.OFF))
+    dummy_vm = SimpleNamespace(id="vm-id", name="vm", host="host", state=VMState.OFF)
+    monkeypatch.setattr(routes.inventory_service, "get_vm_by_id", lambda vid: dummy_vm)
 
     with pytest.raises(HTTPException) as exc:
-        await routes._handle_vm_action("start", "host", "vm")
+        await routes._handle_vm_action("start", "vm-id")
 
     assert exc.value.status_code == status.HTTP_502_BAD_GATEWAY
     assert "Failed to start VM" in exc.value.detail["message"]
@@ -319,3 +371,81 @@ async def test_logout_get_handles_post_logout_callback(monkeypatch):
 
     assert isinstance(response, routes.RedirectResponse)
     assert response.headers["location"] == "http://example.com/"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_trigger_redeploy_success(monkeypatch):
+    """Test that the redeploy endpoint accepts a valid request."""
+    from app.api.routes import trigger_redeploy
+
+    # Mock a user with admin permissions
+    user = {"sub": "admin1", "permissions": ["admin"]}
+    
+    # Mock the service state
+    monkeypatch.setattr(routes.host_deployment_service, "is_startup_in_progress", lambda: False)
+    monkeypatch.setattr(routes.host_deployment_service, "_deployment_enabled", True, raising=False)
+    monkeypatch.setattr(routes.settings, "hyperv_hosts", "host1,host2")
+    
+    # Mock job service to report no running jobs
+    async def mock_get_running_jobs_count():
+        return 0
+    monkeypatch.setattr(routes.job_service, "get_running_jobs_count", mock_get_running_jobs_count)
+
+    result = await trigger_redeploy(user)
+    assert result["status"] == "accepted"
+    assert result["target_hosts"] == 2
+
+
+@pytest.mark.anyio("asyncio")
+async def test_trigger_redeploy_rejects_when_already_in_progress(monkeypatch):
+    """Test that redeploy returns 409 when a deployment is already running."""
+    from app.api.routes import trigger_redeploy
+    from fastapi import HTTPException
+
+    user = {"sub": "admin1", "permissions": ["admin"]}
+    
+    # Mock deployment in progress
+    monkeypatch.setattr(routes.host_deployment_service, "is_startup_in_progress", lambda: True)
+
+    with pytest.raises(HTTPException) as exc:
+        await trigger_redeploy(user)
+    
+    assert exc.value.status_code == 409
+    assert "already in progress" in exc.value.detail
+
+
+@pytest.mark.anyio("asyncio")
+async def test_trigger_redeploy_rejects_when_no_hosts_configured(monkeypatch):
+    """Test that redeploy returns 400 when no hosts are configured."""
+    from app.api.routes import trigger_redeploy
+    from fastapi import HTTPException
+
+    user = {"sub": "admin1", "permissions": ["admin"]}
+    
+    monkeypatch.setattr(routes.host_deployment_service, "is_startup_in_progress", lambda: False)
+    monkeypatch.setattr(routes.settings, "hyperv_hosts", "")
+
+    with pytest.raises(HTTPException) as exc:
+        await trigger_redeploy(user)
+    
+    assert exc.value.status_code == 400
+    assert "No Hyper-V hosts" in exc.value.detail
+
+
+@pytest.mark.anyio("asyncio")
+async def test_trigger_redeploy_rejects_when_service_disabled(monkeypatch):
+    """Test that redeploy returns 503 when deployment service is disabled."""
+    from app.api.routes import trigger_redeploy
+    from fastapi import HTTPException
+
+    user = {"sub": "admin1", "permissions": ["admin"]}
+    
+    monkeypatch.setattr(routes.host_deployment_service, "is_startup_in_progress", lambda: False)
+    monkeypatch.setattr(routes.settings, "hyperv_hosts", "host1")
+    monkeypatch.setattr(routes.host_deployment_service, "_deployment_enabled", False, raising=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await trigger_redeploy(user)
+    
+    assert exc.value.status_code == 503
+    assert "disabled" in exc.value.detail

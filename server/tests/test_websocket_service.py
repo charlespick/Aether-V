@@ -2,6 +2,8 @@ import asyncio
 
 import pytest
 
+# Kerberos is disabled via environment variables in conftest.py
+
 from app.services.websocket_service import ConnectionManager
 
 

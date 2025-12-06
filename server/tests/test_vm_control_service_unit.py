@@ -1,5 +1,7 @@
 import pytest
 
+# Kerberos is disabled via environment variables in conftest.py
+
 from app.services import vm_control_service as vm_module
 
 

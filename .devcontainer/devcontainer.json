@@ -15,19 +15,21 @@
 	"customizations": {
 		"vscode": {
 			"settings": {
-				"python.defaultInterpreterPath": "/usr/local/bin/python",
+				"python.defaultInterpreterPath": "/workspaces/Aether-V/.venv/bin/python",
 				"python.linting.enabled": true,
 				"python.linting.pylintEnabled": false,
 				"python.linting.flake8Enabled": true,
 				"python.formatting.provider": "black",
-				"python.formatting.blackPath": "/usr/local/py-utils/bin/black",
-				"python.linting.flake8Path": "/usr/local/py-utils/bin/flake8",
+				"python.formatting.blackPath": "/workspaces/Aether-V/.venv/bin/black",
+				"python.linting.flake8Path": "/workspaces/Aether-V/.venv/bin/flake8",
 				"python.testing.pytestEnabled": true,
+				"python.testing.pytestPath": "/workspaces/Aether-V/.venv/bin/pytest",
 				"editor.formatOnSave": true,
 				"files.exclude": {
 					"**/__pycache__": true,
 					"**/*.pyc": true,
 					"**/venv": true,
+					"**/.venv": true,
 					"**/.pytest_cache": true
 				}
 			},
@@ -62,6 +64,10 @@
 			"helm": "latest",
 			"minikube": "none"
 		},
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "lts",
+			"nodeGypDependencies": true
+		},
 		"ghcr.io/devcontainers/features/powershell:1": {
 			"version": "latest"
 		},
@@ -74,15 +80,16 @@
 	// Use 'onCreateCommand' to run commands when creating the container
 	"onCreateCommand": {
 		"install-iso-tools": "sudo apt-get update && sudo apt-get install -y xorriso genisoimage mkisofs",
-		"install-dev-deps": "pip install --user flake8 black pytest pytest-asyncio httpx",
+		"install-kerberos-deps": "sudo apt-get install -y krb5-user libkrb5-dev libsasl2-dev",
+		"create-venv": "python -m venv /workspaces/Aether-V/.venv",
+		"install-app-deps": "/workspaces/Aether-V/.venv/bin/pip install -r /workspaces/Aether-V/server/requirements.txt",
+		"install-dev-deps": "/workspaces/Aether-V/.venv/bin/pip install flake8 black pytest pytest-asyncio pytest-cov httpx",
 		"create-artifacts-dirs": "mkdir -p /workspaces/Aether-V/server/artifacts/{isos,scripts}",
 		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V"
 	},
 	
 	// Use 'postCreateCommand' to run commands after the container is created
 	"postCreateCommand": {
-		"build-isos": "cd /workspaces/Aether-V && pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs || echo 'ISO build failed - continuing without ISOs'",
-		"build-docker-image": "cd /workspaces/Aether-V && docker build -f server/Dockerfile -t aetherv .",
 		"setup-git-safe": "git config --global --add safe.directory /workspaces/Aether-V",
 		"create-env": "cd /workspaces/Aether-V/server && [ ! -f .env ] && cp .env.example .env || echo '.env already exists'"
 	},

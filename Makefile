@@ -7,7 +7,7 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make dev           - Start development server with hot reload"
-	@echo "  make test          - Run tests (when implemented)"
+	@echo "  make test          - Run full test suite (pytest, mypy, npm, pester, round-trip)"
 	@echo "  make all           - Build everything (ISOs + container)"
 	@echo ""
 	@echo "Build & Deploy:"
@@ -39,8 +39,45 @@ run:
 	docker run -p 8000:8000 --env-file server/.env aetherv:latest
 
 test:
-	@echo "Tests not yet implemented"
-# pytest server/tests/
+	@echo "Running full test suite..."
+	@echo ""
+	@echo "=== Python Tests ==="
+	@cd server && (\
+		if [ -f ../.venv/bin/pytest ]; then \
+			echo "Running pytest..." && ../.venv/bin/pytest tests/; \
+		else \
+			echo "Running pytest..." && pytest tests/; \
+		fi \
+	)
+	@echo ""
+	@echo "=== Python Type Checking ==="
+	@cd server && (\
+		if [ -f ../.venv/bin/mypy ]; then \
+			echo "Running mypy type checker..." && ../.venv/bin/mypy .; \
+		else \
+			echo "Running mypy type checker..." && mypy .; \
+		fi \
+	)
+	@echo ""
+	@echo "=== JavaScript Tests ==="
+	@echo "Running Node.js tests..."
+	@node --test 'tests/js/*.test.js'
+	@echo ""
+	@echo "=== PowerShell Tests ==="
+	@echo "Running Pester tests..."
+	@$(POWERSHELL) -NoProfile -Command "Invoke-Pester -Path Powershell/tests -CI"
+	@echo ""
+	@echo "=== Round-trip Tests ==="
+	@echo "Running protocol round-trip tests..."
+	@cd server && (\
+		if [ -f ../.venv/bin/pytest ]; then \
+			PYTHONPATH=$$(pwd) ../.venv/bin/pytest tests/test_resource_operations.py tests/test_noop_operations.py -v; \
+		else \
+			PYTHONPATH=$$(pwd) pytest tests/test_resource_operations.py tests/test_noop_operations.py -v; \
+		fi \
+	)
+	@echo ""
+	@echo "✅ All test suites completed successfully"
 
 all: isos build
 	@echo "✅ All components built successfully"

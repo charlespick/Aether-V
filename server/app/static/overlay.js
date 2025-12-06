@@ -59,6 +59,12 @@ class OverlayManager {
 
         // Create and render overlay
         this.currentOverlay = new OverlayClass(data);
+        
+        // Store instance globally for onclick handlers
+        if (overlayName === 'settings') {
+            window.settingsOverlayInstance = this.currentOverlay;
+        }
+        
         const content = await this.currentOverlay.render();
         const title = this.currentOverlay.getTitle();
 
@@ -98,6 +104,12 @@ class OverlayManager {
         this.registerOverlay('provision-job', ProvisionJobOverlay);
         this.registerOverlay('job-details', JobDetailsOverlay);
         this.registerOverlay('notifications', NotificationsOverlay);
+        this.registerOverlay('disk-create', DiskCreateOverlay);
+        this.registerOverlay('disk-edit', DiskEditOverlay);
+        this.registerOverlay('nic-create', NicCreateOverlay);
+        this.registerOverlay('nic-edit', NicEditOverlay);
+        this.registerOverlay('vm-edit', VMEditOverlay);
+        this.registerOverlay('oss-attributions', OSSAttributionsOverlay);
     }
 }
 
@@ -144,10 +156,19 @@ class SettingsOverlay extends BaseOverlay {
         this.diagnosticsData = null;
         this.aboutSeeMoreHandler = null;
         this.aboutExpanded = false;
+        this.redeployHandler = null;
+        this.confirmDialogHandler = null;
     }
 
     getTitle() {
         return 'Settings';
+    }
+
+    hasAdminPermission() {
+        const permissions = window.userInfo?.permissions || [];
+        return permissions.some(
+            (p) => String(p).toLowerCase() === 'admin'
+        );
     }
 
     async render() {
@@ -289,7 +310,7 @@ class SettingsOverlay extends BaseOverlay {
                             src="/assets/Logo.png"
                             alt="${productName} logo"
                             class="about-logo"
-                            loading="lazy"
+                            loading="eager"
                         />
                         <div class="about-brand-text">
                             <p class="about-name">${productName}</p>
@@ -299,6 +320,15 @@ class SettingsOverlay extends BaseOverlay {
                     ${summaryMarkup}
                     ${moreDetailsMarkup}
                     ${seeMoreButtonMarkup}
+                    <div class="about-actions-row">
+                        <button
+                            type="button"
+                            class="btn btn-secondary"
+                            id="oss-attributions-btn"
+                        >
+                            OSS Attributions
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -311,6 +341,29 @@ class SettingsOverlay extends BaseOverlay {
                 </div>
                 <div class="diagnostics-content" id="diagnostics-content">
                     ${diagnosticsMarkup}
+                </div>
+            </div>
+
+            <div class="settings-section admin-section" id="admin-section" hidden aria-hidden="true">
+                <h3>Administration</h3>
+                <div class="setting-item">
+                    <div class="setting-header">
+                        <div class="setting-info">
+                            <div class="setting-title">Redeploy Host Scripts</div>
+                            <div class="setting-description">Force redeploy provisioning scripts to all Hyper-V hosts. Running jobs will be allowed to complete first.</div>
+                        </div>
+                        <div class="setting-control">
+                            <button
+                                type="button"
+                                class="btn btn-secondary"
+                                id="redeploy-scripts-btn"
+                                ${this.hasAdminPermission() ? '' : 'disabled'}
+                                title="${this.hasAdminPermission() ? 'Redeploy provisioning scripts to all hosts' : 'Requires admin role'}"
+                            >
+                                Redeploy
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -345,6 +398,35 @@ class SettingsOverlay extends BaseOverlay {
                 this.updateAboutExpansion();
             };
             seeMoreBtn.addEventListener('click', this.aboutSeeMoreHandler);
+        }
+
+        const ossAttributionsBtn = document.getElementById('oss-attributions-btn');
+        if (ossAttributionsBtn) {
+            this.ossAttributionsHandler = () => {
+                overlayManager.close();
+                overlayManager.open('oss-attributions');
+            };
+            ossAttributionsBtn.addEventListener('click', this.ossAttributionsHandler);
+        }
+        // Setup redeploy button handler
+        try {
+            const redeployBtn = document.getElementById('redeploy-scripts-btn');
+            if (redeployBtn) {
+                // Update button state based on current permissions
+                const hasPermission = this.hasAdminPermission();
+                if (hasPermission) {
+                    redeployBtn.removeAttribute('disabled');
+                    redeployBtn.title = 'Redeploy provisioning scripts to all hosts';
+                } else {
+                    redeployBtn.setAttribute('disabled', 'disabled');
+                    redeployBtn.title = 'Requires admin role';
+                }
+                
+                this.redeployHandler = () => this.showRedeployConfirmation();
+                redeployBtn.addEventListener('click', this.redeployHandler);
+            }
+        } catch (error) {
+            console.error('Error setting up redeploy button:', error);
         }
 
         this.aboutExpanded = false;
@@ -389,6 +471,27 @@ class SettingsOverlay extends BaseOverlay {
             }
             this.aboutSeeMoreHandler = null;
         }
+
+        if (this.ossAttributionsHandler) {
+            const ossAttributionsBtn = document.getElementById('oss-attributions-btn');
+            if (ossAttributionsBtn) {
+                ossAttributionsBtn.removeEventListener('click', this.ossAttributionsHandler);
+            }
+            this.ossAttributionsHandler = null;
+        }
+        if (this.redeployHandler) {
+            const redeployBtn = document.getElementById('redeploy-scripts-btn');
+            if (redeployBtn) {
+                redeployBtn.removeEventListener('click', this.redeployHandler);
+            }
+            this.redeployHandler = null;
+        }
+
+        // Remove any confirmation dialog that might be open
+        const confirmDialog = document.getElementById('redeploy-confirm-dialog');
+        if (confirmDialog) {
+            confirmDialog.remove();
+        }
     }
 
     updateAboutExpansion() {
@@ -411,6 +514,113 @@ class SettingsOverlay extends BaseOverlay {
             diagnosticsSection.classList.toggle('is-expanded', expanded);
             diagnosticsSection.setAttribute('aria-hidden', expanded ? 'false' : 'true');
             diagnosticsSection.toggleAttribute('hidden', !expanded);
+        }
+
+        // Also toggle admin section visibility
+        const adminSection = document.getElementById('admin-section');
+        if (adminSection) {
+            adminSection.classList.toggle('is-expanded', expanded);
+            adminSection.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            adminSection.toggleAttribute('hidden', !expanded);
+        }
+    }
+
+    showRedeployConfirmation() {
+        // Create confirmation dialog
+        const existingDialog = document.getElementById('redeploy-confirm-dialog');
+        if (existingDialog) {
+            existingDialog.remove();
+        }
+
+        const dialog = document.createElement('div');
+        dialog.id = 'redeploy-confirm-dialog';
+        dialog.className = 'confirm-dialog-overlay';
+        dialog.innerHTML = `
+            <div class="confirm-dialog">
+                <div class="confirm-dialog-header">
+                    <h3>Confirm Redeploy Host Scripts</h3>
+                </div>
+                <div class="confirm-dialog-content">
+                    <p>This action will:</p>
+                    <ul>
+                        <li>Wait for all running jobs to complete</li>
+                        <li>Temporarily pause VM provisioning operations</li>
+                        <li>Redeploy all provisioning scripts to Hyper-V hosts</li>
+                        <li>Restart the inventory refresh cycle</li>
+                    </ul>
+                    <p class="confirm-dialog-warning">
+                        <strong>Note:</strong> VM provisioning will be unavailable during the redeployment process.
+                    </p>
+                </div>
+                <div class="confirm-dialog-actions">
+                    <button type="button" class="btn btn-secondary" id="redeploy-cancel">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="redeploy-confirm">Redeploy Scripts</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(dialog);
+
+        // Add event listeners
+        const cancelBtn = document.getElementById('redeploy-cancel');
+        const confirmBtn = document.getElementById('redeploy-confirm');
+
+        cancelBtn.addEventListener('click', () => {
+            dialog.remove();
+        });
+
+        confirmBtn.addEventListener('click', async () => {
+            await this.executeRedeploy();
+            dialog.remove();
+        });
+
+        // Close on backdrop click
+        dialog.addEventListener('click', (e) => {
+            if (e.target === dialog) {
+                dialog.remove();
+            }
+        });
+    }
+
+    async executeRedeploy() {
+        const redeployBtn = document.getElementById('redeploy-scripts-btn');
+        if (redeployBtn) {
+            redeployBtn.disabled = true;
+            redeployBtn.textContent = 'Redeploying...';
+        }
+
+        try {
+            const response = await fetch('/api/v1/admin/redeploy', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                // Close the settings overlay
+                overlayManager.close();
+                // Show a toast or notification (if available)
+                console.log('Redeploy initiated:', result.message);
+            } else {
+                const errorMsg = result?.detail || 'Failed to initiate redeployment';
+                console.error('Redeploy failed:', errorMsg);
+                if (redeployBtn) {
+                    redeployBtn.disabled = false;
+                    redeployBtn.textContent = 'Redeploy';
+                }
+                alert(`Failed to redeploy: ${errorMsg}`);
+            }
+        } catch (error) {
+            console.error('Redeploy error:', error);
+            if (redeployBtn) {
+                redeployBtn.disabled = false;
+                redeployBtn.textContent = 'Redeploy';
+            }
+            alert(`Failed to redeploy: ${error.message}`);
         }
     }
 
@@ -531,72 +741,52 @@ class SettingsOverlay extends BaseOverlay {
         }
 
         const remote = data.remote_tasks || {};
-        const fast = remote.fast_pool || {};
-        const jobPool = remote.job_pool || {};
+        const shortQueue = remote.short_queue || {};
+        const ioQueue = remote.io_queue || {};
         const jobs = data.jobs || {};
         const inventory = data.inventory || {};
         const hostDeployment = data.host_deployment || {};
-        const cpuPercent = this.formatPercent(remote.cpu_percent);
-        const memoryPercent = this.formatPercent(remote.memory_percent);
-        const maxedOutFor = this.formatDuration(remote.maxed_out_for_seconds);
-        const currentMaxWorkers = remote.current_max_workers ?? fast.max_workers ?? 'n/a';
-        const configuredFastLimit = remote.configured_max_workers ?? 'n/a';
-        const dynamicCeiling = remote.dynamic_ceiling ?? 'n/a';
-        const fastWorkerDisplay =
-            `${this.escapeHtml(String(fast.current_workers ?? 'n/a'))} / ` +
-            `${this.escapeHtml(String(currentMaxWorkers))}`;
-        const fastLimitDisplay =
-            `${this.escapeHtml(String(configuredFastLimit))} / ` +
-            `${this.escapeHtml(String(dynamicCeiling))}`;
+
+        // Calculate totals for display
+        const totalCompleted = (shortQueue.completed ?? 0) + (ioQueue.completed ?? 0);
+        const connectionDisplay = `${remote.total_connections ?? 0} / ${remote.max_connections ?? 'n/a'}`;
 
         return `
             <div class="diagnostics-grid">
                 <div class="diagnostic-card">
-                    <div class="diagnostic-title">Remote Task Pools</div>
+                    <div class="diagnostic-title">Remote Task Queues</div>
                     <div class="diagnostic-metrics">
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Fast queue depth</span>
-                            <span class="metric-value">${this.escapeHtml(String(fast.queue_depth ?? 'n/a'))}</span>
+                            <span class="metric-label">Active connections</span>
+                            <span class="metric-value">${this.escapeHtml(connectionDisplay)}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Fast workers</span>
-                            <span class="metric-value">${fastWorkerDisplay}</span>
+                            <span class="metric-label">Short queue depth</span>
+                            <span class="metric-value">${this.escapeHtml(String(shortQueue.queue_depth ?? 'n/a'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Configured fast limit</span>
-                            <span class="metric-value">${fastLimitDisplay}</span>
+                            <span class="metric-label">Short queue inflight</span>
+                            <span class="metric-value">${this.escapeHtml(String(shortQueue.inflight ?? '0'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">CPU utilisation</span>
-                            <span class="metric-value">${this.escapeHtml(cpuPercent)}</span>
+                            <span class="metric-label">IO queue depth</span>
+                            <span class="metric-value">${this.escapeHtml(String(ioQueue.queue_depth ?? 'n/a'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Memory utilisation</span>
-                            <span class="metric-value">${this.escapeHtml(memoryPercent)}</span>
+                            <span class="metric-label">IO queue inflight</span>
+                            <span class="metric-value">${this.escapeHtml(String(ioQueue.inflight ?? '0'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">At capacity</span>
-                            <span class="metric-value">${this.escapeHtml(maxedOutFor)}</span>
+                            <span class="metric-label">Hosts with active IO</span>
+                            <span class="metric-value">${this.escapeHtml(String(ioQueue.hosts_with_active_io ?? '0'))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Job queue depth</span>
-                            <span class="metric-value">${this.escapeHtml(String(jobPool.queue_depth ?? 'n/a'))}</span>
+                            <span class="metric-label">Dispatch interval</span>
+                            <span class="metric-value">${this.escapeHtml(this.formatDuration(remote.dispatch_interval_seconds))}</span>
                         </div>
                         <div class="diagnostic-metric">
-                            <span class="metric-label">Job workers</span>
-                            <span class="metric-value">${this.escapeHtml(String(jobPool.current_workers ?? 'n/a'))} / ${this.escapeHtml(String(jobPool.configured_workers ?? 'n/a'))}</span>
-                        </div>
-                        <div class="diagnostic-metric">
-                            <span class="metric-label">Average duration</span>
-                            <span class="metric-value">${this.escapeHtml(this.formatDuration(remote.average_duration_seconds))}</span>
-                        </div>
-                        <div class="diagnostic-metric">
-                            <span class="metric-label">Dynamic adjustments</span>
-                            <span class="metric-value">${this.escapeHtml(String(remote.dynamic_adjustments ?? '0'))}</span>
-                        </div>
-                        <div class="diagnostic-metric">
-                            <span class="metric-label">Completed tasks</span>
-                            <span class="metric-value">${this.escapeHtml(String(remote.completed_tasks ?? '0'))}</span>
+                            <span class="metric-label">Total completed</span>
+                            <span class="metric-value">${this.escapeHtml(String(totalCompleted))}</span>
                         </div>
                     </div>
                 </div>
@@ -609,7 +799,7 @@ class SettingsOverlay extends BaseOverlay {
                         </div>
                         <div class="diagnostic-metric">
                             <span class="metric-label">Workers</span>
-                            <span class="metric-value">${this.escapeHtml(String(jobs.worker_count ?? 'n/a'))} / ${this.escapeHtml(String(jobs.configured_concurrency ?? 'n/a'))}</span>
+                            <span class="metric-value">${this.escapeHtml(String(jobs.worker_count ?? 'n/a'))}</span>
                         </div>
                         <div class="diagnostic-metric">
                             <span class="metric-label">Running jobs</span>
@@ -705,36 +895,12 @@ class SettingsOverlay extends BaseOverlay {
     }
 }
 
+// ProvisionJobOverlay - Pydantic-based implementation (Phase 7)
+// Delegates to ProvisionFormPydantic for all form rendering and logic
 class ProvisionJobOverlay extends BaseOverlay {
     constructor(data = {}) {
         super(data);
-        this.schema = this.resolveInitialSchema();
-        this.hosts = [];
-        this.rootEl = null;
-        this.formEl = null;
-        this.messagesEl = null;
-        this.stateListener = null;
-    }
-
-    resolveInitialSchema() {
-        const sources = [
-            () => this.data?.schema,
-            () => window?.jobSchema,
-            () => window?.appConfig?.job_schema,
-        ];
-
-        for (const getter of sources) {
-            try {
-                const value = getter();
-                if (value) {
-                    return value;
-                }
-            } catch (error) {
-                // Ignore lookup errors from optional chaining fallbacks
-            }
-        }
-
-        return null;
+        this.pydanticForm = null;
     }
 
     getTitle() {
@@ -744,549 +910,32 @@ class ProvisionJobOverlay extends BaseOverlay {
     async render() {
         return `
             <div class="schema-form" id="provision-job-root">
-                <div class="form-loading">Loading schema...</div>
+                <div class="form-loading">Loading form...</div>
             </div>
         `;
     }
 
-    init() {
-        this.rootEl = document.getElementById('provision-job-root');
-        if (!this.rootEl) {
-            console.error('Provision job root element missing');
-            return;
-        }
-
-        this.rootEl.innerHTML = `
-            <div class="form-loading">Loading schema...</div>
-        `;
-
-        this.stateListener = (event) => this.applyAvailability(event.detail);
-        document.addEventListener('agentDeploymentStateChanged', this.stateListener);
-
-        this.prepareForm();
-        this.applyAvailability(window.agentDeploymentState);
-    }
-
-    async prepareForm() {
-        try {
-            const [schema, hosts] = await Promise.all([
-                this.schema ? Promise.resolve(this.schema) : this.fetchSchema(),
-                this.fetchHosts(),
-            ]);
-
-            this.schema = schema;
-            window.jobSchema = this.schema;
-            this.hosts = hosts;
-            this.renderForm();
-        } catch (error) {
-            console.error('Failed to prepare provisioning form:', error);
-            this.rootEl.innerHTML = `
-                <div class="form-error">Unable to load provisioning form data. Please try again later.</div>
-            `;
-        }
-    }
-
-    async fetchSchema() {
-        const response = await fetch('/api/v1/schema/job-inputs', { credentials: 'same-origin' });
-        if (!response.ok) {
-            throw new Error(`Schema request failed: ${response.status}`);
-        }
-        return response.json();
-    }
-
-    async fetchHosts() {
-        const response = await fetch('/api/v1/hosts', { credentials: 'same-origin' });
-        if (!response.ok) {
-            throw new Error(`Host list request failed: ${response.status}`);
-        }
-
-        const hosts = await response.json();
-        return Array.isArray(hosts) ? hosts.filter((host) => host.connected) : [];
-    }
-
-    renderForm() {
-        if (!this.schema) {
-            return;
-        }
-
-        const fieldSetMap = this.buildParameterSetMap();
-        const vmField = this.schema.fields.find((field) => field.id === 'vm_name') || null;
-        const fieldsHtml = this.schema.fields
-            .filter((field) => field.id !== 'vm_name')
-            .map((field) => this.renderField(field, fieldSetMap.get(field.id) || []))
-            .join('');
-
-        const parameterSetHtml = this.renderParameterSets();
-        const primaryControls = this.renderPrimaryControls(vmField);
-
-        this.rootEl.innerHTML = `
-            <form id="provision-job-form" class="schema-form-body">
-                <div id="provision-job-messages" class="form-messages" role="alert"></div>
-                ${primaryControls}
-                <div class="schema-fields">${fieldsHtml}</div>
-                ${parameterSetHtml}
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" id="provision-job-cancel">Cancel</button>
-                    <button type="submit" class="btn" id="provision-job-submit">Submit Job</button>
-                </div>
-            </form>
-        `;
-
-        this.formEl = document.getElementById('provision-job-form');
-        this.messagesEl = document.getElementById('provision-job-messages');
-        const cancelBtn = document.getElementById('provision-job-cancel');
-
-        cancelBtn?.addEventListener('click', () => overlayManager.close());
-        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
-
-        this.applyAvailability(window.agentDeploymentState);
-    }
-
-    buildParameterSetMap() {
-        const map = new Map();
-        const sets = this.schema?.parameter_sets || [];
-        sets.forEach((set) => {
-            (set.members || []).forEach((member) => {
-                const existing = map.get(member) || [];
-                existing.push(set);
-                map.set(member, existing);
-            });
-        });
-        return map;
-    }
-
-    renderField(field, parameterSets) {
-        const fieldId = `schema-${field.id}`;
-        const requiredPill = this.renderRequiredPill(field.required);
-        const labelText = this.escapeHtml(field.label || field.id);
-        const description = field.description ? `<p class="field-description">${this.escapeHtml(field.description)}</p>` : '';
-        const tags = this.renderFieldTags(field, parameterSets);
-        const inputControl = this.renderInputControl(field, fieldId);
-
-        return `
-            <div class="schema-field" data-field-id="${field.id}">
-                <div class="field-header">
-                    <div class="field-title">
-                        <label for="${fieldId}" class="field-label">${labelText}</label>
-                        ${requiredPill}
-                    </div>
-                    ${tags}
-                </div>
-                <div class="field-control">${inputControl}</div>
-                ${description}
-            </div>
-        `;
-    }
-
-    renderFieldTags(field, parameterSets) {
-        const tags = [];
-        if (parameterSets.length > 0) {
-            parameterSets.forEach((set) => {
-                const label = this.escapeHtml(set.label || set.id);
-                tags.push(`<span class="field-tag">${label}</span>`);
-            });
-        }
-
-        const applicability = field.applicability;
-        if (applicability?.os_family) {
-            const families = applicability.os_family.map((fam) => fam.charAt(0).toUpperCase() + fam.slice(1));
-            tags.push(`<span class="field-tag field-tag-muted">${this.escapeHtml(families.join(', '))} only</span>`);
-        }
-
-        if (!tags.length) {
-            return '';
-        }
-
-        return `<div class="field-tags">${tags.join('')}</div>`;
-    }
-
-    renderRequiredPill(isRequired) {
-        return isRequired ? '<span class="field-required-pill">Required</span>' : '';
-    }
-
-    renderPrimaryControls(vmField) {
-        const hostControl = this.renderHostSelector();
-        const vmControl = vmField ? this.renderVmNameField(vmField) : '';
-
-        return `
-            <section class="primary-controls">
-                ${hostControl}
-                ${vmControl}
-            </section>
-        `;
-    }
-
-    renderHostSelector() {
-        const requiredPill = this.renderRequiredPill(true);
-        if (!this.hosts.length) {
-            return `
-                <div class="primary-field" data-primary="host">
-                    <div class="field-header">
-                        <div class="field-title">
-                            <label for="schema-target_host" class="field-label">Destination host</label>
-                            ${requiredPill}
-                        </div>
-                    </div>
-                    <div class="field-control">
-                        <select id="schema-target_host" name="target_host" class="primary-select" disabled>
-                            <option value="">No connected hosts available</option>
-                        </select>
-                    </div>
-                    <p class="field-description field-note">Reconnect a host to enable provisioning.</p>
-                </div>
-            `;
-        }
-
-        const options = this.hosts
-            .map((host) => {
-                const hostname = this.escapeHtml(host.hostname || '');
-                const cluster = host.cluster ? ` (${this.escapeHtml(host.cluster)})` : '';
-                return `<option value="${hostname}">${hostname}${cluster}</option>`;
-            })
-            .join('');
-
-        return `
-            <div class="primary-field" data-primary="host">
-                <div class="field-header">
-                    <div class="field-title">
-                        <label for="schema-target_host" class="field-label">Destination host</label>
-                        ${requiredPill}
-                    </div>
-                </div>
-                <div class="field-control">
-                    <select id="schema-target_host" name="target_host" class="primary-select" required>
-                        <option value="">Select a connected host</option>
-                        ${options}
-                    </select>
-                </div>
-                <p class="field-description field-note">Only hosts that are currently connected appear in this list.</p>
-            </div>
-        `;
-    }
-
-    renderVmNameField(vmField) {
-        const fieldId = 'schema-vm_name';
-        const requiredPill = this.renderRequiredPill(vmField.required);
-        const labelText = this.escapeHtml(vmField.label || vmField.id);
-        const description = vmField.description
-            ? `<p class="field-description">${this.escapeHtml(vmField.description)}</p>`
-            : '';
-        const note = '<p class="field-description field-note">This value becomes both the VM name and the guest hostname.</p>';
-        const inputControl = this.renderInputControl(vmField, fieldId);
-
-        return `
-            <div class="primary-field" data-primary="vm-name">
-                <div class="field-header">
-                    <div class="field-title">
-                        <label for="${fieldId}" class="field-label">${labelText}</label>
-                        ${requiredPill}
-                    </div>
-                </div>
-                <div class="field-control">${inputControl}</div>
-                ${description}
-                ${note}
-            </div>
-        `;
-    }
-
-    escapeHtml(value) {
-        if (value === null || value === undefined) {
-            return '';
-        }
-        return String(value)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    renderInputControl(field, fieldId) {
-        const type = (field.type || 'string').toLowerCase();
-        const defaultValue = field.default ?? '';
-        const validations = field.validations || {};
-        const requiredAttr = field.required ? 'required' : '';
-        const placeholder = field.hint ? `placeholder="${this.escapeHtml(field.hint)}"` : '';
-
-        if (type === 'boolean') {
-            const checked = defaultValue === true ? 'checked' : '';
-            return `
-                <label class="checkbox-field">
-                    <input type="checkbox" id="${fieldId}" name="${field.id}" ${checked} />
-                    <span>Enable</span>
-                </label>
-            `;
-        }
-
-        if (type === 'integer') {
-            const min = validations.minimum !== undefined ? `min="${validations.minimum}"` : '';
-            const max = validations.maximum !== undefined ? `max="${validations.maximum}"` : '';
-            const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-            return `<input type="number" inputmode="numeric" step="1" id="${fieldId}" name="${field.id}" ${min} ${max} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-        }
-
-        if (type === 'multiline') {
-            return `<textarea id="${fieldId}" name="${field.id}" rows="4" ${placeholder} ${requiredAttr}>${this.escapeHtml(defaultValue)}</textarea>`;
-        }
-
-        const inputType = type === 'secret' ? 'password' : 'text';
-        const patternValue = validations.pattern ? this.escapeHtml(validations.pattern) : '';
-        const pattern = patternValue ? `pattern="${patternValue}"` : '';
-        const valueAttr = defaultValue !== '' ? `value="${this.escapeHtml(defaultValue)}"` : '';
-        return `<input type="${inputType}" id="${fieldId}" name="${field.id}" ${pattern} ${placeholder} ${valueAttr} ${requiredAttr} />`;
-    }
-
-    renderParameterSets() {
-        const parameterSets = this.schema?.parameter_sets || [];
-        if (!parameterSets.length) {
-            return '';
-        }
-
-        const rows = parameterSets
-            .map((set) => {
-                const title = this.escapeHtml(set.label || set.id || 'parameter set');
-                const mode = this.escapeHtml(set.mode || 'unspecified');
-                const descriptionText = this.escapeHtml(set.description || '');
-                const description = descriptionText
-                    ? `<div class="parameter-set-description">${descriptionText}</div>`
-                    : '';
-                const members = this.renderParameterSetMembers(set);
-
-                return `
-                    <div class="parameter-set">
-                        <div class="parameter-set-title">${title}</div>
-                        <div class="parameter-set-mode">Mode: ${mode}</div>
-                        ${description}
-                        ${members}
-                    </div>
-                `;
-            })
-            .join('');
-
-        return `
-            <div class="parameter-set-summary">
-                <h3>Parameter Sets</h3>
-                ${rows}
-            </div>
-        `;
-    }
-
-    renderParameterSetMembers(set) {
-        const members = Array.isArray(set.members) ? set.members : null;
-        if (members && members.length) {
-            return `<div class="parameter-set-members">Fields: ${this.escapeHtml(members.join(', '))}</div>`;
-        }
-
-        const variants = Array.isArray(set.variants) ? set.variants : null;
-        if (variants && variants.length) {
-            const variantRows = variants
-                .map((variant) => {
-                    const variantLabel = this.escapeHtml(variant.label || variant.id || 'Variant');
-                    const requiredFields = Array.isArray(variant.required) ? variant.required : [];
-                    const optionalFields = Array.isArray(variant.optional) ? variant.optional : [];
-
-                    const requiredHtml = requiredFields.length
-                        ? `<div class="parameter-set-variant-detail"><span class="parameter-set-variant-label">Required:</span> ${this.escapeHtml(requiredFields.join(', '))}</div>`
-                        : '';
-                    const optionalHtml = optionalFields.length
-                        ? `<div class="parameter-set-variant-detail"><span class="parameter-set-variant-label">Optional:</span> ${this.escapeHtml(optionalFields.join(', '))}</div>`
-                        : '';
-
-                    return `
-                        <div class="parameter-set-variant">
-                            <div class="parameter-set-variant-title">${variantLabel}</div>
-                            ${requiredHtml}
-                            ${optionalHtml}
-                        </div>
-                    `;
-                })
-                .join('');
-
-            return `
-                <div class="parameter-set-variants">
-                    <div class="parameter-set-variants-heading">Variants:</div>
-                    ${variantRows}
-                </div>
-            `;
-        }
-
-        return '<div class="parameter-set-members">Fields: none specified</div>';
-    }
-
-    async handleSubmit(event) {
-        event.preventDefault();
-        if (!this.formEl || !this.schema) {
-            return;
-        }
-
-        const submitBtn = document.getElementById('provision-job-submit');
-        submitBtn?.setAttribute('disabled', 'disabled');
-        this.showMessage('', '');
-
-        const deploymentState = window.agentDeploymentState;
-        if (deploymentState && !deploymentState.provisioning_available) {
-            this.applyAvailability(deploymentState);
-            return;
-        }
-
-        if (!this.hosts.length) {
-            this.showMessage('No connected hosts are available for provisioning.', 'error');
-            submitBtn?.removeAttribute('disabled');
-            return;
-        }
-
-        if (typeof this.formEl.reportValidity === 'function' && !this.formEl.reportValidity()) {
-            submitBtn?.removeAttribute('disabled');
-            return;
-        }
-
-        const targetHostControl = this.formEl.elements['target_host'];
-        const targetHost = targetHostControl ? targetHostControl.value.trim() : '';
-        if (!targetHost) {
-            this.showMessage('Select a destination host before submitting.', 'error');
-            submitBtn?.removeAttribute('disabled');
-            return;
-        }
-
-        const payload = this.collectValues();
-
-        try {
-            const response = await fetch('/api/v1/jobs/provision', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                credentials: 'same-origin',
-                body: JSON.stringify({
-                    schema_version: this.schema.version,
-                    target_host: targetHost,
-                    values: payload
-                })
-            });
-
-            if (!response.ok) {
-                const error = await response.json().catch(() => ({}));
-                if (error?.agent_deployment) {
-                    updateAgentDeploymentState(error.agent_deployment);
-                }
-                const errorMessages = this.extractErrorMessages(error);
-                this.showMessage(errorMessages.join('<br>') || 'Failed to submit job.', 'error');
-                this.applyAvailability(window.agentDeploymentState);
-                return;
+    async init() {
+        // Use the new Pydantic-based form
+        if (typeof window.ProvisionFormPydantic === 'function') {
+            this.pydanticForm = new window.ProvisionFormPydantic(this.data);
+            await this.pydanticForm.init();
+        } else {
+            console.error('ProvisionFormPydantic not loaded');
+            const rootEl = document.getElementById('provision-job-root');
+            if (rootEl) {
+                rootEl.innerHTML = '<div class="form-error">Form component not loaded. Please refresh the page.</div>';
             }
-
-            const job = await response.json();
-            overlayManager.close();
-            if (typeof showNotificationToast === 'function') {
-                showNotificationToast({
-                    title: 'Job queued',
-                    message: `Job ${job.job_id} queued successfully.`,
-                });
-            }
-            loadNotifications().catch((refreshError) => {
-                console.error('Failed to refresh notifications after job submission:', refreshError);
-            });
-        } catch (error) {
-            console.error('Failed to submit provisioning job:', error);
-            this.showMessage('Unexpected error submitting job.', 'error');
-            this.applyAvailability(window.agentDeploymentState);
-        } finally {
-            if (window.agentDeploymentState?.provisioning_available !== false) {
-                submitBtn?.removeAttribute('disabled');
-            }
-        }
-    }
-
-    collectValues() {
-        const values = {};
-        this.schema.fields.forEach((field) => {
-            const control = this.formEl.elements[field.id];
-            if (!control) {
-                values[field.id] = null;
-                return;
-            }
-
-            const type = (field.type || 'string').toLowerCase();
-            if (type === 'boolean') {
-                values[field.id] = control.checked;
-                return;
-            }
-
-            const rawValue = control.value;
-            if (rawValue === '') {
-                values[field.id] = null;
-                return;
-            }
-
-            if (type === 'integer') {
-                values[field.id] = Number.parseInt(rawValue, 10);
-            } else {
-                values[field.id] = rawValue;
-            }
-        });
-
-        return values;
-    }
-
-    extractErrorMessages(errorPayload) {
-        if (!errorPayload) {
-            return [];
-        }
-        if (Array.isArray(errorPayload?.detail)) {
-            return errorPayload.detail.map((item) => item.msg || JSON.stringify(item));
-        }
-        if (typeof errorPayload.detail === 'string') {
-            return [errorPayload.detail];
-        }
-        if (Array.isArray(errorPayload.errors)) {
-            return errorPayload.errors;
-        }
-        if (Array.isArray(errorPayload?.detail?.errors)) {
-            return errorPayload.detail.errors;
-        }
-        if (errorPayload.detail?.message) {
-            return [errorPayload.detail.message];
-        }
-        return [];
-    }
-
-    showMessage(message, level) {
-        if (!this.messagesEl) {
-            return;
-        }
-
-        this.messagesEl.classList.remove('error', 'success', 'info');
-        if (!message) {
-            this.messagesEl.innerHTML = '';
-            return;
-        }
-
-        if (level === 'error') {
-            this.messagesEl.classList.add('error');
-        }
-        if (level === 'success') {
-            this.messagesEl.classList.add('success');
-        }
-        if (level === 'info') {
-            this.messagesEl.classList.add('info');
-        }
-
-        this.messagesEl.innerHTML = message;
-    }
-
-    applyAvailability(state) {
-        if (typeof window.applyProvisioningAvailability === 'function') {
-            window.applyProvisioningAvailability(state || window.agentDeploymentState);
         }
     }
 
     cleanup() {
-        if (this.stateListener) {
-            document.removeEventListener('agentDeploymentStateChanged', this.stateListener);
-            this.stateListener = null;
+        if (this.pydanticForm && typeof this.pydanticForm.cleanup === 'function') {
+            this.pydanticForm.cleanup();
         }
     }
 }
+
 
 // Job Details Overlay
 class JobDetailsOverlay extends BaseOverlay {
@@ -1317,6 +966,7 @@ class JobDetailsOverlay extends BaseOverlay {
         this.copyButtonEl = null;
         this.logContainerEl = null;
         this.logCodeEl = null;
+        this.childJobsContainer = null;
     }
 
     getTitle() {
@@ -1327,9 +977,20 @@ class JobDetailsOverlay extends BaseOverlay {
         if (!job) {
             return 'Job Details';
         }
+        
+        // Use enriched metadata if available for better resource naming
+        const metadata = job.parameters?._metadata || {};
+        const resourceType = metadata.resource_type || '';
+        const resourceName = metadata.resource_name || this.extractVmName(job) || job.job_id || 'Job';
+        
         const label = this.formatJobType(job.job_type);
-        const target = this.extractVmName(job) || job.job_id || 'Job';
-        return `${label} • ${target}`;
+        
+        // Format: <Operation> <Resource Type> • <Resource Name>
+        // For VM jobs, resource_type will be "VM", so we get "Delete VM • vm-name"
+        // For NIC jobs, we get "Delete Network Adapter • NIC-Prod-01"
+        // For Disk jobs, we get "Create Disk • data-disk-01"
+        
+        return `${label} • ${resourceName}`;
     }
 
     async render() {
@@ -1348,6 +1009,23 @@ class JobDetailsOverlay extends BaseOverlay {
         const logText = this.logLines.length ? this.logLines.join('\n') : 'Waiting for output...';
         const details = job.parameters ? JSON.stringify(job.parameters, null, 2) : '{}';
         const jobSummaryTitle = this.getJobSummaryTitle(job);
+        const childJobsSection = this.renderChildJobSection(job.child_jobs);
+        const isManagedDeployment = job.job_type === 'managed_deployment';
+
+        // For managed deployment, show deployment steps instead of activity log
+        const activitySection = isManagedDeployment ? 
+            this.renderManagedDeploymentSteps(job) :
+            `<div class='job-section'>
+                <h3>Activity log</h3>
+                <div class='job-log-toolbar'>
+                    <label class='job-log-follow'>
+                        <input type='checkbox' id='job-log-autoscroll' checked />
+                        Follow output
+                    </label>
+                    <button class='job-log-copy' id='job-log-copy' type='button'>Copy</button>
+                </div>
+                <pre class='job-output'><code id='job-log-output'>${this.escapeHtml(logText)}</code></pre>
+            </div>`;
 
         return `
             <div class='job-details' data-job-id='${this.escapeHtml(jobId)}'>
@@ -1408,20 +1086,90 @@ class JobDetailsOverlay extends BaseOverlay {
                         <pre>${this.escapeHtml(details)}</pre>
                     </div>
                 </div>
-                <div class='job-section'>
-                    <h3>Activity log</h3>
-                    <div class='job-log-toolbar'>
-                        <label class='job-log-follow'>
-                            <input type='checkbox' id='job-log-autoscroll' checked />
-                            Follow output
-                        </label>
-                        <button class='job-log-copy' id='job-log-copy' type='button'>Copy</button>
-                    </div>
-                    <pre class='job-output'><code id='job-log-output'>${this.escapeHtml(logText)}</code></pre>
-                </div>
+                ${childJobsSection}
+                ${activitySection}
                 ${job.error ? `<div class='job-section job-error'><h3>Error</h3><div class='job-error-box'><pre>${this.escapeHtml(job.error)}</pre></div></div>` : ''}
             </div>
         `;
+    }
+
+    renderManagedDeploymentSteps(job = this.job) {
+        if (!job) {
+            return '';
+        }
+
+        const stepsHtml = this.renderManagedDeploymentStepsContent(job);
+
+        return `
+            <div class='job-section deployment-steps-section'>
+                <h3>Deployment Steps</h3>
+                <div class='deployment-steps' data-field='deployment-steps'>
+                    ${stepsHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    renderChildJobSection(childJobs = []) {
+        const jobs = Array.isArray(childJobs) ? childJobs : [];
+        
+        // Don't show Sub-jobs section for managed_deployment - use Deployment Steps instead
+        const isManagedDeployment = this.job?.job_type === 'managed_deployment';
+        if (isManagedDeployment) {
+            return '';
+        }
+        
+        const shouldShow = jobs.length > 0;
+        if (!shouldShow) {
+            return '';
+        }
+
+        const content = this.renderChildJobItems(jobs);
+        const fallback = '<div class="job-child-empty">Sub-jobs will appear once the deployment starts.</div>';
+
+        return `
+            <div class='job-section job-child-section'>
+                <h3>Sub-jobs</h3>
+                <div class='job-sub-jobs' data-field='child-jobs'>
+                    ${content || fallback}
+                </div>
+            </div>
+        `;
+    }
+
+    renderChildJobItems(childJobs = []) {
+        if (!Array.isArray(childJobs) || !childJobs.length) {
+            return '';
+        }
+
+        return childJobs
+            .map((child) => {
+                const jobId = child.job_id || '';
+                const status = child.status || 'pending';
+                const statusLabel = this.formatStatus(status);
+                const statusClass = `job-status-badge status-${status}`;
+                const jobTypeLabel = child.job_type_label || this.formatJobType(child.job_type || '');
+                const vmName = child.vm_name || jobId || 'Job';
+                const host = child.target_host || '—';
+
+                return `
+                    <div class='job-child-card'>
+                        <div class='job-child-main'>
+                            <div class='job-child-title'>${this.escapeHtml(jobTypeLabel)}</div>
+                            <div class='job-child-meta'>
+                                <span class='job-child-target'>${this.escapeHtml(vmName)}</span>
+                                <span class='job-child-host'>on ${this.escapeHtml(host)}</span>
+                                <span class='job-child-id'>ID: ${this.escapeHtml(jobId)}</span>
+                            </div>
+                        </div>
+                        <div class='job-child-actions'>
+                            <span class='${statusClass}'>${this.escapeHtml(statusLabel)}</span>
+                            <button class='job-child-view' data-sub-job-id='${this.escapeHtml(jobId)}' type='button'>View</button>
+                        </div>
+                    </div>
+                `;
+            })
+            .join('');
     }
 
     init() {
@@ -1447,12 +1195,14 @@ class JobDetailsOverlay extends BaseOverlay {
         this.copyButtonEl = document.getElementById('job-log-copy');
         this.logContainerEl = this.rootEl.querySelector('.job-output');
         this.logCodeEl = document.getElementById('job-log-output');
+        this.childJobsContainer = this.rootEl.querySelector('[data-field="child-jobs"]');
 
         this.autoScrollInput?.addEventListener('change', (event) => {
             this.followOutput = !!event.target.checked;
         });
         this.detailsToggleEl?.addEventListener('click', () => this.toggleDetails());
         this.copyButtonEl?.addEventListener('click', () => this.copyLogs());
+        this.bindChildJobLinks();
 
         this.refreshSummary();
         this.updateLog();
@@ -1509,12 +1259,87 @@ class JobDetailsOverlay extends BaseOverlay {
         if (this.imageEl) {
             this.imageEl.textContent = this.extractField(job, ['image_name', 'image']) || '—';
         }
+        this.updateChildJobs();
+        this.updateDeploymentSteps();
         this.updateTiming();
         if (job.status === 'running') {
             this.startDurationTimer();
         } else {
             this.clearDurationTimer();
         }
+    }
+
+    updateDeploymentSteps() {
+        // Only update for managed deployment jobs
+        if (this.job?.job_type !== 'managed_deployment') {
+            return;
+        }
+
+        const container = this.rootEl?.querySelector('[data-field="deployment-steps"]');
+        if (!container) {
+            return;
+        }
+
+        // Re-render the deployment steps with current state
+        const stepsHtml = this.renderManagedDeploymentStepsContent(this.job);
+        container.innerHTML = stepsHtml;
+        this.bindChildJobLinks();
+    }
+
+    renderManagedDeploymentStepsContent(job) {
+        if (!job) {
+            return '';
+        }
+
+        // Define the deployment steps and their corresponding child job types
+        const stepDefinitions = [
+            { key: 'vm', label: 'Create VM', jobType: 'create_vm' },
+            { key: 'disk', label: 'Create Disk', jobType: 'create_disk' },
+            { key: 'nic', label: 'Create NIC', jobType: 'create_nic' },
+            { key: 'init', label: 'Initialize Guest', jobType: 'initialize_vm' }
+        ];
+
+        const childJobs = Array.isArray(job.child_jobs) ? job.child_jobs : [];
+        
+        // Map each step to its corresponding child job and determine status
+        const stepStatuses = stepDefinitions.map(step => {
+            // Find the child job for this step
+            const childJob = childJobs.find(child => child.job_type === step.jobType);
+            
+            let status = 'pending';
+            let statusClass = 'status-pending';
+            let childJobId = null;
+            
+            if (childJob) {
+                // Use the actual child job status
+                status = childJob.status || 'pending';
+                statusClass = `status-${status}`;
+                childJobId = childJob.job_id;
+            }
+            
+            return {
+                ...step,
+                status,
+                statusClass,
+                childJobId
+            };
+        });
+
+        return stepStatuses.map(step => {
+            const buttonHtml = step.childJobId ? 
+                `<button class='job-child-view' data-sub-job-id='${this.escapeHtml(step.childJobId)}' type='button'>View</button>` :
+                '';
+            
+            return `
+                <div class='deployment-step'>
+                    <div class='step-info'>
+                        <div class='step-label'>${this.escapeHtml(step.label)}</div>
+                        <span class='job-status-badge ${step.statusClass}'>${this.escapeHtml(step.status)}</span>
+                    </div>
+                    ${buttonHtml}
+                </div>
+            `;
+        }).join('');
     }
 
     updateLog() {
@@ -1529,6 +1354,30 @@ class JobDetailsOverlay extends BaseOverlay {
         if (this.followOutput && this.logContainerEl) {
             this.logContainerEl.scrollTop = this.logContainerEl.scrollHeight;
         }
+    }
+
+    updateChildJobs() {
+        const container = this.childJobsContainer || this.rootEl?.querySelector('[data-field="child-jobs"]');
+        const children = Array.isArray(this.job?.child_jobs) ? this.job.child_jobs : [];
+        if (!container) {
+            return;
+        }
+
+        const content = this.renderChildJobItems(children);
+        container.innerHTML = content || '<div class="job-child-empty">Sub-jobs will appear once the deployment starts.</div>';
+        this.bindChildJobLinks();
+    }
+
+    bindChildJobLinks() {
+        const buttons = this.rootEl?.querySelectorAll('[data-sub-job-id]') || [];
+        buttons.forEach((button) => {
+            button.addEventListener('click', async () => {
+                const jobId = button.getAttribute('data-sub-job-id');
+                if (jobId && typeof window.openJobDetails === 'function') {
+                    await window.openJobDetails(jobId, { autoSubscribe: true });
+                }
+            });
+        });
     }
 
     appendLogLines(lines) {
@@ -1687,16 +1536,33 @@ class JobDetailsOverlay extends BaseOverlay {
         if (!jobType) {
             return 'Unknown';
         }
-        if (jobType === 'provision_vm') {
-            return 'Create VM';
+        const labels = {
+            managed_deployment: 'Managed Deployment',
+            create_vm: 'Create VM',
+            create_vm: 'Create VM',
+            delete_vm: 'Delete VM',
+            create_disk: 'Create Disk',
+            update_vm: 'Update VM',
+            update_disk: 'Update Disk',
+            update_nic: 'Update NIC',
+            delete_disk: 'Delete Disk',
+            delete_nic: 'Delete NIC',
+            create_nic: 'Create NIC',
+            initialize_vm: 'Initialize VM',
+        };
+        if (labels[jobType]) {
+            return labels[jobType];
         }
-        if (jobType === 'delete_vm') {
-            return 'Delete VM';
-        }
-        return jobType.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+        return jobType
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, (char) => char.toUpperCase());
     }
 
     extractVmName(job) {
+        // Try enriched metadata first for accurate VM names
+        if (job?.parameters?._metadata?.vm_name) {
+            return job.parameters._metadata.vm_name;
+        }
         return this.extractField(job, ['vm_name', 'name']);
     }
 
@@ -1704,6 +1570,17 @@ class JobDetailsOverlay extends BaseOverlay {
         if (!job) {
             return null;
         }
+        
+        // Check enriched metadata first
+        const metadata = job.parameters?._metadata || {};
+        for (const field of fieldNames) {
+            const value = metadata[field];
+            if (typeof value === 'string' && value.trim()) {
+                return value.trim();
+            }
+        }
+        
+        // Fallback to original logic
         const parameters = job.parameters || {};
         const sources = [parameters.definition?.fields, parameters.fields, parameters];
         for (const source of sources) {
@@ -1763,13 +1640,13 @@ class NotificationsOverlay extends BaseOverlay {
 
     getIcon(type) {
         const icons = {
-            'success': '✅',
-            'error': '❌',
-            'warning': '⚠️',
-            'info': 'ℹ️',
-            'job': '⚙️'
+            'success': icon('check_circle', { size: 20 }),
+            'error': icon('error', { size: 20 }),
+            'warning': icon('warning', { size: 20 }),
+            'info': icon('pending', { size: 20 }),
+            'job': icon('settings', { size: 20 })
         };
-        return icons[type] || 'ℹ️';
+        return icons[type] || icon('pending', { size: 20 });
     }
 
     async fetchNotifications() {
@@ -1804,6 +1681,975 @@ class NotificationsOverlay extends BaseOverlay {
     clearAll() {
         console.log('Clear all notifications');
         overlayManager.close();
+    }
+}
+
+// Disk Create Overlay
+class DiskCreateOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.vmId = data.vm_id || '';
+        this.vmName = data.vm_name || '';
+        this.host = data.host || '';
+        this.schema = null;
+        this.rootEl = null;
+        this.formEl = null;
+        this.messagesEl = null;
+    }
+
+    getTitle() {
+        return `Add Disk to ${this.vmName || 'VM'}`;
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="disk-create-root">
+                <div class="form-loading">Loading schema...</div>
+            </div>
+        `;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('disk-create-root');
+        if (!this.rootEl) {
+            console.error('Disk create root element missing');
+            return;
+        }
+
+        try {
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load disk creation form:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load disk creation form. Please try again later.</div>
+            `;
+        }
+    }
+
+    renderForm() {
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
+        this.rootEl.innerHTML = `
+            <form id="disk-create-form" class="schema-form-body">
+                <div id="disk-create-messages" class="form-messages" role="alert"></div>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="disk-size-gb" class="field-label">Disk Size (GB)</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="number" id="disk-size-gb" name="disk_size_gb" required 
+                                   min="1" max="65536" value="100" step="1" inputmode="numeric" />
+                        </div>
+                        <p class="field-description">Size of the virtual disk in gigabytes</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="disk-type" class="field-label">Disk Type</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <select id="disk-type" name="disk_type" required>
+                                <option value="Dynamic">Dynamic</option>
+                                <option value="Fixed">Fixed</option>
+                            </select>
+                        </div>
+                        <p class="field-description">Type of virtual hard disk (Dynamic or Fixed)</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="controller-type" class="field-label">Controller Type</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <select id="controller-type" name="controller_type" required>
+                                <option value="SCSI">SCSI</option>
+                                <option value="IDE">IDE</option>
+                            </select>
+                        </div>
+                        <p class="field-description">Type of controller to attach the disk to</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="storage-class" class="field-label">Storage Class</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="storage-class" name="storage_class" 
+                                   placeholder="e.g., fast-ssd" />
+                        </div>
+                        <p class="field-description">Name of the storage class where the disk will be stored (optional)</p>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="disk-create-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="disk-create-submit">Create Disk</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('disk-create-form');
+        this.messagesEl = document.getElementById('disk-create-messages');
+        const cancelBtn = document.getElementById('disk-create-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = { vm_id: this.vmId };
+
+        // Collect form values based on Pydantic DiskSpec model
+        values.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
+        values.disk_type = formData.get('disk_type');
+        values.controller_type = formData.get('controller_type');
+        
+        const storageClass = formData.get('storage_class');
+        if (storageClass && storageClass.trim()) {
+            values.storage_class = storageClass.trim();
+        }
+
+        try {
+            const response = await fetch('/api/v1/resources/disks', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    values: values,
+                    target_host: this.host
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                // Refresh the VM view
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to create disk';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('Disk creation error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to create disk: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// Disk Edit Overlay
+class DiskEditOverlay extends DiskCreateOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.resourceId = data.resource_id || '';
+        this.resourceData = data.resource_data || {};
+        this.originalDiskSize = null;  // Track original size for validation
+    }
+
+    getTitle() {
+        return `Edit Disk on ${this.vmName || 'VM'}`;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('disk-create-root');
+        if (!this.rootEl) {
+            console.error('Disk edit root element missing');
+            return;
+        }
+
+        try {
+            // Extract original disk size for validation
+            if (this.resourceData && this.resourceData.size_gb) {
+                this.originalDiskSize = parseFloat(this.resourceData.size_gb);
+            }
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load disk edit form:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load disk edit form. Please try again later.</div>
+            `;
+        }
+    }
+
+    renderForm() {
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
+        // Get current values from resource data
+        const currentDiskSize = this.resourceData.size_gb || 100;
+        const currentDiskType = this.resourceData.type || 'Dynamic';
+        const currentControllerType = this.resourceData.controller_type || this.resourceData.controller || 'SCSI';
+        const currentStorageClass = this.resourceData.storage_class || '';
+
+        // Add notice about disk size restrictions
+        const sizeNotice = this.originalDiskSize ? 
+            `<p class="field-note" style="margin-bottom: 16px;">
+                <strong>Note:</strong> Disk size cannot be reduced below its current size of ${this.originalDiskSize} GB.
+            </p>` : '';
+
+        this.rootEl.innerHTML = `
+            <form id="disk-create-form" class="schema-form-body">
+                <div id="disk-create-messages" class="form-messages" role="alert"></div>
+                ${sizeNotice}
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="disk-size-gb" class="field-label">Disk Size (GB)</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="number" id="disk-size-gb" name="disk_size_gb" required 
+                                   min="${this.originalDiskSize || 1}" max="65536" 
+                                   value="${this.escapeHtml(currentDiskSize)}" 
+                                   step="1" inputmode="numeric" 
+                                   data-original-size="${this.originalDiskSize || ''}" />
+                        </div>
+                        <p class="field-description">Size of the virtual disk in gigabytes</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="disk-type" class="field-label">Disk Type</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <select id="disk-type" name="disk_type" required>
+                                <option value="Dynamic" ${currentDiskType === 'Dynamic' ? 'selected' : ''}>Dynamic</option>
+                                <option value="Fixed" ${currentDiskType === 'Fixed' ? 'selected' : ''}>Fixed</option>
+                            </select>
+                        </div>
+                        <p class="field-description">Type of virtual hard disk (Dynamic or Fixed)</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="controller-type" class="field-label">Controller Type</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <select id="controller-type" name="controller_type" required>
+                                <option value="SCSI" ${currentControllerType === 'SCSI' ? 'selected' : ''}>SCSI</option>
+                                <option value="IDE" ${currentControllerType === 'IDE' ? 'selected' : ''}>IDE</option>
+                            </select>
+                        </div>
+                        <p class="field-description">Type of controller to attach the disk to</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="storage-class" class="field-label">Storage Class</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="storage-class" name="storage_class" 
+                                   value="${this.escapeHtml(currentStorageClass)}"
+                                   placeholder="e.g., fast-ssd" />
+                        </div>
+                        <p class="field-description">Name of the storage class where the disk will be stored (optional)</p>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="disk-create-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="disk-create-submit">Update Disk</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('disk-create-form');
+        this.messagesEl = document.getElementById('disk-create-messages');
+        const cancelBtn = document.getElementById('disk-create-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = { vm_id: this.vmId };
+
+        // Collect form values based on Pydantic DiskSpec model
+        values.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
+        values.disk_type = formData.get('disk_type');
+        values.controller_type = formData.get('controller_type');
+        
+        const storageClass = formData.get('storage_class');
+        if (storageClass && storageClass.trim()) {
+            values.storage_class = storageClass.trim();
+        }
+
+        // Client-side validation: prevent disk shrinking
+        if (values.disk_size_gb && this.originalDiskSize && values.disk_size_gb < this.originalDiskSize) {
+            this.messagesEl.innerHTML = `<div class="form-error">Disk size cannot be reduced below its current size of ${this.originalDiskSize} GB.</div>`;
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/disks/${encodeURIComponent(this.resourceId)}`, {
+                method: 'PUT',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    values: values,
+                    target_host: this.host,
+                    resource_id: this.resourceId
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to update disk';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('Disk update error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to update disk: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// NIC Create Overlay
+class NicCreateOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.vmId = data.vm_id || '';
+        this.vmName = data.vm_name || '';
+        this.host = data.host || '';
+        this.schema = null;
+        this.rootEl = null;
+        this.formEl = null;
+        this.messagesEl = null;
+    }
+
+    getTitle() {
+        return `Add Network Adapter to ${this.vmName || 'VM'}`;
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="nic-create-root">
+                <div class="form-loading">Loading schema...</div>
+            </div>
+        `;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('nic-create-root');
+        if (!this.rootEl) {
+            console.error('NIC create root element missing');
+            return;
+        }
+
+        try {
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load NIC creation form:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load network adapter creation form. Please try again later.</div>
+            `;
+        }
+    }
+
+    renderForm() {
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
+        this.rootEl.innerHTML = `
+            <form id="nic-create-form" class="schema-form-body">
+                <div id="nic-create-messages" class="form-messages" role="alert"></div>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="network" class="field-label">Network</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="network" name="network" required 
+                                   placeholder="e.g., Production" />
+                        </div>
+                        <p class="field-description">Name of the network to connect the adapter to</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="adapter-name" class="field-label">Adapter Name</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="adapter-name" name="adapter_name" 
+                                   placeholder="e.g., Network Adapter 2" />
+                        </div>
+                        <p class="field-description">Optional name for the network adapter</p>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="nic-create-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="nic-create-submit">Create Network Adapter</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('nic-create-form');
+        this.messagesEl = document.getElementById('nic-create-messages');
+        const cancelBtn = document.getElementById('nic-create-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = { vm_id: this.vmId };
+
+        // Collect form values based on Pydantic NicSpec model
+        values.network = formData.get('network');
+        
+        const adapterName = formData.get('adapter_name');
+        if (adapterName && adapterName.trim()) {
+            values.adapter_name = adapterName.trim();
+        }
+
+        try {
+            const response = await fetch('/api/v1/resources/nics', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    values: values,
+                    target_host: this.host
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to create network adapter';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('NIC creation error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to create network adapter: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// NIC Edit Overlay
+class NicEditOverlay extends NicCreateOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.resourceId = data.resource_id || '';
+        this.resourceData = data.resource_data || {};
+    }
+
+    getTitle() {
+        return `Edit Network Adapter on ${this.vmName || 'VM'}`;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('nic-create-root');
+        if (!this.rootEl) {
+            console.error('NIC edit root element missing');
+            return;
+        }
+
+        try {
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load NIC edit form:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load network adapter edit form. Please try again later.</div>
+            `;
+        }
+    }
+
+    renderForm() {
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
+        // Get current values from resource data
+        const currentNetwork = this.resourceData.network_name || this.resourceData.network || this.resourceData.virtual_switch || '';
+        const currentAdapterName = this.resourceData.adapter_name || this.resourceData.name || '';
+
+        this.rootEl.innerHTML = `
+            <form id="nic-create-form" class="schema-form-body">
+                <div id="nic-create-messages" class="form-messages" role="alert"></div>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="network" class="field-label">Network</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="network" name="network" required 
+                                   value="${this.escapeHtml(currentNetwork)}"
+                                   placeholder="e.g., Production" />
+                        </div>
+                        <p class="field-description">Name of the network to connect the adapter to</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="adapter-name" class="field-label">Adapter Name</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="adapter-name" name="adapter_name" 
+                                   value="${this.escapeHtml(currentAdapterName)}"
+                                   placeholder="e.g., Network Adapter 2" />
+                        </div>
+                        <p class="field-description">Optional name for the network adapter</p>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="nic-create-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="nic-create-submit">Update Network Adapter</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('nic-create-form');
+        this.messagesEl = document.getElementById('nic-create-messages');
+        const cancelBtn = document.getElementById('nic-create-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = { vm_id: this.vmId };
+
+        // Collect form values based on Pydantic NicSpec model
+        values.network = formData.get('network');
+        
+        const adapterName = formData.get('adapter_name');
+        if (adapterName && adapterName.trim()) {
+            values.adapter_name = adapterName.trim();
+        }
+
+        // Client-side validation: ensure network is specified
+        if (!values.network?.trim()) {
+            this.messagesEl.innerHTML = `<div class="form-error">Network name is required.</div>`;
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/nics/${encodeURIComponent(this.resourceId)}`, {
+                method: 'PUT',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    values: values,
+                    target_host: this.host,
+                    resource_id: this.resourceId
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to update network adapter';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('NIC update error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to update network adapter: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// VM Edit Overlay
+class VMEditOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.vmId = data.vm_id || '';
+        this.vmName = data.vm_name || '';
+        this.host = data.host || '';
+        this.vmData = data.vm_data || {};
+        this.rootEl = null;
+        this.formEl = null;
+        this.messagesEl = null;
+    }
+
+    getTitle() {
+        return `Edit ${this.vmName || 'VM'}`;
+    }
+
+    async render() {
+        return `
+            <div class="schema-form" id="vm-edit-root">
+                <div class="form-loading">Loading form...</div>
+            </div>
+        `;
+    }
+
+    async init() {
+        this.rootEl = document.getElementById('vm-edit-root');
+        if (!this.rootEl) {
+            console.error('VM edit root element missing');
+            return;
+        }
+
+        try {
+            this.renderForm();
+        } catch (error) {
+            console.error('Failed to load VM edit form:', error);
+            this.rootEl.innerHTML = `
+                <div class="form-error">Unable to load VM edit form. Please try again later.</div>
+            `;
+        }
+    }
+
+    renderForm() {
+        const requiredPill = '<span class="field-required-pill">Required</span>';
+        
+        // Get current values from VM data
+        const currentCpuCores = this.vmData.cpu_cores ?? 2;
+        const currentMemoryGb = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? 4;
+        const currentStorageClass = this.vmData.storage_class ?? '';
+        const currentVmClustered = this.vmData.vm_clustered ?? false;
+
+        this.rootEl.innerHTML = `
+            <form id="vm-edit-form" class="schema-form-body">
+                <div id="vm-edit-messages" class="form-messages" role="alert"></div>
+                <p class="field-note" style="margin-bottom: 16px;">
+                    <strong>Note:</strong> You can only modify hardware properties. Guest configuration (hostname, domain join, etc.) is set during initial provisioning.
+                </p>
+                <div class="schema-fields">
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="cpu-cores" class="field-label">CPU Cores</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="number" id="cpu-cores" name="cpu_cores" required 
+                                   min="1" max="64" value="${this.escapeHtml(currentCpuCores)}" 
+                                   step="1" inputmode="numeric" />
+                        </div>
+                        <p class="field-description">Number of virtual CPU cores</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="gb-ram" class="field-label">Memory (GB)</label>
+                                ${requiredPill}
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="number" id="gb-ram" name="gb_ram" required 
+                                   min="1" max="512" value="${this.escapeHtml(currentMemoryGb)}" 
+                                   step="1" inputmode="numeric" />
+                        </div>
+                        <p class="field-description">Amount of memory to assign to the VM in gigabytes</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="storage-class" class="field-label">Storage Class</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <input type="text" id="storage-class" name="storage_class" 
+                                   value="${this.escapeHtml(currentStorageClass)}"
+                                   placeholder="e.g., fast-ssd" />
+                        </div>
+                        <p class="field-description">Name of the storage class where VM configuration will be stored (optional)</p>
+                    </div>
+
+                    <div class="schema-field">
+                        <div class="field-header">
+                            <div class="field-title">
+                                <label for="vm-clustered" class="field-label">Clustered</label>
+                            </div>
+                        </div>
+                        <div class="field-control">
+                            <label class="checkbox-field">
+                                <input type="checkbox" id="vm-clustered" name="vm_clustered" 
+                                       ${currentVmClustered ? 'checked' : ''} />
+                                <span>Enable clustering for this VM</span>
+                            </label>
+                        </div>
+                        <p class="field-description">Request that the VM be registered with the Failover Cluster</p>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="vm-edit-cancel">Cancel</button>
+                    <button type="submit" class="btn" id="vm-edit-submit">Update VM</button>
+                </div>
+            </form>
+        `;
+
+        this.formEl = document.getElementById('vm-edit-form');
+        this.messagesEl = document.getElementById('vm-edit-messages');
+        const cancelBtn = document.getElementById('vm-edit-cancel');
+
+        cancelBtn?.addEventListener('click', () => overlayManager.close());
+        this.formEl?.addEventListener('submit', (event) => this.handleSubmit(event));
+    }
+
+    async handleSubmit(event) {
+        event.preventDefault();
+
+        const formData = new FormData(this.formEl);
+        const values = {};
+
+        // Collect form values based on Pydantic VmSpec model
+        values.vm_name = this.vmName;  // VM name is not editable, use existing name
+        values.cpu_cores = parseInt(formData.get('cpu_cores'), 10);
+        values.gb_ram = parseInt(formData.get('gb_ram'), 10);
+        values.vm_clustered = formData.has('vm_clustered');
+        
+        const storageClass = formData.get('storage_class');
+        if (storageClass && storageClass.trim()) {
+            values.storage_class = storageClass.trim();
+        }
+
+        try {
+            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}`, {
+                method: 'PUT',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    values: values,
+                    target_host: this.host
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                overlayManager.close();
+                if (window.viewManager && window.viewManager.currentViewName === 'vm') {
+                    setTimeout(() => {
+                        viewManager.switchView('vm', { 
+                            id: this.vmId, 
+                            name: this.vmName, 
+                            host: this.host 
+                        }, { skipHistory: true });
+                    }, 100);
+                }
+            } else {
+                const errorMsg = (result && result.detail) ? 
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                    'Failed to update VM';
+                this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
+            }
+        } catch (error) {
+            console.error('VM update error:', error);
+            this.messagesEl.innerHTML = `<div class="form-error">Failed to update VM: ${this.escapeHtml(error.message)}</div>`;
+        }
+    }
+}
+
+// OSS Attributions Overlay - Displays open source license information
+class OSSAttributionsOverlay extends BaseOverlay {
+    constructor(data = {}) {
+        super(data);
+        this.licenses = null;
+        this.loading = true;
+        this.error = null;
+    }
+
+    getTitle() {
+        return 'Open Source Licenses';
+    }
+
+    async render() {
+        // Fetch license data
+        await this.fetchLicenses();
+
+        if (this.loading) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-loading">Loading license information...</div>
+                </div>
+            `;
+        }
+
+        if (this.error) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-error">${this.escapeHtml(this.error)}</div>
+                </div>
+            `;
+        }
+
+        const packages = this.licenses?.packages || [];
+        const summary = this.licenses?.summary || {};
+
+        if (packages.length === 0) {
+            return `
+                <div class="oss-attributions">
+                    <div class="oss-empty">No license information available.</div>
+                </div>
+            `;
+        }
+
+        const pythonPackages = packages.filter(p => p.ecosystem === 'python');
+        const jsPackages = packages.filter(p => p.ecosystem === 'javascript');
+
+        return `
+            <div class="oss-attributions">
+                <div class="oss-intro">
+                    <p>This software includes open source components. We thank the authors and maintainers of these packages for their contributions to the open source community.</p>
+                    <div class="oss-summary">
+                        <span class="oss-summary-item"><strong>${summary.total || packages.length}</strong> packages</span>
+                        <span class="oss-summary-divider">•</span>
+                        <span class="oss-summary-item"><strong>${summary.python || pythonPackages.length}</strong> Python</span>
+                        <span class="oss-summary-divider">•</span>
+                        <span class="oss-summary-item"><strong>${summary.javascript || jsPackages.length}</strong> JavaScript</span>
+                    </div>
+                </div>
+
+                ${pythonPackages.length > 0 ? `
+                    <div class="oss-section">
+                        <h3 class="oss-section-title">Python Packages</h3>
+                        <div class="oss-package-list">
+                            ${pythonPackages.map(pkg => this.renderPackage(pkg)).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+
+                ${jsPackages.length > 0 ? `
+                    <div class="oss-section">
+                        <h3 class="oss-section-title">JavaScript Packages</h3>
+                        <div class="oss-package-list">
+                            ${jsPackages.map(pkg => this.renderPackage(pkg)).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+
+    renderPackage(pkg) {
+        const name = this.escapeHtml(pkg.name || 'Unknown');
+        const version = this.escapeHtml(pkg.version || '');
+        const license = this.escapeHtml(pkg.license || 'Unknown');
+        const author = pkg.author ? this.escapeHtml(pkg.author) : null;
+        const url = pkg.url || '';
+
+        const nameDisplay = url
+            ? `<a href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="oss-package-link">${name}</a>`
+            : `<span class="oss-package-name">${name}</span>`;
+
+        return `
+            <div class="oss-package">
+                <div class="oss-package-header">
+                    ${nameDisplay}
+                    ${version ? `<span class="oss-package-version">${version}</span>` : ''}
+                </div>
+                <div class="oss-package-details">
+                    <span class="oss-package-license">${license}</span>
+                    ${author ? `<span class="oss-package-author">by ${author}</span>` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    async fetchLicenses() {
+        this.loading = true;
+        this.error = null;
+
+        try {
+            const response = await fetch('/api/v1/oss-licenses', {
+                credentials: 'same-origin',
+            });
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch license information: ${response.statusText}`);
+            }
+
+            this.licenses = await response.json();
+        } catch (error) {
+            console.error('Failed to fetch OSS licenses:', error);
+            this.error = 'Unable to load license information. Please try again later.';
+        } finally {
+            this.loading = false;
+        }
     }
 }
 

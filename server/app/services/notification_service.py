@@ -2,7 +2,7 @@
 import logging
 import uuid
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..core.models import (
@@ -59,7 +59,8 @@ class NotificationService:
             return None
 
         if self._startup_config_notified:
-            logger.debug("Startup configuration notification already sent; skipping")
+            logger.debug(
+                "Startup configuration notification already sent; skipping")
             return None
 
         if not result or (not getattr(result, "has_errors", False) and not getattr(result, "has_warnings", False)):
@@ -84,10 +85,15 @@ class NotificationService:
                 lines.append(message)
 
         notification_message = "\n".join(lines)
-        level = NotificationLevel.ERROR if getattr(result, "has_errors", False) else NotificationLevel.WARNING
+        level = NotificationLevel.ERROR if getattr(
+            result, "has_errors", False) else NotificationLevel.WARNING
+
+        # Set appropriate title based on severity
+        title = "Configuration errors on startup" if getattr(
+            result, "has_errors", False) else "Configuration warnings on startup"
 
         notification = self.create_notification(
-            title="Configuration warnings on startup",
+            title=title,
             message=notification_message,
             level=level,
             category=NotificationCategory.SYSTEM,
@@ -107,7 +113,7 @@ class NotificationService:
         """Initialize with dummy notifications for development."""
         logger.info("Initializing dummy notifications for development")
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         dummy_notifications = [
             Notification(
                 id=str(uuid.uuid4()),
@@ -186,7 +192,7 @@ class NotificationService:
         category: NotificationCategory,
         related_entity: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> Notification:
+    ) -> Optional[Notification]:
         """Create a new notification."""
         if not self._initialized:
             logger.warning(
@@ -199,7 +205,7 @@ class NotificationService:
             message=message,
             level=level,
             category=category,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             read=False,
             related_entity=related_entity,
             metadata=metadata or {},
@@ -241,7 +247,8 @@ class NotificationService:
                 title=title,
                 message=message,
                 level=level,
-                metadata={**self.notifications[notification_id].metadata, **metadata},
+                metadata={
+                    **self.notifications[notification_id].metadata, **metadata},
             )
             if updated:
                 return updated
@@ -364,10 +371,11 @@ class NotificationService:
             }
             if extra:
                 payload.update(extra)
-            await self._websocket_manager.broadcast(
-                payload,
-                topic='notifications',
-            )
+            if self._websocket_manager is not None:
+                await self._websocket_manager.broadcast(
+                    payload,
+                    topic='notifications',
+                )
         except Exception as e:
             logger.error(f'Error broadcasting notification via WebSocket: {e}')
 
@@ -394,7 +402,7 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Error handling broadcast task exception: {e}")
 
-    def create_host_unreachable_notification(self, hostname: str, error: str) -> Notification:
+    def create_host_unreachable_notification(self, hostname: str, error: str) -> Optional[Notification]:
         """Create a notification for when a host becomes unreachable."""
         return self.create_notification(
             title="Host unreachable",
@@ -404,7 +412,7 @@ class NotificationService:
             related_entity=hostname
         )
 
-    def create_host_reconnected_notification(self, hostname: str) -> Notification:
+    def create_host_reconnected_notification(self, hostname: str) -> Optional[Notification]:
         """Create a notification for when a host reconnects."""
         return self.create_notification(
             title="Host reconnected",
@@ -414,7 +422,7 @@ class NotificationService:
             related_entity=hostname
         )
 
-    def create_job_completed_notification(self, job_type: str, target: str, success: bool) -> Notification:
+    def create_job_completed_notification(self, job_type: str, target: str, success: bool) -> Optional[Notification]:
         """Create a notification for job completion."""
         if success:
             return self.create_notification(
@@ -568,7 +576,7 @@ class NotificationService:
 
     def cleanup_old_notifications(self, max_age_days: int = 30) -> int:
         """Clean up notifications older than specified days. Returns count of deleted notifications."""
-        cutoff_date = datetime.utcnow() - timedelta(days=max_age_days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=max_age_days)
         to_delete = []
 
         for notification_id, notification in self.notifications.items():

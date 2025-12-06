@@ -12,3 +12,14 @@ itsdangerous==2.1.2
 websockets>=12.0,<16.0
 PyYAML==6.0.1
 psutil==5.9.8
+krb5==0.5.1
+gssapi==1.9.0
+pyspnego==0.11.2
+ldap3==2.9.1
+dnspython==2.6.1
+
+# Development and testing tools
+mypy==1.13.0
+types-PyYAML==6.0.12.20240917
+types-psutil
+types-psutil==7.1.1.20251122
