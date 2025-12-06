@@ -1377,9 +1377,7 @@ class InventoryService:
                 memory_gb = 0.0
             
             vm_id = self._coerce_str(vm_data.get("Id"))
-            os_name = self._coerce_str(
-                vm_data.get("OperatingSystem") or vm_data.get("OsName")
-            )
+            os_name = self._coerce_str(vm_data.get("OperatingSystem"))
             os_family = self._infer_os_family(os_name)
             generation = self._coerce_int(vm_data.get("Generation"), default=None)
             version = self._coerce_str(vm_data.get("Version"))
@@ -1564,39 +1562,22 @@ class InventoryService:
         return None
 
     def _normalise_ip_list(self, value: Any) -> List[str]:
-        if value is None:
-            return []
-
-        if isinstance(value, str):
-            candidates = [part.strip() for part in value.split(",")]
-        elif isinstance(value, list):
-            candidates = value
-        else:
-            logger.debug("Unexpected IP collection type: %s", type(value))
+        """Parse IP addresses from a list of strings."""
+        if not isinstance(value, list):
             return []
 
         ips = []
-        for candidate in candidates:
-            if candidate is None:  # Defensive: handle None in list
-                continue  # type: ignore[unreachable]
-            try:
-                text = str(candidate).strip()
-            except Exception:  # pragma: no cover - defensive
+        seen: set[str] = set()
+        for ip in value:
+            if not isinstance(ip, str):
                 continue
-            if not text:
+            ip = ip.strip()
+            if not ip or ip.lower().startswith("fe80:"):
                 continue
-            if text.lower().startswith("fe80:"):
-                continue
-            ips.append(text)
-
-        # Preserve order but remove duplicates
-        seen = set()
-        unique_ips = []
-        for ip in ips:
             if ip not in seen:
                 seen.add(ip)
-                unique_ips.append(ip)
-        return unique_ips
+                ips.append(ip)
+        return ips
 
     def _collect_ips_from_networks(self, adapters: List[VMNetworkAdapter]) -> List[str]:
         ips: List[str] = []
@@ -1615,25 +1596,19 @@ class InventoryService:
             if not isinstance(adapter_data, dict):
                 continue
 
-            ip_addresses = self._normalise_ip_list(
-                adapter_data.get("IPAddresses") or adapter_data.get("ip_addresses")
-            )
+            ip_addresses = self._normalise_ip_list(adapter_data.get("IPAddresses"))
 
             adapters.append(
                 VMNetworkAdapter(
                     id=self._coerce_str(adapter_data.get("Id")),
                     name=adapter_data.get("Name"),
-                    adapter_name=adapter_data.get("AdapterName") or adapter_data.get("Name"),
+                    adapter_name=adapter_data.get("AdapterName"),
                     network=adapter_data.get("Network"),
-                    virtual_switch=adapter_data.get("VirtualSwitch")
-                    or adapter_data.get("virtual_switch")
-                    or adapter_data.get("SwitchName"),
+                    virtual_switch=adapter_data.get("VirtualSwitch"),
                     vlan=self._coerce_str(adapter_data.get("Vlan")),
                     network_name=self._coerce_str(adapter_data.get("NetworkName")),
                     ip_addresses=ip_addresses,
-                    mac_address=self._coerce_str(
-                        adapter_data.get("MacAddress") or adapter_data.get("MACAddress")
-                    ),
+                    mac_address=self._coerce_str(adapter_data.get("MacAddress")),
                 )
             )
 
@@ -1653,12 +1628,9 @@ class InventoryService:
                     id=self._coerce_str(disk_data.get("Id")),
                     name=disk_data.get("Name"),
                     path=disk_data.get("Path"),
-                    location=disk_data.get("Location") or disk_data.get("Path"),
-                    type=disk_data.get("DiskType") or disk_data.get("Type"),
-                    size_gb=self._coerce_float(
-                        disk_data.get("CapacityGB") or disk_data.get("SizeGB"),
-                        default=None,
-                    ),
+                    location=disk_data.get("Location"),
+                    type=disk_data.get("DiskType"),
+                    size_gb=self._coerce_float(disk_data.get("CapacityGB"), default=None),
                     file_size_gb=self._coerce_float(
                         disk_data.get("FileSizeGB"), default=None
                     ),
