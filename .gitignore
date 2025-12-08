@@ -25,3 +25,4 @@ next-ui/build/
 testResults.xml
 *.trx
 coverage.xml
+server/.env

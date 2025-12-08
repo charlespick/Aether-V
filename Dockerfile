@@ -1,5 +1,11 @@
-# Multi-stage build for Aether-V Server Docker image
-# Provisioning ISOs are rebuilt via `make build` before this Dockerfile runs
+# Multi-stage build for Aether-V application
+# 
+# Build prerequisites (run via `make build-assets`):
+#   - ISOs built via build-tools container
+#   - next-ui built with npm (Svelte + static assets)
+#   - Icons and Swagger UI extracted from next-ui/node_modules
+#
+# This Dockerfile builds the production Python FastAPI server with all assets bundled.
 
 # Stage 1: Base image with Python
 FROM python:3.11-slim AS base
@@ -11,63 +17,6 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
-
-# Stage 1.5: Minimal dev shell - just for code editing in devcontainer
-# Uses Microsoft's universal base with Node, Python, PowerShell pre-installed
-FROM mcr.microsoft.com/devcontainers/universal:2-linux AS dev-shell
-
-# Set up a nice terminal prompt with git branch info
-RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"; }' >> /root/.bashrc && \
-    echo 'export PS1="\[\033[01;32m\]Aether-V\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\[\033[01;33m\] (\$(parse_git_branch))\[\033[00m\]$ "' >> /root/.bashrc
-
-# Copy requirements for reference (packages installed at runtime in entrypoint)
-COPY server/requirements.txt /tmp/requirements.txt
-
-WORKDIR /workspace
-
-# Stage 2: Full development image with all tooling
-# This is only built when you run `make dev-up` or `make build`
-FROM base AS development
-
-# Install system dependencies for development (includes build tools)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    make \
-    python3-dev \
-    libkrb5-dev \
-    libsasl2-dev \
-    krb5-user \
-    libkrb5-3 \
-    libgssapi-krb5-2 \
-    libk5crypto3 \
-    libcomerr2 \
-    git \
-    curl \
-    vim \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install all dependencies (including dev tools)
-COPY server/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir \
-    pytest \
-    pytest-asyncio \
-    pytest-cov \
-    httpx \
-    black \
-    flake8
-
-# Copy Schemas and Assets for development
-COPY Schemas /app/Schemas
-COPY Assets /app/Assets
-
-# Set up working directory
-WORKDIR /app
-
-# Default command for development (with hot reload)
-CMD ["python", "-m", "uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
 
 # Stage 2: Dependencies
 FROM base AS dependencies
@@ -179,8 +128,8 @@ RUN apt-get update && \
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt pip-licenses
 
-# Copy package.json and install npm dependencies for license-checker
-COPY server/package.json server/package-lock.json ./
+# Copy next-ui package.json which now contains all frontend dependencies
+COPY next-ui/package.json next-ui/package-lock.json ./
 RUN npm install --omit=dev && \
     npm install --save-dev license-checker
 

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Icon from './Icon.svelte';
+	
 	let isProfileOpen = $state(false);
 	
 	function toggleProfile() {
@@ -17,29 +19,21 @@
 	
 	<div class="header-center">
 		<div class="search-container">
-			<svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-				<circle cx="11" cy="11" r="8"></circle>
-				<path d="m21 21-4.35-4.35"></path>
-			</svg>
+			<div class="search-icon-wrapper">
+				<Icon name="search" size={18} class="search-icon" />
+			</div>
 			<input class="search" placeholder="Search Everywhere" />
 		</div>
 	</div>
 	
 	<div class="header-right">
 		<button class="icon-btn" title="Notifications">
-			<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-				<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-				<path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-			</svg>
+			<Icon name="notifications" size={24} />
 		</button>
 		
 		<div class="profile-menu">
 			<button class="icon-btn profile-btn" onclick={toggleProfile} title="Account">
-				<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-					<circle cx="12" cy="12" r="10"></circle>
-					<circle cx="12" cy="10" r="3"></circle>
-					<path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"></path>
-				</svg>
+				<Icon name="account_circle" size={24} />
 			</button>
 			
 			{#if isProfileOpen}
@@ -110,14 +104,13 @@
 		width: 100%;
 	}
 
-	.search-icon {
+	.search-icon-wrapper {
 		position: absolute;
 		left: 0.75rem;
 		top: 50%;
 		transform: translateY(-50%);
 		color: var(--text-tertiary);
-		width: 18px;
-		height: 18px;
+		pointer-events: none;
 	}
 
 	.search {

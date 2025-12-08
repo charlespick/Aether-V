@@ -3,9 +3,10 @@ import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = ROOT.parent
 STATIC_ICONS_DIR = ROOT / "app" / "static" / "icons"
 ICON_SOURCES = [
-    (ROOT / "node_modules" / "@material-symbols" / "svg-400", {
+    (REPO_ROOT / "next-ui" / "node_modules" / "@material-symbols" / "svg-400", {
         "round": "rounded",
     }),
 ]

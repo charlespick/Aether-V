@@ -1,12 +1,11 @@
-.PHONY: help run build build-assets build-isos build-next-ui build-static test test-python test-powershell test-roundtrip clean
+.PHONY: help dev run build build-assets build-isos build-next-ui build-static test test-python test-powershell test-roundtrip clean
 
 help:
 	@echo "Aether-V - VM Management Platform"
 	@echo ""
 	@echo "🚀 Development:"
-	@echo "  make dev-up        - Start development server with hot reload (docker compose)"
-	@echo "  make dev-down      - Stop development server"
-	@echo "  make run           - Run production image (after make build)"
+	@echo "  make dev           - Start local development server (Python + hot reload)"
+	@echo "  make run           - Run production Docker image (after make build)"
 	@echo ""
 	@echo "🔨 Build & Assets:"
 	@echo "  make build-assets  - Build all assets (ISOs + next-ui + static)"
@@ -24,22 +23,15 @@ help:
 	@echo "🔧 Utility:"
 	@echo "  make clean         - Clean up temporary files and caches"
 
-# Development - uses docker-compose for hot reload
-dev-up:
-	@echo "🚀 Starting development server with hot reload..."
-	docker compose -f docker-compose.dev.yml up -d --build app-server
+# Development - local Python server with hot reload
+dev:
+	@echo "🚀 Starting local development server..."
+	@echo "   Web UI: http://localhost:8000"
+	@echo "   API Docs: http://localhost:8000/docs"
 	@echo ""
-	@echo "✅ Development server running!"
-	@echo "   - Web UI: http://localhost:8000"
-	@echo "   - API Docs: http://localhost:8000/docs"
-	@echo ""
-	@echo "   make dev-down   - Stop server"
+	cd server && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-dev-down:
-	@echo "🛑 Stopping development environment..."
-	docker compose -f docker-compose.dev.yml down
-
-# Production - just run the built image
+# Production - run the built Docker image
 run:
 	@echo "� Running production image..."
 	@if ! docker image inspect aetherv:latest >/dev/null 2>&1; then \
@@ -51,23 +43,18 @@ run:
 		--name aetherv \
 		aetherv:latest
 
-dev-test:
-	@echo "🧪 Running tests..."
-	pytest server/tests/ -v
-
-# Build assets commands - run directly (tools already in devcontainer/CI)
+# Build assets commands
 build-assets: build-isos build-next-ui build-static
 	@echo "✅ All assets built successfully"
 
 build-isos:
-	@echo "� Building provisioning ISOs..."
-	@docker build -f build-tools/Dockerfile -t aetherv-build-tools:latest build-tools
+	@echo "🔨 Building provisioning ISOs..."
+	@docker pull ghcr.io/charlespick/aetherv-build-tools:latest || \
+		docker build -f build-tools/Dockerfile -t ghcr.io/charlespick/aetherv-build-tools:latest build-tools
 	@docker run --rm \
-		-v "$(PWD)/Assets:/workspace/Assets" \
-		-v "$(PWD)/build-tools:/workspace/build-tools" \
-		-v "$(PWD)/server/app/static/downloads:/workspace/output" \
-		aetherv-build-tools:latest \
-		/workspace/build-tools/Create-BootableISO.ps1 -All
+		-v "$(PWD):/github/workspace" \
+		ghcr.io/charlespick/aetherv-build-tools:latest \
+		/github/workspace/Scripts/Build-ProvisioningISOs.ps1
 	@echo "✅ ISOs built successfully"
 
 build-next-ui:
@@ -75,15 +62,15 @@ build-next-ui:
 	cd next-ui && npm ci && npm run build
 	@echo "✅ next-ui build complete"
 
-build-static:
-	@echo "🔨 Extracting static assets..."
-	cd server && npm install --omit=dev && python3 scripts/extract_icons.py && python3 scripts/extract_swagger_ui.py
+build-static: build-next-ui
+	@echo "🔨 Extracting static assets for Python UI..."
+	python3 server/scripts/extract_icons.py && python3 server/scripts/extract_swagger_ui.py
 	@echo "✅ Static assets extracted"
 
 # Production build
 build: build-assets
 	@echo "🐳 Building production Docker container..."
-	docker build -f server/Dockerfile --target application -t aetherv:latest .
+	docker build --target application -t aetherv:latest .
 	@echo "✅ Container built: aetherv:latest"
 
 # Testing - simple and unified

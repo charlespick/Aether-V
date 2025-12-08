@@ -3,7 +3,8 @@ import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SWAGGER_UI_SOURCE = ROOT / "node_modules" / "swagger-ui-dist"
+REPO_ROOT = ROOT.parent
+SWAGGER_UI_SOURCE = REPO_ROOT / "next-ui" / "node_modules" / "swagger-ui-dist"
 SWAGGER_UI_DEST = ROOT / "app" / "static" / "swagger-ui"
 
 # Files needed for Swagger UI to work
