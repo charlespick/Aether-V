@@ -49,7 +49,7 @@ help:
 # Development commands (container-based)
 dev-up:
 	@echo "🚀 Starting development environment..."
-	docker compose -f docker-compose.dev.yml up -d app
+	docker compose -f docker-compose.dev.yml up -d --build app-server
 	@echo ""
 	@echo "✅ Development server running!"
 	@echo "   - Web UI: http://localhost:8000"
@@ -67,14 +67,14 @@ dev-down:
 
 dev-shell:
 	@echo "🐚 Opening shell in development container..."
-	docker compose -f docker-compose.dev.yml exec app bash
+	docker compose -f docker-compose.dev.yml exec app-server bash
 
 dev-logs:
-	docker compose -f docker-compose.dev.yml logs -f app
+	docker compose -f docker-compose.dev.yml logs -f app-server
 
 dev-test:
 	@echo "🧪 Running tests in development container..."
-	docker compose -f docker-compose.dev.yml exec app pytest tests/ -v
+	docker compose -f docker-compose.dev.yml exec app-server pytest tests/ -v
 
 # Build assets commands (container-aware)
 build-assets: build-isos build-next-ui build-static

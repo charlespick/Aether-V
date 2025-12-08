@@ -39,45 +39,16 @@
 				"ms-python.python",
 				"ms-python.flake8",
 				"ms-python.black-formatter",
-				"ms-python.pylint",
-				"ms-toolsai.jupyter",
-				"ms-vscode.makefile-tools",
-				"redhat.vscode-yaml",
-				"ms-kubernetes-tools.vscode-kubernetes-tools",
-				"ms-vscode.powershell",
-				"bradlc.vscode-tailwindcss",
-				"esbenp.prettier-vscode",
-				"svelte.svelte-vscode",
-				"ms-vscode.vscode-json",
 				"GitHub.copilot",
-				"GitHub.copilot-chat"
+				"GitHub.copilot-chat",
+				"ms-vscode.makefile-tools"
 			]
 		}
 	},
 	
-	// Features to add to the dev container. More info: https://containers.dev/features
-	"features": {
-		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
-			"moby": false,
-			"installDockerBuildx": true,
-			"dockerDashComposeVersion": "v2"
-		},
-		"ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
-			"version": "latest",
-			"helm": "latest",
-			"minikube": "none"
-		},
-		"ghcr.io/devcontainers/features/node:1": {
-			"version": "20"
-		},
-		"ghcr.io/devcontainers/features/powershell:1": {
-			"version": "latest"
-		},
-		"ghcr.io/devcontainers/features/github-cli:1": {
-			"installDirectlyFromGitHubRelease": true,
-			"version": "latest"
-		}
-	},
+	// Minimal features - only Git CLI for version control
+	// Heavy tools (Docker, kubectl, Node, PowerShell) installed on-demand via make commands
+	"features": {},
 	
 	// Minimal setup - just configure git and create .env if needed
 	"onCreateCommand": {
@@ -86,7 +57,7 @@
 	
 	"postCreateCommand": {
 		"create-env": "[ ! -f /workspace/server/.env ] && cp /workspace/server/.env.example /workspace/server/.env || echo '.env already exists'",
-		"show-help": "echo '\n✅ DevContainer ready!\n\nQuick start:\n  make dev-up    - Start development server\n  make test-all  - Run all tests\n  make build-assets - Build ISOs and next-ui\n\nSee Makefile for all commands.\n'"
+		"show-help": "echo '\n✅ DevContainer ready for coding!\n\nPython packages are installing in the background...\n\nTo build and run the app:\n  make dev-up       - Build and start server (first time will take 3-5 min)\n  make test-all     - Run all tests\n  make build-assets - Build ISOs and next-ui\n\nInstall extra tools as needed:\n  Run \"make install-docker\" for Docker/kubectl\n  Run \"make install-node\" for Node.js/npm\n  Run \"make install-powershell\" for PowerShell\n\nSee Makefile for all commands.\n'"
 	},
 	
 	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root
@@ -94,7 +65,7 @@
 	
 	// Set environment variables
 	"remoteEnv": {
-		"PYTHONPATH": "/app",
+		"PYTHONPATH": "/workspace/server",
 		"PYTHONDONTWRITEBYTECODE": "1",
 		"PYTHONUNBUFFERED": "1"
 	},

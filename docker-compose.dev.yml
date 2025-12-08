@@ -1,7 +1,47 @@
 version: '3.8'
 
 services:
+  # Minimal dev shell for devcontainer - just for code editing
   app:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      target: dev-shell
+      args:
+        - GITHUB_REPOSITORY=${GITHUB_REPOSITORY:-charlespick/Aether-V}
+    image: aetherv:dev-shell
+    container_name: aetherv-dev
+    volumes:
+      # Mount entire workspace for code editing
+      - .:/workspace:cached
+      # Mount .env file
+      - ./server/.env:/workspace/server/.env:rw
+      # Persist pip packages across rebuilds
+      - pip-cache:/root/.cache/pip
+      - pip-installed:/usr/local/lib/python3.11/site-packages
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONPATH=/workspace/server
+      - DEV_MODE=1
+    entrypoint: ["/bin/bash", "-c"]
+    command: 
+      - |
+        # Install Python packages on first run for IntelliSense
+        if [ ! -f /root/.pip-installed ]; then
+          echo "📦 Installing Python packages for IntelliSense (one-time setup)..."
+          pip install --no-cache-dir -r /tmp/requirements.txt
+          pip install --no-cache-dir pytest pytest-asyncio pytest-cov httpx black flake8
+          touch /root/.pip-installed
+          echo "✅ Packages installed!"
+        fi
+        # Keep container running for devcontainer
+        sleep infinity
+    networks:
+      - aetherv-dev
+  
+  # Full application server - only used when running via `make dev-up`
+  app-server:
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -9,7 +49,7 @@ services:
       args:
         - GITHUB_REPOSITORY=${GITHUB_REPOSITORY:-charlespick/Aether-V}
     image: aetherv:dev
-    container_name: aetherv-dev
+    container_name: aetherv-server
     ports:
       - "8000:8000"
     volumes:
@@ -55,6 +95,10 @@ services:
 
 volumes:
   pip-cache:
+    driver: local
+  pip-installed:
+    driver: local
+  minikube-config:
     driver: local
 
 networks:

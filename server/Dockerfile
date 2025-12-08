@@ -12,7 +12,29 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Stage 1.5: Development image with full tooling
+# Stage 1.5: Minimal dev shell - just for code editing in devcontainer
+# Installs only what's needed for VS Code IntelliSense to work
+FROM base AS dev-shell
+
+# Minimal system packages for code editing
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up a nice terminal prompt with git branch info
+RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"; }' >> /root/.bashrc && \
+    echo 'export PS1="\[\033[01;32m\]Aether-V\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\[\033[01;33m\] (\$(parse_git_branch))\[\033[00m\]$ "' >> /root/.bashrc
+
+# Copy requirements for reference (packages installed at runtime in entrypoint)
+COPY server/requirements.txt /tmp/requirements.txt
+
+WORKDIR /workspace
+
+# Stage 2: Full development image with all tooling
+# This is only built when you run `make dev-up` or `make build`
 FROM base AS development
 
 # Install system dependencies for development (includes build tools)
