@@ -1,4 +1,4 @@
-.PHONY: help dev build run test clean deploy isos config-validate all
+.PHONY: help dev build run test clean deploy isos config-validate all next-ui
 
 POWERSHELL ?= pwsh
 
@@ -12,7 +12,8 @@ help:
 	@echo ""
 	@echo "Build & Deploy:"
 	@echo "  make isos          - Build provisioning ISOs for Windows/Linux"
-	@echo "  make build         - Build Docker container (includes ISOs)"
+	@echo "  make next-ui       - Build next-ui Svelte application"
+	@echo "  make build         - Build Docker container (includes ISOs + next-ui)"
 	@echo "  make run           - Run container locally"
 	@echo ""
 	@echo "Kubernetes:"
@@ -28,7 +29,12 @@ help:
 dev:
 	@./server/dev.sh
 
-build: isos
+next-ui:
+	@echo "Building next-ui Svelte application..."
+	@cd next-ui && npm install && npm run build
+	@echo "✅ next-ui build complete"
+
+build: isos next-ui
 	docker build -f server/Dockerfile -t aetherv:latest .
 
 isos:
@@ -79,7 +85,7 @@ test:
 	@echo ""
 	@echo "✅ All test suites completed successfully"
 
-all: isos build
+all: isos next-ui build
 	@echo "✅ All components built successfully"
 
 config-validate:
@@ -105,6 +111,7 @@ clean:
 	find . -type f -name "*.pyo" -delete
 	find . -type f -name "*.log" -delete
 	rm -rf server/.pytest_cache server/htmlcov server/.coverage
+	rm -rf next-ui/.svelte-kit next-ui/build 2>/dev/null || true
 	rm -rf build/ 2>/dev/null || true
 	rm -rf ISOs/ 2>/dev/null || true
 	@echo "✅ Cleanup complete"

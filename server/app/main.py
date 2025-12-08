@@ -411,6 +411,22 @@ else:  # pragma: no cover - filesystem dependent
         AGENT_ARTIFACTS_DIR,
     )
 
+# Mount next-ui build directory
+next_ui_candidates = [
+    PROJECT_ROOT / "next-ui" / "build",  # Development layout
+    SERVER_DIR / "next-ui-build",  # Production/container layout
+]
+next_ui_dir = next((path for path in next_ui_candidates if path.is_dir()), None)
+
+if next_ui_dir:
+    app.mount("/next-ui", StaticFiles(directory=str(next_ui_dir), html=True), name="next-ui")
+    logger.info("Next-UI mounted at /next-ui from %s", next_ui_dir)
+else:  # pragma: no cover - filesystem dependent
+    logger.info(
+        "Next-UI build directory not found in expected locations %s; next-ui routes disabled",
+        next_ui_candidates,
+    )
+
 # Add security headers and audit logging middleware
 
 
