@@ -19,7 +19,7 @@
 		}
 	},
 	
-	"postCreateCommand": "pip install -r server/requirements.txt && pip install pytest black flake8",
+	"postCreateCommand": "bash .devcontainer/setup.sh",
 	
 	"remoteEnv": {
 		"PYTHONPATH": "${containerWorkspaceFolder}/server"
