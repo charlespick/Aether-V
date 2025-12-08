@@ -34,7 +34,7 @@ help:
 
 # Development commands (container-based)
 dev-up:
-	@echo "🚀 Starting development environment..."
+	@echo "🚀 Starting development server..."
 	docker compose -f docker-compose.dev.yml up -d --build app-server
 	@echo ""
 	@echo "✅ Development server running!"
@@ -44,7 +44,6 @@ dev-up:
 	@echo ""
 	@echo "📝 Useful commands:"
 	@echo "   make dev-logs   - View server logs"
-	@echo "   make dev-shell  - Open shell in container"
 	@echo "   make dev-down   - Stop server"
 
 dev-down:
@@ -52,50 +51,46 @@ dev-down:
 	docker compose -f docker-compose.dev.yml down
 
 dev-shell:
-	@echo "🐚 Opening shell in development container..."
+	@echo "🐚 Opening shell in app server container..."
 	docker compose -f docker-compose.dev.yml exec app-server bash
 
 dev-logs:
 	docker compose -f docker-compose.dev.yml logs -f app-server
 
 dev-test:
-	@echo "🧪 Running tests in development container..."
-	docker compose -f docker-compose.dev.yml exec app-server pytest tests/ -v
+	@echo "🧪 Running tests..."
+	pytest server/tests/ -v
 
 # Build assets commands (container-aware)
 build-assets: build-isos build-next-ui build-static
 	@echo "✅ All assets built successfully"
 
 build-isos:
+	@echo "🔨 Building provisioning ISOs..."
 ifeq ($(IN_CONTAINER),1)
-	@echo "Building ISOs (in container)..."
 	@pwsh -NoLogo -NoProfile -File ./Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs
 else
-	@echo "🔨 Building provisioning ISOs using build-tools container..."
 	@$(DOCKER_RUN_BUILD_TOOLS) pwsh -NoLogo -NoProfile -File Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs
-	@echo "✅ ISOs built successfully"
 endif
+	@echo "✅ ISOs built successfully"
 
 build-next-ui:
+	@echo "🔨 Building next-ui Svelte application..."
 ifeq ($(IN_CONTAINER),1)
-	@echo "Building next-ui (in container)..."
 	@cd next-ui && npm ci && npm run build
 else
-	@echo "🔨 Building next-ui Svelte application using build-tools container..."
 	@$(DOCKER_RUN_BUILD_TOOLS) bash -c "cd next-ui && npm ci && npm run build"
-	@echo "✅ next-ui build complete"
 endif
+	@echo "✅ next-ui build complete"
 
 build-static:
+	@echo "🔨 Extracting static assets..."
 ifeq ($(IN_CONTAINER),1)
-	@echo "Extracting static assets (in container)..."
 	@cd server && npm install --omit=dev && python3 scripts/extract_icons.py && python3 scripts/extract_swagger_ui.py
 else
-	@echo "🔨 Extracting static assets using development container..."
-	@docker compose -f docker-compose.dev.yml run --rm app bash -c \
-		"cd /workspace/server && npm install --omit=dev && python scripts/extract_icons.py && python scripts/extract_swagger_ui.py"
-	@echo "✅ Static assets extracted"
+	@$(DOCKER_RUN_BUILD_TOOLS) bash -c "cd server && npm install --omit=dev && python3 scripts/extract_icons.py && python3 scripts/extract_swagger_ui.py"
 endif
+	@echo "✅ Static assets extracted"
 
 # Production build
 build: build-assets
@@ -103,24 +98,26 @@ build: build-assets
 	docker build -f server/Dockerfile --target production -t aetherv:latest .
 	@echo "✅ Container built: aetherv:latest"
 
-# Testing commands (container-based)
+# Testing commands
 test-all: test-python test-powershell test-roundtrip
 	@echo ""
 	@echo "✅ All test suites completed successfully"
 
 test-python:
 	@echo "🧪 Running Python tests..."
-	@docker compose -f docker-compose.dev.yml run --rm app \
-		pytest tests/ --cov=app --cov-report=term-missing -v
+	@cd server && pytest tests/ --cov=app --cov-report=term-missing -v
 
 test-powershell:
 	@echo "🧪 Running PowerShell tests..."
+ifeq ($(IN_CONTAINER),1)
+	@pwsh -NoProfile -Command "Invoke-Pester -Path Powershell/tests -CI"
+else
 	@$(DOCKER_RUN_BUILD_TOOLS) pwsh -NoProfile -Command "Invoke-Pester -Path Powershell/tests -CI"
+endif
 
 test-roundtrip:
 	@echo "🧪 Running protocol round-trip tests..."
-	@docker compose -f docker-compose.dev.yml run --rm app \
-		pytest tests/test_resource_operations.py tests/test_noop_operations.py -v
+	@cd server && PYTHONPATH=. pytest tests/test_resource_operations.py tests/test_noop_operations.py -v
 
 # Cleanup
 clean:

@@ -1,78 +1,27 @@
 {
-	"name": "Aether-V Server",
-	"dockerComposeFile": "../docker-compose.dev.yml",
-	"service": "app",
-	"workspaceFolder": "/workspace",
+	"name": "Aether-V",
 	
-	// Use 'forwardPorts' to make a list of ports inside the container available locally
+	// Let Codespaces use its default cached image (fastest possible)
+	// This is equivalent to having no devcontainer.json at all
+	
 	"forwardPorts": [8000],
-	"portsAttributes": {
-		"8000": {
-			"label": "FastAPI Server",
-			"onAutoForward": "notify"
-		}
-	},
 	
-	// Configure tool-specific properties
 	"customizations": {
 		"vscode": {
 			"settings": {
-				"python.defaultInterpreterPath": "/usr/local/bin/python",
-				"python.linting.enabled": true,
-				"python.linting.pylintEnabled": false,
-				"python.linting.flake8Enabled": true,
-				"python.formatting.provider": "black",
-				"python.formatting.blackPath": "/usr/local/bin/black",
-				"python.linting.flake8Path": "/usr/local/bin/flake8",
-				"python.testing.pytestEnabled": true,
-				"python.testing.pytestPath": "/usr/local/bin/pytest",
-				"editor.formatOnSave": true,
-				"files.exclude": {
-					"**/__pycache__": true,
-					"**/*.pyc": true,
-					"**/venv": true,
-					"**/.venv": true,
-					"**/.pytest_cache": true
-				}
+				"python.defaultInterpreterPath": "/usr/local/python/current/bin/python",
+				"editor.formatOnSave": true
 			},
 			"extensions": [
 				"ms-python.python",
-				"ms-python.flake8",
-				"ms-python.black-formatter",
-				"GitHub.copilot",
-				"GitHub.copilot-chat",
-				"ms-vscode.makefile-tools"
+				"GitHub.copilot"
 			]
 		}
 	},
 	
-	// Minimal features - only Git CLI for version control
-	// Heavy tools (Docker, kubectl, Node, PowerShell) installed on-demand via make commands
-	"features": {},
+	"postCreateCommand": "pip install -r server/requirements.txt && pip install pytest black flake8",
 	
-	// Minimal setup - just configure git and create .env if needed
-	"onCreateCommand": {
-		"setup-git-safe": "git config --global --add safe.directory /workspace"
-	},
-	
-	"postCreateCommand": {
-		"create-env": "[ ! -f /workspace/server/.env ] && cp /workspace/server/.env.example /workspace/server/.env || echo '.env already exists'",
-		"show-help": "echo '\n✅ DevContainer ready for coding!\n\nPython packages are installing in the background...\n\nTo build and run the app:\n  make dev-up       - Build and start server (first time will take 3-5 min)\n  make test-all     - Run all tests\n  make build-assets - Build ISOs and next-ui\n\nInstall extra tools as needed:\n  Run \"make install-docker\" for Docker/kubectl\n  Run \"make install-node\" for Node.js/npm\n  Run \"make install-powershell\" for PowerShell\n\nSee Makefile for all commands.\n'"
-	},
-	
-	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root
-	"remoteUser": "root",
-	
-	// Set environment variables
 	"remoteEnv": {
-		"PYTHONPATH": "/workspace/server",
-		"PYTHONDONTWRITEBYTECODE": "1",
-		"PYTHONUNBUFFERED": "1"
-	},
-	
-	// Run commands in the workspace container
-	"runServices": ["app"],
-	
-	// Shutdown action
-	"shutdownAction": "stopCompose"
+		"PYTHONPATH": "${containerWorkspaceFolder}/server"
+	}
 }
