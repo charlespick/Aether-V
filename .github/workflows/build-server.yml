@@ -46,19 +46,13 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Build all assets (ISOs, next-ui, and static files) in build-tools container
-      run: |
-        docker run --rm \
-          -v "${{ github.workspace }}:/github/workspace" \
-          -w /github/workspace \
-          ghcr.io/${{ github.repository_owner }}/aetherv-build-tools:latest \
-          bash -c "
-            pwsh Scripts/Build-ProvisioningISOs.ps1 -OutputPath ISOs &&
-            cd next-ui && npm ci && npm run build && cd .. &&
-            cd server && npm install --omit=dev && 
-            python3 scripts/extract_icons.py && 
-            python3 scripts/extract_swagger_ui.py
-          "
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Build all assets using Makefile
+      run: make build-assets
     
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
