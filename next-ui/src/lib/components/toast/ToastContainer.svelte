@@ -1,36 +1,9 @@
 <script lang="ts">
-	import { writable } from 'svelte/store';
-
-	interface Toast {
-		id: number;
-		type: 'success' | 'error' | 'warning' | 'info';
-		message: string;
-		duration?: number;
-	}
-
-	let toasts = writable<Toast[]>([]);
-	let nextId = 0;
-
-	export function addToast(type: Toast['type'], message: string, duration = 3000) {
-		const id = nextId++;
-		toasts.update(t => [...t, { id, type, message, duration }]);
-		
-		if (duration > 0) {
-			setTimeout(() => {
-				removeToast(id);
-			}, duration);
-		}
-		
-		return id;
-	}
-
-	export function removeToast(id: number) {
-		toasts.update(t => t.filter(toast => toast.id !== id));
-	}
+	import { toastStore } from '$lib/stores/toastStore';
 </script>
 
 <div class="toast-container">
-	{#each $toasts as toast (toast.id)}
+	{#each $toastStore as toast (toast.id)}
 		<div class="toast" data-type={toast.type}>
 			<div class="toast-icon">
 				{#if toast.type === 'success'}
@@ -58,7 +31,7 @@
 				{/if}
 			</div>
 			<div class="toast-message">{toast.message}</div>
-			<button class="toast-close" onclick={() => removeToast(toast.id)}>
+			<button class="toast-close" onclick={() => toastStore.removeToast(toast.id)}>
 				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
 					<line x1="18" y1="6" x2="6" y2="18"></line>
 					<line x1="6" y1="6" x2="18" y2="18"></line>

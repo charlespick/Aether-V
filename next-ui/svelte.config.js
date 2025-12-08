@@ -10,10 +10,13 @@ const config = {
 		adapter: adapter({
 			pages: 'build',
 			assets: 'build',
-			fallback: 'index.html',
+			fallback: 'index.html',  // SPA mode - all routes handled by client-side router
 			precompress: false,
 			strict: true
-		})
+		}),
+		paths: {
+			base: '/next-ui'  // Set base path to match FastAPI mount point
+		}
 	}
 };
 

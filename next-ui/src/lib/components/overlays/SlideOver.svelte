@@ -1,26 +1,21 @@
 <script lang="ts">
 	interface SlideOverProps {
-		isOpen?: boolean;
-		onClose?: () => void;
+		isOpen: boolean;
+		onClose: () => void;
 		title?: string;
 		children?: any;
 	}
 
 	let {
-		isOpen = $bindable(false),
-		onClose = () => {},
+		isOpen = false,
+		onClose,
 		title = 'Details',
 		children
 	}: SlideOverProps = $props();
 
-	function handleClose() {
-		isOpen = false;
-		onClose();
-	}
-
 	function handleBackdropClick(e: MouseEvent) {
 		if (e.target === e.currentTarget) {
-			handleClose();
+			onClose();
 		}
 	}
 </script>
@@ -30,7 +25,7 @@
 		<div class="slideover">
 			<div class="slideover-header">
 				<h2>{title}</h2>
-				<button class="close-btn" onclick={handleClose}>
+				<button class="close-btn" onclick={onClose}>
 					<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor">
 						<line x1="18" y1="6" x2="6" y2="18"></line>
 						<line x1="6" y1="6" x2="18" y2="18"></line>
