@@ -13,6 +13,21 @@ if [ ! -f server/.env ]; then
     fi
 fi
 
+# Install PowerShell if not present (needed for ISO builds)
+if ! command -v pwsh &> /dev/null; then
+    echo "📦 Installing PowerShell..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq wget apt-transport-https software-properties-common > /dev/null 2>&1
+    wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+    sudo dpkg -i packages-microsoft-prod.deb > /dev/null 2>&1
+    rm packages-microsoft-prod.deb
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq powershell > /dev/null 2>&1
+    echo "✅ PowerShell installed"
+else
+    echo "✅ PowerShell already installed"
+fi
+
 # Install Python dependencies for IntelliSense
 echo "📦 Installing Python packages for IntelliSense..."
 pip install --no-cache-dir -r server/requirements.txt
