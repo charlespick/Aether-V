@@ -64,7 +64,28 @@ build-next-ui:
 # Production build
 build: build-assets
 	@echo "🐳 Building production Docker container..."
-	docker build --target application -t aetherv:latest .
+	@GIT_COMMIT=$$(git rev-parse HEAD 2>/dev/null || echo "unknown"); \
+	GIT_REF=$$(git symbolic-ref -q --short HEAD 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown"); \
+	if git rev-parse --verify HEAD >/dev/null 2>&1; then \
+		if git symbolic-ref -q HEAD >/dev/null 2>&1; then \
+			GIT_STATE="branch"; \
+		else \
+			GIT_STATE="detached"; \
+		fi; \
+	else \
+		GIT_STATE="unknown"; \
+	fi; \
+	VERSION=$$(cat version 2>/dev/null || echo "unknown"); \
+	BUILD_TIME=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
+	BUILD_HOST=$$(hostname); \
+	docker build --target application -t aetherv:latest \
+		--build-arg GIT_COMMIT="$$GIT_COMMIT" \
+		--build-arg GIT_REF="$$GIT_REF" \
+		--build-arg GIT_STATE="$$GIT_STATE" \
+		--build-arg VERSION="$$VERSION" \
+		--build-arg BUILD_TIME="$$BUILD_TIME" \
+		--build-arg BUILD_HOST="$$BUILD_HOST" \
+		.
 	@echo "✅ Container built: aetherv:latest"
 
 # Testing - simple and unified

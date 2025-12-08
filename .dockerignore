@@ -73,7 +73,6 @@ package-lock.json
 # ============================================================================
 .svelte-kit/
 next-ui/.svelte-kit/
-next-ui/build/
 next-ui/node_modules/
 
 # Logs

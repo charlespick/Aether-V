@@ -37,96 +37,67 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Stage 3: Capture build metadata
 FROM base AS build-info
 
-# Accept GITHUB_REPOSITORY as a build argument
+# Accept build metadata as arguments (populated by Makefile or CI)
+ARG GIT_COMMIT="unknown"
+ARG GIT_REF="unknown"
+ARG GIT_STATE="unknown"
+ARG VERSION="unknown"
+ARG BUILD_TIME="unknown"
+ARG BUILD_HOST="unknown"
 ARG GITHUB_REPOSITORY
 
-WORKDIR /src
+WORKDIR /out
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends git && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY . /src
-
-RUN set -eux; \
-    mkdir -p /out; \
-    python - <<'PY'
-import datetime
+RUN python - <<'PY'
 import json
 import os
-import socket
-import subprocess
-from pathlib import Path
 
-
-def run_git(args):
-    try:
-        return subprocess.check_output(["git", *args], stderr=subprocess.STDOUT).decode().strip()
-    except Exception:
-        return None
-
-
+# Build metadata from arguments passed by make/CI
 metadata = {
-    "source_control": "unknown",
+    "version": os.environ.get("VERSION", "unknown"),
+    "source_control": "git" if os.environ.get("GIT_COMMIT", "unknown") != "unknown" else "unknown",
 }
 
-if Path(".git").exists():
-    metadata["source_control"] = "git"
-    commit = run_git(["rev-parse", "HEAD"])
-    if commit:
-        metadata["git_commit"] = commit
+# Add git metadata if available
+if os.environ.get("GIT_COMMIT") and os.environ["GIT_COMMIT"] != "unknown":
+    metadata["git_commit"] = os.environ["GIT_COMMIT"]
 
-    ref = run_git(["symbolic-ref", "-q", "--short", "HEAD"])
-    state = "branch" if ref else None
+if os.environ.get("GIT_REF") and os.environ["GIT_REF"] != "unknown":
+    metadata["git_ref"] = os.environ["GIT_REF"]
 
-    if not ref:
-        ref = run_git(["rev-parse", "--abbrev-ref", "HEAD"])
-        if ref == "HEAD":
-            state = "detached"
-        elif ref:
-            state = "branch"
+if os.environ.get("GIT_STATE") and os.environ["GIT_STATE"] != "unknown":
+    metadata["git_state"] = os.environ["GIT_STATE"]
 
-    if ref:
-        metadata["git_ref"] = ref
-    if state:
-        metadata["git_state"] = state
-else:
-    metadata["source_control"] = "absent"
-
-# Capture GitHub repository from CI environment
+# Add GitHub repository URL if provided
 github_repo = os.environ.get("GITHUB_REPOSITORY")
 if github_repo:
     metadata["github_repository"] = f"https://github.com/{github_repo}"
 
-version_file = Path("version")
-metadata["version"] = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "unknown"
+# Add build time and host
+if os.environ.get("BUILD_TIME") and os.environ["BUILD_TIME"] != "unknown":
+    metadata["build_time"] = os.environ["BUILD_TIME"]
 
-metadata["build_time"] = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-metadata["build_host"] = socket.gethostname()
+if os.environ.get("BUILD_HOST") and os.environ["BUILD_HOST"] != "unknown":
+    metadata["build_host"] = os.environ["BUILD_HOST"]
 
-output_path = Path("/out/build-info.json")
-output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+with open("/out/build-info.json", "w", encoding="utf-8") as f:
+    json.dump(metadata, f, indent=2)
 PY
 
 # Stage 4: Collect OSS license information
-FROM base AS license-collector
+FROM dependencies AS license-collector
 
 WORKDIR /src
 
-# Install Node.js for license-checker and build dependencies for Python wheels
+# Install Node.js for license-checker (Python deps already installed from dependencies stage)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     nodejs \
     npm \
-    gcc \
-    python3-dev \
-    libkrb5-dev \
-    libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install pip-licenses
-COPY server/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt pip-licenses
+# Install pip-licenses (requirements.txt already installed from dependencies stage)
+RUN pip install --no-cache-dir pip-licenses
 
 # Copy next-ui package.json which now contains all frontend dependencies
 COPY next-ui/package.json next-ui/package-lock.json ./
