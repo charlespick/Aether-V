@@ -95,7 +95,7 @@ endif
 # Production build
 build: build-assets
 	@echo "🐳 Building production Docker container..."
-	docker build -f server/Dockerfile --target production -t aetherv:latest .
+	docker build -f server/Dockerfile --target application -t aetherv:latest .
 	@echo "✅ Container built: aetherv:latest"
 
 # Testing commands
