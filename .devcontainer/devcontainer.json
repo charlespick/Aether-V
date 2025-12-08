@@ -58,7 +58,7 @@
 	// Features to add to the dev container. More info: https://containers.dev/features
 	"features": {
 		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
-			"moby": true,
+			"moby": false,
 			"installDockerBuildx": true,
 			"dockerDashComposeVersion": "v2"
 		},
