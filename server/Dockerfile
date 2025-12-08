@@ -13,16 +13,8 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Stage 1.5: Minimal dev shell - just for code editing in devcontainer
-# Installs only what's needed for VS Code IntelliSense to work
-FROM base AS dev-shell
-
-# Minimal system packages for code editing
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    make \
-    && rm -rf /var/lib/apt/lists/*
+# Uses Microsoft's universal base with Node, Python, PowerShell pre-installed
+FROM mcr.microsoft.com/devcontainers/universal:2-linux AS dev-shell
 
 # Set up a nice terminal prompt with git branch info
 RUN echo 'parse_git_branch() { git branch 2>/dev/null | grep "^*" | sed "s/* //"; }' >> /root/.bashrc && \

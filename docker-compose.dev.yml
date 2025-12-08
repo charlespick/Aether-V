@@ -98,8 +98,6 @@ volumes:
     driver: local
   pip-installed:
     driver: local
-  minikube-config:
-    driver: local
 
 networks:
   aetherv-dev:
