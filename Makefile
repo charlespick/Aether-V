@@ -1,4 +1,4 @@
-.PHONY: help dev run build build-assets build-isos build-next-ui build-static test test-python test-powershell test-roundtrip clean
+.PHONY: help dev run build build-assets build-isos build-next-ui test test-python test-powershell test-roundtrip clean
 
 help:
 	@echo "Aether-V - VM Management Platform"
@@ -8,14 +8,13 @@ help:
 	@echo "  make run           - Run production Docker image (after make build)"
 	@echo ""
 	@echo "🔨 Build & Assets:"
-	@echo "  make build-assets  - Build all assets (ISOs + next-ui + static)"
+	@echo "  make build-assets  - Build all assets (ISOs + next-ui)"
 	@echo "  make build-isos    - Build provisioning ISOs for Windows/Linux"
 	@echo "  make build-next-ui - Build next-ui Svelte application"
-	@echo "  make build-static  - Extract static assets (icons, Swagger UI)"
 	@echo "  make build         - Build production Docker image"
 	@echo ""
 	@echo "🧪 Testing:"
-	@echo "  make test-all      - Run complete test suite"
+	@echo "  make test          - Run complete test suite"
 	@echo "  make test-python   - Run Python tests only"
 	@echo "  make test-powershell - Run PowerShell tests only"
 	@echo "  make test-roundtrip - Run round-trip protocol tests"
@@ -44,7 +43,7 @@ run:
 		aetherv:latest
 
 # Build assets commands
-build-assets: build-isos build-next-ui build-static
+build-assets: build-isos build-next-ui
 	@echo "✅ All assets built successfully"
 
 build-isos:
@@ -61,11 +60,6 @@ build-next-ui:
 	@echo "🔨 Building next-ui Svelte application..."
 	cd next-ui && npm ci && npm run build
 	@echo "✅ next-ui build complete"
-
-build-static: build-next-ui
-	@echo "🔨 Extracting static assets for Python UI..."
-	python3 server/scripts/extract_icons.py && python3 server/scripts/extract_swagger_ui.py
-	@echo "✅ Static assets extracted"
 
 # Production build
 build: build-assets

@@ -14,7 +14,6 @@ ModuleAnalysisCache-*
 StartupProfileData-NonInteractive
 .vscode/
 server/node_modules/
-server/app/static/icons/
 
 # Next-UI Svelte build artifacts
 next-ui/node_modules/
