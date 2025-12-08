@@ -32,9 +32,33 @@ Aether-V enables automated, secure, and scalable management of Hyper-V virtual m
 
 ## Getting Started
 
+### Quick Start (Container-based Development)
+
+**Recommended for all developers:**
+
+1. **Clone and open in DevContainer:**
+   ```bash
+   git clone https://github.com/charlespick/Aether-V.git
+   cd Aether-V
+   # In VS Code: Reopen in Container
+   ```
+
+2. **Start development server:**
+   ```bash
+   make dev-up
+   ```
+
+3. **Access the application:**
+   - Web UI: http://localhost:8000
+   - API Docs: http://localhost:8000/docs
+   - Next UI: http://localhost:8000/next-ui
+
+**See [Docs/DEVELOPMENT.md](Docs/DEVELOPMENT.md) for complete development guide.**
+
 ### Prerequisites
 
-- Kubernetes cluster
+- Docker Desktop or Docker Engine with Docker Compose
+- Kubernetes cluster (for production deployment)
 - Hyper-V hosts with WinRM enabled and Kerberos authentication configured
 - OIDC provider (Azure AD recommended) or disable auth for development
 - Kerberos keytab for service account with WinRM access
@@ -42,24 +66,29 @@ Aether-V enables automated, secure, and scalable management of Hyper-V virtual m
 The orchestration service relies on the [`pypsrp`](https://github.com/jborean93/pypsrp) library for PowerShell Remoting Protocol
 (PSRP) communication. Ensure the configured WinRM endpoint permits PSRP sessions with Kerberos authentication.
 
-### Development Setup
+### Development Workflow
 
-1. Create a `.env` file with your settings (see below).
-2. Install dependencies:
-    ```bash
-    pip install -r server/requirements.txt
-    ```
-3. Run the full test suite:
-    ```bash
-    make test
-    ```
-    This runs all tests including pytest, mypy type checking, Node.js tests, PowerShell Pester tests, and protocol round-trip tests.
-4. Run locally:
-    ```bash
-    cd server
-    python -m app.main
-    ```
-5. Access the UI at [http://localhost:8000](http://localhost:8000) or API docs at `/docs`.
+```bash
+# Start development environment
+make dev-up
+
+# Run tests
+make test-all              # All test suites
+make test-python           # Python only
+make test-svelte           # Svelte type checking
+
+# Build assets
+make build-assets          # ISOs + next-ui + static files
+make build                 # Production container
+
+# View logs
+make dev-logs
+
+# Stop environment
+make dev-down
+```
+
+**Migrating from old setup?** See [Docs/MIGRATION.md](Docs/MIGRATION.md)
 
 ### Production Deployment
 

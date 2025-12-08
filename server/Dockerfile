@@ -12,6 +12,49 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Stage 1.5: Development image with full tooling
+FROM base AS development
+
+# Install system dependencies for development (includes build tools)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make \
+    python3-dev \
+    libkrb5-dev \
+    libsasl2-dev \
+    krb5-user \
+    libkrb5-3 \
+    libgssapi-krb5-2 \
+    libk5crypto3 \
+    libcomerr2 \
+    git \
+    curl \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install all dependencies (including dev tools)
+COPY server/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    pytest-cov \
+    httpx \
+    black \
+    flake8
+
+# Copy Schemas and Assets for development
+COPY Schemas /app/Schemas
+COPY Assets /app/Assets
+
+# Set up working directory
+WORKDIR /app
+
+# Default command for development (with hot reload)
+CMD ["python", "-m", "uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+
 # Stage 2: Dependencies
 FROM base AS dependencies
 
@@ -192,6 +235,10 @@ COPY Assets /app/Assets
 # These are built outside the Docker build by Scripts/Build-All-Assets.ps1
 COPY server/app/static/icons /app/app/static/icons
 COPY server/app/static/swagger-ui /app/app/static/swagger-ui
+
+# Copy pre-built next-ui Svelte application
+# Built outside Docker by build-tools container
+COPY next-ui/build /app/next-ui-build
 
 # Prepare unified agent artifact directory
 RUN mkdir -p /app/agent

@@ -14,41 +14,38 @@ jobs:
   python:
     name: Python tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: server
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build development container
+        uses: docker/build-push-action@v6
         with:
-          python-version: '3.11'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y krb5-user libkrb5-dev libsasl2-dev
-
-      - name: Create virtual environment
-        run: |
-          python -m venv .venv
-          
-      - name: Install dependencies
-        run: |
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -r requirements.txt pytest pytest-cov
+          context: .
+          file: ./server/Dockerfile
+          target: development
+          tags: aetherv:dev
+          load: true
+          cache-from: type=gha,scope=dev
+          cache-to: type=gha,mode=max,scope=dev
 
       - name: Run pytest with coverage
-        env:
-          PYTHONPATH: ${{ github.workspace }}/server
         run: |
-          .venv/bin/pytest --cov=app --cov-report=xml --cov-report=term-missing
+          docker run --rm \
+            -v ${{ github.workspace }}/server:/app \
+            -e PYTHONPATH=/app \
+            aetherv:dev \
+            pytest tests/ --cov=app --cov-report=xml --cov-report=term-missing
 
       - name: Run mypy type checking
         run: |
-          .venv/bin/mypy .
+          docker run --rm \
+            -v ${{ github.workspace }}/server:/app \
+            aetherv:dev \
+            mypy .
 
       - name: Upload coverage to Codecov
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -65,13 +62,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build development container
+        uses: docker/build-push-action@v6
         with:
-          node-version: '24'
+          context: .
+          file: ./server/Dockerfile
+          target: development
+          tags: aetherv:dev
+          load: true
+          cache-from: type=gha,scope=dev
 
       - name: Run Node tests
-        run: node --test 'tests/js/*.test.js'
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            aetherv:dev \
+            node --test 'tests/js/*.test.js'
 
   powershell:
     name: PowerShell tests
@@ -80,10 +90,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run Pester tests
-        shell: pwsh
+      - name: Run Pester tests using build-tools container
         run: |
-          Invoke-Pester -Path Powershell/tests -CI
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            ghcr.io/${{ github.repository_owner }}/aetherv-build-tools:latest \
+            pwsh -NoProfile -Command "Invoke-Pester -Path Powershell/tests -CI"
 
   roundtrip:
     name: Protocol round-trip tests
@@ -92,67 +105,53 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build development container
+        uses: docker/build-push-action@v6
         with:
-          python-version: '3.11'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y krb5-user libkrb5-dev libsasl2-dev
-
-      - name: Create virtual environment
-        working-directory: server
-        run: |
-          python -m venv .venv
-          
-      - name: Install dependencies
-        working-directory: server
-        run: |
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -r requirements.txt pytest
+          context: .
+          file: ./server/Dockerfile
+          target: development
+          tags: aetherv:dev
+          load: true
+          cache-from: type=gha,scope=dev
 
       - name: Run resource operations round-trip tests
-        working-directory: server
-        env:
-          PYTHONPATH: ${{ github.workspace }}/server
         run: |
-          .venv/bin/pytest tests/test_resource_operations.py -v
+          docker run --rm \
+            -v ${{ github.workspace }}/server:/app \
+            -e PYTHONPATH=/app \
+            aetherv:dev \
+            pytest tests/test_resource_operations.py -v
 
       - name: Run noop-test round-trip tests
-        working-directory: server
-        env:
-          PYTHONPATH: ${{ github.workspace }}/server
         run: |
-          .venv/bin/pytest tests/test_noop_operations.py -v
+          docker run --rm \
+            -v ${{ github.workspace }}/server:/app \
+            -e PYTHONPATH=/app \
+            aetherv:dev \
+            pytest tests/test_noop_operations.py -v
 
   svelte:
     name: Svelte build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: next-ui
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: next-ui/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build next-ui
-        run: npm run build
+      - name: Build next-ui using build-tools container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            ghcr.io/${{ github.repository_owner }}/aetherv-build-tools:latest \
+            bash -c "cd next-ui && npm ci && npm run build && npm run check"
 
       - name: Check build output
         run: |
-          if [ ! -d "build" ]; then
+          if [ ! -d "next-ui/build" ]; then
             echo "Build directory not found!"
             exit 1
           fi
