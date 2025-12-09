@@ -46,13 +46,13 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Build all assets (ISOs and static files) in build-tools container
-      run: |
-        docker run --rm \
-          -v "${{ github.workspace }}:/github/workspace" \
-          -w /github/workspace \
-          ghcr.io/${{ github.repository_owner }}/aetherv-build-tools:latest \
-          Scripts/Build-All-Assets.ps1 -OutputPath ISOs
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Build all assets using Makefile
+      run: make build-assets
     
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -69,12 +69,30 @@ jobs:
             type=ref,event=pr,prefix=pr-
             type=sha,format=short,prefix=sha-
     
+    - name: Capture build metadata
+      id: buildmeta
+      run: |
+        echo "git_commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+        echo "git_ref=$(git symbolic-ref -q --short HEAD || git rev-parse --abbrev-ref HEAD || echo unknown)" >> $GITHUB_OUTPUT
+        if git rev-parse --verify HEAD >/dev/null 2>&1; then
+          if git symbolic-ref -q HEAD >/dev/null 2>&1; then
+            echo "git_state=branch" >> $GITHUB_OUTPUT
+          else
+            echo "git_state=detached" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "git_state=unknown" >> $GITHUB_OUTPUT
+        fi
+        echo "version=$(cat version || echo unknown)" >> $GITHUB_OUTPUT
+        echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+        echo "build_host=$(hostname)" >> $GITHUB_OUTPUT
+
     - name: Build Docker image (single build for test + push)
       id: build
       uses: docker/build-push-action@v6
       with:
         context: .
-        file: ./server/Dockerfile
+        file: ./Dockerfile
         push: false
         load: true
         tags: |
@@ -86,6 +104,12 @@ jobs:
         provenance: false
         sbom: false
         build-args: |
+          GIT_COMMIT=${{ steps.buildmeta.outputs.git_commit }}
+          GIT_REF=${{ steps.buildmeta.outputs.git_ref }}
+          GIT_STATE=${{ steps.buildmeta.outputs.git_state }}
+          VERSION=${{ steps.buildmeta.outputs.version }}
+          BUILD_TIME=${{ steps.buildmeta.outputs.build_time }}
+          BUILD_HOST=${{ steps.buildmeta.outputs.build_host }}
           GITHUB_REPOSITORY=${{ github.repository }}
 
     - name: Run server smoke tests

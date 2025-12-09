@@ -14,9 +14,14 @@ ModuleAnalysisCache-*
 StartupProfileData-NonInteractive
 .vscode/
 server/node_modules/
-server/app/static/icons/
+
+# Next-UI Svelte build artifacts
+next-ui/node_modules/
+next-ui/.svelte-kit/
+next-ui/build/
 
 # Test artifacts
 testResults.xml
 *.trx
 coverage.xml
+server/.env
