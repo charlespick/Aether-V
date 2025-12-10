@@ -1,42 +1,69 @@
 <script lang="ts">
-	import { toastStore } from '$lib/stores/toastStore';
+	import { toastStore, type Toast } from '$lib/stores/toastStore';
+	import Icon from '$lib/components/common/Icon.svelte';
+
+	const MAX_VISIBLE = 3;
+	let containerRef: HTMLDivElement;
+	let scrollPosition = 0;
+
+	// Handle scroll to reveal overflow toasts
+	function handleWheel(event: WheelEvent) {
+		const container = containerRef;
+		if (!container) return;
+
+		const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+		scrollPosition = Math.max(0, Math.min(maxScroll, scrollPosition + event.deltaY));
+		container.scrollTop = scrollPosition;
+		event.preventDefault();
+	}
 </script>
 
-<div class="toast-container">
-	{#each $toastStore as toast (toast.id)}
-		<div class="toast" data-type={toast.type}>
+<div 
+	class="toast-container" 
+	bind:this={containerRef}
+	onwheel={handleWheel}
+>
+	{#each $toastStore as toast, index (toast.id)}
+		<div 
+			class="toast" 
+			class:overflow={index >= MAX_VISIBLE}
+			data-type={toast.type}
+		>
 			<div class="toast-icon">
-				{#if toast.type === 'success'}
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-						<path d="M20 6 9 17l-5-5"></path>
-					</svg>
+				{#if toast.icon}
+					<!-- Use cached Material Icons -->
+					<Icon name={toast.icon} size={20} />
+				{:else if toast.type === 'success'}
+					<Icon name="check_circle" size={20} />
 				{:else if toast.type === 'error'}
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-						<circle cx="12" cy="12" r="10"></circle>
-						<line x1="15" y1="9" x2="9" y2="15"></line>
-						<line x1="9" y1="9" x2="15" y2="15"></line>
-					</svg>
+					<Icon name="error" size={20} />
 				{:else if toast.type === 'warning'}
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-						<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
-						<line x1="12" y1="9" x2="12" y2="13"></line>
-						<line x1="12" y1="17" x2="12.01" y2="17"></line>
-					</svg>
+					<Icon name="warning" size={20} />
 				{:else}
-					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-						<circle cx="12" cy="12" r="10"></circle>
-						<line x1="12" y1="16" x2="12" y2="12"></line>
-						<line x1="12" y1="8" x2="12.01" y2="8"></line>
-					</svg>
+					<Icon name="info" size={20} />
 				{/if}
 			</div>
-			<div class="toast-message">{toast.message}</div>
-			<button class="toast-close" onclick={() => toastStore.removeToast(toast.id)}>
-				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-					<line x1="18" y1="6" x2="6" y2="18"></line>
-					<line x1="6" y1="6" x2="18" y2="18"></line>
-				</svg>
-			</button>
+			<div class="toast-content">
+				{#if toast.title}
+					<div class="toast-title">{toast.title}</div>
+				{/if}
+				<div class="toast-message">
+					{toast.message}
+					{#if toast.countdown && toast.countdown > 0}
+						<span class="toast-countdown">({toast.countdown}s)</span>
+					{/if}
+				</div>
+				{#if toast.action}
+					<button class="toast-action" onclick={toast.action.callback}>
+						{toast.action.label}
+					</button>
+				{/if}
+			</div>
+			{#if toast.dismissible !== false}
+				<button class="toast-close" onclick={() => toastStore.remove(toast.id)} aria-label="Close">
+					<Icon name="close" size={16} />
+				</button>
+			{/if}
 		</div>
 	{/each}
 </div>
@@ -44,18 +71,28 @@
 <style>
 	.toast-container {
 		position: fixed;
-		top: 1rem;
+		bottom: 1rem;
 		right: 1rem;
 		z-index: 9999;
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
 		pointer-events: none;
+		max-height: calc(100vh - 2rem);
+		overflow-y: auto;
+		overflow-x: visible;
+		padding-right: 0.25rem; /* Space for scrollbar if needed */
+	}
+
+	/* Hide scrollbar but keep functionality */
+	.toast-container::-webkit-scrollbar {
+		width: 0;
+		background: transparent;
 	}
 
 	.toast {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		gap: 0.75rem;
 		padding: 1rem;
 		background-color: var(--bg-tertiary);
@@ -66,6 +103,20 @@
 		max-width: 400px;
 		pointer-events: auto;
 		animation: slideIn 0.3s ease;
+		transition: all 0.3s ease;
+	}
+
+	/* Overflow toasts show only top edge (peek) */
+	.toast.overflow {
+		max-height: 20px;
+		overflow: hidden;
+		opacity: 0.6;
+		cursor: pointer;
+		padding: 0.5rem 1rem;
+	}
+
+	.toast.overflow:hover {
+		opacity: 0.8;
 	}
 
 	@keyframes slideIn {
@@ -100,6 +151,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		margin-top: 0.125rem; /* Align with title */
 	}
 
 	.toast[data-type="success"] .toast-icon {
@@ -118,10 +170,50 @@
 		color: var(--info);
 	}
 
-	.toast-message {
+	.toast-content {
 		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: 0; /* Allow text truncation */
+	}
+
+	.toast-title {
 		color: var(--text-primary);
 		font-size: 0.875rem;
+		font-weight: 600;
+		line-height: 1.3;
+	}
+
+	.toast-message {
+		color: var(--text-secondary);
+		font-size: 0.8125rem;
+		line-height: 1.4;
+	}
+
+	.toast-countdown {
+		color: var(--text-tertiary);
+		font-weight: 500;
+		margin-left: 0.25rem;
+	}
+
+	.toast-action {
+		align-self: flex-start;
+		margin-top: 0.5rem;
+		padding: 0.375rem 0.875rem;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: var(--accent-color);
+		background: transparent;
+		border: 1px solid var(--accent-color);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition: all var(--transition-fast);
+	}
+
+	.toast-action:hover {
+		background: var(--accent-color);
+		color: white;
 	}
 
 	.toast-close {
@@ -130,6 +222,14 @@
 		color: var(--text-secondary);
 		border-radius: var(--radius-sm);
 		transition: all var(--transition-fast);
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		align-self: flex-start;
+		margin-top: 0.125rem; /* Align with title */
 	}
 
 	.toast-close:hover {

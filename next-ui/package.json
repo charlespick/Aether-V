@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "node scripts/generate-icon-sprite.js && vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
@@ -23,6 +23,12 @@
 		"svelte": "^5.43.8",
 		"svelte-check": "^4.3.4",
 		"typescript": "^5.9.3",
-		"vite": "^7.2.2"
+		"vite": "^6.0.7",
+		"vite-plugin-pwa": "^0.21.1",
+		"workbox-cacheable-response": "^7.3.0",
+		"workbox-expiration": "^7.3.0",
+		"workbox-precaching": "^7.3.0",
+		"workbox-routing": "^7.3.0",
+		"workbox-strategies": "^7.3.0"
 	}
 }

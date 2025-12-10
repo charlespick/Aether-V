@@ -210,11 +210,8 @@ def run_config_checks(force: bool = False) -> ConfigValidationResult:
             "Set WINRM_KERBEROS_PRINCIPAL to the service principal name (e.g., user@REALM).",
         )
     elif not settings.winrm_kerberos_principal and not settings.winrm_keytab_b64:
-        _warn(
-            result,
-            "Kerberos credentials are not configured.",
-            "Provide WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64 to manage Hyper-V hosts.",
-        )
+        # Kerberos is optional; host management features will be unavailable without it
+        pass
     elif settings.winrm_kerberos_principal and settings.winrm_keytab_b64:
         # Validate principal format (user@REALM or service/host@REALM)
         principal = settings.winrm_kerberos_principal

@@ -1,6 +1,9 @@
 <script lang="ts">
 	import Icon from './Icon.svelte';
+	import ThemeToggle from './ThemeToggle.svelte';
+	import { inventoryStore } from '$lib/stores/inventoryStore';
 	
+	const environmentName = inventoryStore.environmentName;
 	let isProfileOpen = $state(false);
 	
 	function toggleProfile() {
@@ -13,7 +16,7 @@
 		<div class="decorative-square"></div>
 		<div class="environment-info">
 			<div class="environment-label">Working in</div>
-			<div class="environment-name">Development</div>
+			<div class="environment-name">{$environmentName}</div>
 		</div>
 	</div>
 	
@@ -27,6 +30,8 @@
 	</div>
 	
 	<div class="header-right">
+		<ThemeToggle />
+		
 		<button class="icon-btn" title="Notifications">
 			<Icon name="notifications" size={24} />
 		</button>
@@ -71,10 +76,13 @@
 	}
 
 	.decorative-square {
-		width: 32px;
-		height: 32px;
-		background: linear-gradient(135deg, var(--accent-primary), var(--accent-hover));
-		border-radius: var(--radius-sm);
+		width: 60px;
+		height: 60px;
+		background: linear-gradient(135deg, #8b5cf6, #ec4899);
+		margin-left: -24px;
+		margin-right: 0.5rem;
+		margin-top: -12px;
+		margin-bottom: -12px;
 	}
 
 	.environment-info {

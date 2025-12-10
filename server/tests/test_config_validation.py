@@ -53,7 +53,6 @@ def test_run_config_checks_reports_auth_configuration_issues(monkeypatch):
     assert any("OIDC_REDIRECT_URI" in message for message in error_messages)
     assert any("ENVIRONMENT_NAME" in message for message in warning_messages)
     assert any("AGENT_DOWNLOAD_BASE_URL" in message for message in warning_messages)
-    assert any("Kerberos credentials" in message for message in warning_messages)
 
 
 def test_run_config_checks_requires_allow_dev_auth_when_auth_disabled(monkeypatch):

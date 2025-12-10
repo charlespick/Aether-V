@@ -93,7 +93,7 @@
 	}
 
 	.button.danger:hover:not(:disabled) {
-		background-color: #dc2626;
+		background-color: var(--error-hover);
 		box-shadow: var(--shadow-sm);
 	}
 

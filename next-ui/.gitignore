@@ -8,6 +8,9 @@ node_modules
 /.svelte-kit
 /build
 
+# Generated assets (created during build)
+/static/icon-sprite.svg
+
 # OS
 .DS_Store
 Thumbs.db

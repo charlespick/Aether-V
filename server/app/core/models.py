@@ -252,6 +252,7 @@ class InventoryResponse(BaseModel):
     total_clusters: int = 0
     disconnected_count: int = 0
     last_refresh: Optional[datetime] = None
+    environment_name: str = "Production Environment"  # New field for page titles
 
 
 class BuildInfo(BaseModel):

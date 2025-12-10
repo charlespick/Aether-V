@@ -595,7 +595,8 @@ async def get_inventory(user: dict = Depends(require_permission(Permission.READE
         total_vms=len(vms),
         total_clusters=len(clusters),
         disconnected_count=len(disconnected_hosts),
-        last_refresh=inventory_service.last_refresh
+        last_refresh=inventory_service.last_refresh,
+        environment_name="Imaginary Datacenter" if settings.dummy_data else settings.environment_name
     )
 
 

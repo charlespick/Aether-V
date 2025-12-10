@@ -1,46 +1,61 @@
 <script lang="ts">
 	import Button from '$lib/components/common/Button.svelte';
-	
-	// Placeholder data
-	const stats = [
-		{ label: 'Total VMs', value: '24', status: 'success' },
-		{ label: 'Running', value: '18', status: 'success' },
-		{ label: 'Stopped', value: '6', status: 'neutral' },
-		{ label: 'Clusters', value: '3', status: 'info' }
-	];
+	import Icon from '$lib/components/common/Icon.svelte';
+	import ViewLoader from '$lib/components/ViewLoader.svelte';
+	import { inventoryStore } from '$lib/stores/inventoryStore';
+
+	// Subscribe to inventory store derived values
+	const loading = inventoryStore.loading;
+	const error = inventoryStore.error;
+	const totalVMs = inventoryStore.totalVMs;
+	const runningVMs = inventoryStore.runningVMs;
+	const stoppedVMs = inventoryStore.stoppedVMs;
+	const totalClusters = inventoryStore.totalClusters;
+	const totalHosts = inventoryStore.totalHosts;
+	const connectedHosts = inventoryStore.connectedHosts;
+	const disconnectedCount = inventoryStore.disconnectedCount;
+	const environmentName = inventoryStore.environmentName;
+
+	// Derived stat cards from inventory data
+	const stats = $derived([
+		{ label: 'Total VMs', value: String($totalVMs), status: 'success' },
+		{ label: 'Running', value: String($runningVMs), status: 'success' },
+		{ label: 'Stopped', value: String($stoppedVMs), status: 'neutral' },
+		{ label: 'Clusters', value: String($totalClusters), status: 'info' },
+		{ label: 'Total Hosts', value: String($totalHosts), status: 'info' },
+		{ label: 'Connected Hosts', value: String($connectedHosts), status: 'success' },
+		{ label: 'Disconnected Hosts', value: String($disconnectedCount), status: $disconnectedCount > 0 ? 'warning' : 'neutral' }
+	]);
 </script>
 
-<div class="overview">
-	<div class="page-header">
-		<h1>Overview</h1>
-		<p class="subtitle">Your infrastructure at a glance</p>
-	</div>
-	
-	<div class="stats-grid">
-		{#each stats as stat}
-			<div class="stat-card" data-status={stat.status}>
-				<div class="stat-label">{stat.label}</div>
-				<div class="stat-value">{stat.value}</div>
+<svelte:head>
+	<title>{$environmentName} - Overview</title>
+</svelte:head>
+
+<ViewLoader loading={$loading} error={$error} skeleton="overview">
+	<div class="overview">
+		<div class="page-header">
+			<h1>Overview</h1>
+			<p class="subtitle">Your infrastructure at a glance</p>
+		</div>
+		
+		<div class="stats-grid">
+			{#each stats as stat}
+				<div class="stat-card" data-status={stat.status}>
+					<div class="stat-label">{stat.label}</div>
+					<div class="stat-value">{stat.value}</div>
+				</div>
+			{/each}
+		</div>
+		
+		<div class="section">
+			<h2>Quick Actions</h2>
+			<div class="actions">
+				<Button variant="primary">Create VM</Button>
 			</div>
-		{/each}
-	</div>
-	
-	<div class="section">
-		<h2>Quick Actions</h2>
-		<div class="actions">
-			<Button variant="primary">Create VM</Button>
-			<Button variant="secondary">Deploy Host</Button>
-			<Button variant="secondary">View Jobs</Button>
 		</div>
 	</div>
-	
-	<div class="section">
-		<h2>Recent Activity</h2>
-		<div class="activity-placeholder">
-			<p>No recent activity to display</p>
-		</div>
-	</div>
-</div>
+</ViewLoader>
 
 <style>
 	.overview {
@@ -49,7 +64,7 @@
 	}
 
 	.page-header {
-		margin-bottom: 2rem;
+		margin-bottom: 0;
 	}
 
 	.page-header h1 {
@@ -61,8 +76,8 @@
 
 	.subtitle {
 		color: var(--text-secondary);
-		margin: 0;
-		font-size: 1rem;
+		margin: 0 0 1.5rem 0;
+		font-size: 0.875rem;
 	}
 
 	.stats-grid {
@@ -77,12 +92,6 @@
 		padding: 1.5rem;
 		border-radius: var(--radius-lg);
 		border: 1px solid var(--border-color);
-		transition: transform var(--transition-fast), box-shadow var(--transition-fast);
-	}
-
-	.stat-card:hover {
-		transform: translateY(-2px);
-		box-shadow: var(--shadow-md);
 	}
 
 	.stat-card[data-status="success"] {
@@ -95,6 +104,10 @@
 
 	.stat-card[data-status="neutral"] {
 		border-left: 3px solid var(--text-tertiary);
+	}
+
+	.stat-card[data-status="warning"] {
+		border-left: 3px solid var(--warning);
 	}
 
 	.stat-label {
@@ -135,5 +148,49 @@
 		border: 1px solid var(--border-color);
 		text-align: center;
 		color: var(--text-secondary);
+	}
+
+	.activity-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.activity-item {
+		display: flex;
+		gap: 1rem;
+		padding: 1rem;
+		background-color: var(--bg-tertiary);
+		border-radius: var(--radius-md);
+		border: 1px solid var(--border-color);
+		transition: background-color var(--transition-fast);
+	}
+
+	.activity-item:hover {
+		background-color: var(--bg-primary);
+	}
+
+	.activity-icon {
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.activity-content {
+		flex: 1;
+		min-width: 0;
+	}
+
+	.activity-message {
+		margin: 0 0 0.25rem 0;
+		color: var(--text-primary);
+		font-size: 0.875rem;
+	}
+
+	.activity-time {
+		margin: 0;
+		color: var(--text-tertiary);
+		font-size: 0.75rem;
 	}
 </style>

@@ -339,6 +339,7 @@ class InventoryService:
         dummy_vms = [
             # VMs on hyperv01
             VM(
+                id="vm-web-01",
                 name="web-server-01",
                 host="hyperv01.lab.local",
                 state=VMState.RUNNING,
@@ -349,8 +350,38 @@ class InventoryService:
                 ip_addresses=["10.0.0.21"],
                 notes="Primary web node",
                 created_at=now - timedelta(days=5),
+                disks=[
+                    VMDisk(
+                        id="disk-web-01-os",
+                        name="web-server-01-os.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\web-server-01\\web-server-01-os.vhdx",
+                        type="VHDX",
+                        size_gb=80.0,
+                        file_size_gb=42.3
+                    ),
+                    VMDisk(
+                        id="disk-web-01-data",
+                        name="web-server-01-data.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\web-server-01\\web-server-01-data.vhdx",
+                        type="VHDX",
+                        size_gb=200.0,
+                        file_size_gb=87.5
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-web-01-eth0",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Production-vSwitch",
+                        vlan="100",
+                        network_name="Production",
+                        ip_addresses=["10.0.0.21"],
+                        mac_address="00:15:5D:01:02:03"
+                    ),
+                ],
             ),
             VM(
+                id="vm-db-01",
                 name="db-server-01",
                 host="hyperv01.lab.local",
                 state=VMState.RUNNING,
@@ -361,8 +392,55 @@ class InventoryService:
                 ip_addresses=["10.0.0.22"],
                 notes="Database cluster member",
                 created_at=now - timedelta(days=10),
+                disks=[
+                    VMDisk(
+                        id="disk-db-01-os",
+                        name="db-server-01-os.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\db-server-01\\db-server-01-os.vhdx",
+                        type="VHDX",
+                        size_gb=100.0,
+                        file_size_gb=55.2
+                    ),
+                    VMDisk(
+                        id="disk-db-01-data",
+                        name="db-server-01-data.vhdx",
+                        path="C:\\ClusterStorage\\Volume2\\db-server-01\\db-server-01-data.vhdx",
+                        type="VHDX",
+                        size_gb=500.0,
+                        file_size_gb=312.8
+                    ),
+                    VMDisk(
+                        id="disk-db-01-logs",
+                        name="db-server-01-logs.vhdx",
+                        path="C:\\ClusterStorage\\Volume2\\db-server-01\\db-server-01-logs.vhdx",
+                        type="VHDX",
+                        size_gb=250.0,
+                        file_size_gb=145.6
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-db-01-eth0",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Production-vSwitch",
+                        vlan="100",
+                        network_name="Production",
+                        ip_addresses=["10.0.0.22"],
+                        mac_address="00:15:5D:01:02:04"
+                    ),
+                    VMNetworkAdapter(
+                        id="nic-db-01-eth1",
+                        adapter_name="Network Adapter 2",
+                        virtual_switch="Storage-vSwitch",
+                        vlan="200",
+                        network_name="Storage",
+                        ip_addresses=["192.168.100.22"],
+                        mac_address="00:15:5D:01:03:04"
+                    ),
+                ],
             ),
             VM(
+                id="vm-win-app-01",
                 name="win-app-01",
                 host="hyperv01.lab.local",
                 state=VMState.OFF,
@@ -373,9 +451,31 @@ class InventoryService:
                 ip_addresses=["10.0.0.23"],
                 notes="Legacy application host",
                 created_at=now - timedelta(days=2),
+                disks=[
+                    VMDisk(
+                        id="disk-win-app-01-c",
+                        name="win-app-01-c.vhdx",
+                        path="C:\\VMs\\win-app-01\\win-app-01-c.vhdx",
+                        type="VHDX",
+                        size_gb=127.0,
+                        file_size_gb=68.4
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-win-app-01-eth0",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Production-vSwitch",
+                        vlan="100",
+                        network_name="Production",
+                        ip_addresses=["10.0.0.23"],
+                        mac_address="00:15:5D:01:02:05"
+                    ),
+                ],
             ),
             # VMs on hyperv02
             VM(
+                id="vm-lb-01",
                 name="load-balancer-01",
                 host="hyperv02.lab.local",
                 state=VMState.RUNNING,
@@ -385,8 +485,38 @@ class InventoryService:
                 os_name="Alpine Linux",
                 ip_addresses=["10.0.1.10"],
                 created_at=now - timedelta(days=7),
+                disks=[
+                    VMDisk(
+                        id="disk-lb-01-os",
+                        name="load-balancer-01.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\load-balancer-01\\load-balancer-01.vhdx",
+                        type="VHDX",
+                        size_gb=40.0,
+                        file_size_gb=12.1
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-lb-01-wan",
+                        adapter_name="WAN",
+                        virtual_switch="External-vSwitch",
+                        network_name="External",
+                        ip_addresses=["203.0.113.10"],
+                        mac_address="00:15:5D:02:01:01"
+                    ),
+                    VMNetworkAdapter(
+                        id="nic-lb-01-lan",
+                        adapter_name="LAN",
+                        virtual_switch="Production-vSwitch",
+                        vlan="100",
+                        network_name="Production",
+                        ip_addresses=["10.0.1.10"],
+                        mac_address="00:15:5D:02:01:02"
+                    ),
+                ],
             ),
             VM(
+                id="vm-mon-01",
                 name="monitoring-01",
                 host="hyperv02.lab.local",
                 state=VMState.RUNNING,
@@ -396,8 +526,38 @@ class InventoryService:
                 os_name="Debian 12",
                 ip_addresses=["10.0.1.11"],
                 created_at=now - timedelta(days=3),
+                disks=[
+                    VMDisk(
+                        id="disk-mon-01-os",
+                        name="monitoring-01-os.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\monitoring-01\\monitoring-01-os.vhdx",
+                        type="VHDX",
+                        size_gb=60.0,
+                        file_size_gb=28.7
+                    ),
+                    VMDisk(
+                        id="disk-mon-01-metrics",
+                        name="monitoring-01-metrics.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\monitoring-01\\monitoring-01-metrics.vhdx",
+                        type="VHDX",
+                        size_gb=300.0,
+                        file_size_gb=156.3
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-mon-01-mgmt",
+                        adapter_name="Management",
+                        virtual_switch="Production-vSwitch",
+                        vlan="100",
+                        network_name="Production",
+                        ip_addresses=["10.0.1.11"],
+                        mac_address="00:15:5D:02:02:01"
+                    ),
+                ],
             ),
             VM(
+                id="vm-backup",
                 name="backup-vm",
                 host="hyperv02.lab.local",
                 state=VMState.SAVED,
@@ -407,9 +567,31 @@ class InventoryService:
                 os_name="Windows Server 2019",
                 ip_addresses=["10.0.1.12"],
                 created_at=now - timedelta(days=15),
+                disks=[
+                    VMDisk(
+                        id="disk-backup-c",
+                        name="backup-vm-c.vhd",
+                        path="D:\\VMs\\backup-vm\\backup-vm-c.vhd",
+                        type="VHD",
+                        size_gb=80.0,
+                        file_size_gb=45.2
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-backup-eth0",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Production-vSwitch",
+                        vlan="100",
+                        network_name="Production",
+                        ip_addresses=["10.0.1.12"],
+                        mac_address="00:15:5D:02:03:01"
+                    ),
+                ],
             ),
             # VMs on dev host
             VM(
+                id="vm-test-01",
                 name="test-vm-01",
                 host="hyperv-dev01.lab.local",
                 state=VMState.RUNNING,
@@ -419,8 +601,29 @@ class InventoryService:
                 os_name="Ubuntu Desktop 22.04",
                 ip_addresses=["10.0.2.50"],
                 created_at=now - timedelta(days=1),
+                disks=[
+                    VMDisk(
+                        id="disk-test-01",
+                        name="test-vm-01.vhdx",
+                        path="C:\\VMs\\test-vm-01\\test-vm-01.vhdx",
+                        type="VHDX",
+                        size_gb=100.0,
+                        file_size_gb=52.8
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-test-01",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Dev-vSwitch",
+                        network_name="Development",
+                        ip_addresses=["10.0.2.50"],
+                        mac_address="00:15:5D:03:01:01"
+                    ),
+                ],
             ),
             VM(
+                id="vm-dev-ws",
                 name="dev-workstation",
                 host="hyperv-dev01.lab.local",
                 state=VMState.PAUSED,
@@ -430,6 +633,34 @@ class InventoryService:
                 os_name="Windows 11",
                 notes="Suspended while not in use",
                 created_at=now - timedelta(hours=8),
+                disks=[
+                    VMDisk(
+                        id="disk-dev-ws-c",
+                        name="dev-workstation-c.vhdx",
+                        path="C:\\VMs\\dev-workstation\\dev-workstation-c.vhdx",
+                        type="VHDX",
+                        size_gb=200.0,
+                        file_size_gb=125.4
+                    ),
+                    VMDisk(
+                        id="disk-dev-ws-d",
+                        name="dev-workstation-d.vhdx",
+                        path="C:\\VMs\\dev-workstation\\dev-workstation-d.vhdx",
+                        type="VHDX",
+                        size_gb=500.0,
+                        file_size_gb=278.9
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-dev-ws",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Dev-vSwitch",
+                        network_name="Development",
+                        ip_addresses=["10.0.2.51"],
+                        mac_address="00:15:5D:03:02:01"
+                    ),
+                ],
             ),
         ]
 
