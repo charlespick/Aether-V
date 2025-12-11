@@ -18,6 +18,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Stage 1b: Node.js base for frontend tooling
+FROM node:22-slim AS node-base
+
+WORKDIR /src
+
 # Stage 2: Dependencies
 FROM base AS dependencies
 
@@ -85,19 +90,20 @@ with open("/out/build-info.json", "w", encoding="utf-8") as f:
 PY
 
 # Stage 4: Collect OSS license information
-FROM dependencies AS license-collector
+FROM node-base AS license-collector
 
-WORKDIR /src
-
-# Install Node.js for license-checker (Python deps already installed from dependencies stage)
+# Install Python for pip-licenses
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    nodejs \
-    npm \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install pip-licenses (requirements.txt already installed from dependencies stage)
-RUN pip install --no-cache-dir pip-licenses
+# Install pip-licenses
+RUN pip3 install --no-cache-dir pip-licenses --break-system-packages
+
+# Copy Python dependencies manifest for license extraction
+COPY server/requirements.txt ./
 
 # Copy next-ui package.json which now contains all frontend dependencies
 COPY next-ui/package.json next-ui/package-lock.json ./
@@ -107,18 +113,17 @@ RUN npm install --omit=dev && \
 # Copy the license collection script and run it
 COPY server/scripts/collect_licenses.py ./scripts/
 RUN mkdir -p /out && \
-    python scripts/collect_licenses.py && \
+    python3 scripts/collect_licenses.py && \
     cp oss-licenses.json /out/
 
 # Stage 5: Extract static assets (icons and Swagger UI) from node_modules
-FROM base AS static-extractor
+FROM node-base AS static-extractor
 
-WORKDIR /src
-
-# Install Node.js and npm
+# Install Python for extraction script
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends nodejs npm && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install next-ui dependencies which include @material-symbols and swagger-ui-dist
 COPY next-ui/package.json next-ui/package-lock.json ./

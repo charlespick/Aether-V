@@ -3,11 +3,14 @@
 	import { page } from '$app/stores';
 	import { base } from '$app/paths';
 	import Icon from './Icon.svelte';
+	import SettingsModal from '$lib/components/modals/SettingsModal.svelte';
 	import { inventoryStore } from '$lib/stores/inventoryStore';
 	import type { InventoryData } from '$lib/stores/inventoryStore';
 
 	// Subscribe to shared inventory store
 	const inventoryData = inventoryStore.data;
+	
+	let showSettings = $state(false);
 
 	let expandedClusters = $state(new Set<string>());
 	let expandedHosts = $state(new Set<string>());
@@ -205,12 +208,14 @@
 	</ul>
 	
 	<div class="sidebar-footer">
-		<button class="settings-btn" title="Settings">
+		<button class="settings-btn" title="Settings" onclick={() => showSettings = true}>
 			<Icon name="settings" size={20} />
 			<span class="settings-label">Settings</span>
 		</button>
 	</div>
 </nav>
+
+<SettingsModal bind:isOpen={showSettings} onClose={() => showSettings = false} />
 
 <style>
 	.sidebar {
