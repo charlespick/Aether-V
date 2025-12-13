@@ -187,6 +187,15 @@
 					<span class="info-value">{settings.buildDate}</span>
 				</div>
 			</div>
+			<div class="oss-placeholder">
+				<p>
+					This application uses open-source software. View the full list of dependencies and their
+					licenses.
+				</p>
+				<Button variant="secondary" size="sm" onclick={() => alert('OSS Attributions modal')}>
+					View Attributions
+				</Button>
+			</div>
 		</FormSection>
 
 		<!-- Service Diagnostics -->
@@ -232,21 +241,6 @@
 				</div>
 			</div>
 		</FormSection>
-
-		<!-- OSS Attributions -->
-		<FormSection title="Open Source" description="Third-party software and licenses">
-			<div class="oss-placeholder">
-				<p>
-					This application uses open-source software. View the full list of dependencies and their
-					licenses.
-				</p>
-				<Button variant="secondary" size="sm" onclick={() => alert('OSS Attributions modal')}>
-					View Attributions
-				</Button>
-			</div>
-		</FormSection>
-	</div>
-
 	<FormActions>
 		<Button variant="secondary" onclick={onClose}>Close</Button>
 	</FormActions>

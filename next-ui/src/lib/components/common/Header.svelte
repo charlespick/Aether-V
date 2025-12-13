@@ -1,6 +1,5 @@
 <script lang="ts">
 	import Icon from './Icon.svelte';
-	import ThemeToggle from './ThemeToggle.svelte';
 	import { inventoryStore } from '$lib/stores/inventoryStore';
 	
 	const environmentName = inventoryStore.environmentName;
@@ -30,8 +29,6 @@
 	</div>
 	
 	<div class="header-right">
-		<ThemeToggle />
-		
 		<button class="icon-btn" title="Notifications">
 			<Icon name="notifications" size={24} />
 		</button>
