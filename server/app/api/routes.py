@@ -52,7 +52,6 @@ from ..core.pydantic_models import (
     VmSpec,
     DiskSpec,
     NicSpec,
-    GuestConfigSpec,
 )
 from ..core.auth import (
     Permission,

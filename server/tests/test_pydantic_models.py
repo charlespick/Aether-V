@@ -14,7 +14,6 @@ from app.core.pydantic_models import (
     VmSpec,
     DiskSpec,
     NicSpec,
-    GuestConfigSpec,
     ManagedDeploymentRequest,
     JobRequest,
     JobResultEnvelope,
@@ -148,22 +147,32 @@ class TestNicSpecModel:
         assert nic.adapter_name is None
 
 
-class TestGuestConfigSpecModel:
-    """Test GuestConfigSpec Pydantic model."""
+class TestManagedDeploymentValidation:
+    """Test ManagedDeploymentRequest validation rules."""
     
-    def test_valid_guest_config_minimal(self):
-        """Test guest config with minimal fields."""
-        config = GuestConfigSpec(
+    def test_minimal_managed_deployment(self):
+        """Test minimal managed deployment request."""
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01.example.com",
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            network="Production",
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
         )
         
-        assert config.guest_la_uid == "Administrator"
-        assert config.guest_la_pw == "SecurePass123!"
+        assert request.guest_la_uid == "Administrator"
+        assert request.guest_la_pw == "SecurePass123!"
     
-    def test_guest_config_with_domain_join(self):
-        """Test guest config with complete domain join."""
-        config = GuestConfigSpec(
+    def test_managed_deployment_with_domain_join(self):
+        """Test managed deployment with complete domain join."""
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01.example.com",
+            vm_name="web-01",
+            gb_ram=4,
+            cpu_cores=2,
+            network="Production",
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
             guest_domain_join_target="corp.example.com",
@@ -172,12 +181,17 @@ class TestGuestConfigSpecModel:
             guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
         )
         
-        assert config.guest_domain_join_target == "corp.example.com"
+        assert request.guest_domain_join_target == "corp.example.com"
     
-    def test_guest_config_partial_domain_join_fails(self):
+    def test_partial_domain_join_fails(self):
         """Test that partial domain join config is rejected."""
         with pytest.raises(ValidationError) as exc_info:
-            GuestConfigSpec(
+            ManagedDeploymentRequest(
+                target_host="hyperv-01.example.com",
+                vm_name="test-vm",
+                gb_ram=4,
+                cpu_cores=2,
+                network="Production",
                 guest_la_uid="Administrator",
                 guest_la_pw="SecurePass123!",
                 guest_domain_join_target="corp.example.com",
@@ -187,9 +201,14 @@ class TestGuestConfigSpecModel:
         error_msg = str(exc_info.value)
         assert "domain join" in error_msg.lower()
     
-    def test_guest_config_with_static_ip(self):
-        """Test guest config with static IP configuration."""
-        config = GuestConfigSpec(
+    def test_managed_deployment_with_static_ip(self):
+        """Test managed deployment with static IP configuration."""
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01.example.com",
+            vm_name="web-01",
+            gb_ram=4,
+            cpu_cores=2,
+            network="Production",
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
             guest_v4_ip_addr="192.168.1.100",
@@ -198,13 +217,18 @@ class TestGuestConfigSpecModel:
             guest_v4_dns1="192.168.1.10",
         )
         
-        assert config.guest_v4_ip_addr == "192.168.1.100"
-        assert config.guest_v4_cidr_prefix == 24
+        assert request.guest_v4_ip_addr == "192.168.1.100"
+        assert request.guest_v4_cidr_prefix == 24
     
-    def test_guest_config_partial_static_ip_fails(self):
+    def test_partial_static_ip_fails(self):
         """Test that partial static IP config is rejected."""
         with pytest.raises(ValidationError) as exc_info:
-            GuestConfigSpec(
+            ManagedDeploymentRequest(
+                target_host="hyperv-01.example.com",
+                vm_name="test-vm",
+                gb_ram=4,
+                cpu_cores=2,
+                network="Production",
                 guest_la_uid="Administrator",
                 guest_la_pw="SecurePass123!",
                 guest_v4_ip_addr="192.168.1.100",
@@ -215,10 +239,15 @@ class TestGuestConfigSpecModel:
         error_msg = str(exc_info.value)
         assert "static ip" in error_msg.lower()
     
-    def test_guest_config_partial_ansible_fails(self):
+    def test_partial_ansible_fails(self):
         """Test that partial Ansible config is rejected."""
         with pytest.raises(ValidationError) as exc_info:
-            GuestConfigSpec(
+            ManagedDeploymentRequest(
+                target_host="hyperv-01.example.com",
+                vm_name="test-vm",
+                gb_ram=4,
+                cpu_cores=2,
+                network="Production",
                 guest_la_uid="Administrator",
                 guest_la_pw="SecurePass123!",
                 cnf_ansible_ssh_user="ansible",
@@ -233,46 +262,43 @@ class TestManagedDeploymentRequestModel:
     """Test ManagedDeploymentRequest Pydantic model."""
     
     def test_valid_managed_deployment_full(self):
-        """Test complete managed deployment request."""
+        """Test complete managed deployment request with all guest config."""
         request = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="web-01",
-                gb_ram=4,
-                cpu_cores=2,
-            ),
-            disk_spec=DiskSpec(
-                image_name="Windows Server 2022",
-            ),
-            nic_spec=NicSpec(
-                network="Production",
-            ),
-            guest_config=GuestConfigSpec(
-                guest_la_uid="Administrator",
-                guest_la_pw="SecurePass123!",
-            ),
             target_host="hyperv-01.example.com",
+            vm_name="web-01",
+            gb_ram=4,
+            cpu_cores=2,
+            image_name="Windows Server 2022",
+            network="Production",
+            guest_la_uid="Administrator",
+            guest_la_pw="SecurePass123!",
+            guest_domain_join_target="corp.example.com",
+            guest_domain_join_uid="EXAMPLE\\svc_join",
+            guest_domain_join_pw="DomainPass456!",
+            guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
         )
         
-        assert request.vm_spec.vm_name == "web-01"
-        assert request.disk_spec.image_name == "Windows Server 2022"
-        assert request.nic_spec.network == "Production"
+        assert request.vm_name == "web-01"
+        assert request.image_name == "Windows Server 2022"
+        assert request.network == "Production"
         assert request.target_host == "hyperv-01.example.com"
+        assert request.guest_domain_join_target == "corp.example.com"
     
     def test_managed_deployment_minimal(self):
-        """Test minimal managed deployment (VM only)."""
+        """Test minimal managed deployment."""
         request = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="test-vm",
-                gb_ram=2,
-                cpu_cores=1,
-            ),
             target_host="hyperv-01",
+            vm_name="test-vm",
+            gb_ram=2,
+            cpu_cores=1,
+            network="Production",
+            guest_la_uid="Administrator",
+            guest_la_pw="SecurePass123!",
         )
         
-        assert request.vm_spec.vm_name == "test-vm"
-        assert request.disk_spec is None
-        assert request.nic_spec is None
-        assert request.guest_config is None
+        assert request.vm_name == "test-vm"
+        assert request.image_name is None
+        assert request.guest_domain_join_target is None
 
 
 class TestJobEnvelopeModels:

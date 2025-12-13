@@ -234,27 +234,41 @@
 		isSubmitting = true;
 
 		try {
-			const payload = {
-				vm_spec: {
-					vm_name: vmData.vm_name,
-					gb_ram: vmData.gb_ram,
-					cpu_cores: vmData.cpu_cores,
-					storage_class: vmData.storage_class || undefined,
-					vm_clustered: vmData.vm_clustered
-				},
-				disk_spec: diskData,
-				nic_spec: nicData,
-				guest_config: {
-					...guestLocalAdmin,
-					...(domainJoinEnabled ? domainJoinData : {}),
-					...(ansibleEnabled ? ansibleData : {}),
-					...(staticIpEnabled ? staticIpData : {})
-				},
+			// Build flat payload that mirrors form fields directly
+			// The server parses this flat structure into hardware specs internally
+			const payload: Record<string, any> = {
 				target_host: targetHost,
-				image_name: imageName
+				// VM hardware
+				vm_name: vmData.vm_name,
+				gb_ram: vmData.gb_ram,
+				cpu_cores: vmData.cpu_cores,
+				storage_class: vmData.storage_class || undefined,
+				vm_clustered: vmData.vm_clustered,
+				// Disk - if image_name provided, disk will be created
+				image_name: imageName || undefined,
+				disk_size_gb: diskData.disk_size_gb,
+				// Network
+				network: nicData.network,
+				// Guest config - local admin (required)
+				...guestLocalAdmin
 			};
 
-			const response = await fetch('/api/v1/vms', {
+			// Add domain join config if enabled
+			if (domainJoinEnabled) {
+				Object.assign(payload, domainJoinData);
+			}
+
+			// Add Ansible config if enabled
+			if (ansibleEnabled) {
+				Object.assign(payload, ansibleData);
+			}
+
+			// Add static IP config if enabled
+			if (staticIpEnabled) {
+				Object.assign(payload, staticIpData);
+			}
+
+			const response = await fetch('/api/managed-deployments', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(payload)
