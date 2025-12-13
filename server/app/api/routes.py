@@ -1463,7 +1463,7 @@ async def initialize_vm_resource(
     )
 
 
-@router.post("/api/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
+@router.post("/api/v1/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
 async def create_managed_deployment(
     request: ManagedDeploymentRequest,
     user: dict = Depends(require_permission(Permission.WRITER))

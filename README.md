@@ -143,7 +143,7 @@ workflows.
 - **NICs:** `GET /api/v1/resources/vms/{vm_id}/nics`, `GET /api/v1/resources/vms/{vm_id}/nics/{nic_id}`, `POST /api/v1/resources/nics`, `PUT /api/v1/resources/vms/{vm_id}/nics/{nic_id}`, `DELETE /api/v1/resources/vms/{vm_id}/nics/{nic_id}`
 
 ### Managed Deployments
-- **Deploy VM:** `POST /api/managed-deployments` - Create complete VM with disks, NICs, and guest configuration in one operation
+- **Deploy VM:** `POST /api/v1/managed-deployments` - Create complete VM with disks, NICs, and guest configuration in one operation
 
 ### Jobs & Operations
 - **Jobs:** `GET /api/v1/jobs` - List all jobs
