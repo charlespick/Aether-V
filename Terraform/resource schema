@@ -1,0 +1,79 @@
+Key note - the entire VM is managed as a single resource in TF so that the state can hold all the objects together and the
+tf provider can manage the initialization step at the end. However the provider still uses the descreet nic, vm, and disk
+resources. The Managed Deployment endpoint should NOT be used anywhere in the Terraform provider code. 
+
+resource: aetherv_virtual_machine
+  -----------------------------------------------------------------------
+  name: string, mutation forces replacement
+  host: string, optional, mutation forces replacement - needed if cluster not set
+  cluster: string, optional, mutation forces replacement - needed if host not set, enables failover
+  id: GUID - state only
+  -----------------------------------------------------------------------
+  cpu_cores: integer
+  startup_memory_gb: double
+  dynamic_memory: object
+    memory_gb_min: double, optional
+    memory_gb_max: double, optional
+    memory_prcnt_buffer: integer, optional
+  -----------------------------------------------------------------------
+  secure_boot: "Microsoft Windows", "Microsoft UEFI Certificate Authority", "Open Source Shielded VM", or "Disabled", optional
+  trusted_platform_module: object, optional
+    key_protector: string, optional
+  -----------------------------------------------------------------------
+  boot_disk: object - dictates boot order
+    id: GUID - state only
+    source_image: string, mutation forces replacement
+    expand_to_gb: double, optional
+    storage_class: string, optional, mutation forces replacement - making it optional will require support from the inventory service to provide available classes to the provider
+  disk: object, multiple supported
+    id: GUID - state only
+    size_gb: double
+    storage_class: string, optional, mutation forces replacement - making it optional will require support from the inventory service to provide available classes to the provider
+  network_if: object, multiple supported - the provider will support multiple but server/api doesn't support it yet
+    id: GUID - state only
+    network: string
+    dhcp_guard: bool, optional
+    router_guard: bool, optional
+    mac_spoof_guard: bool, optional
+    mac_address: "Dynamic" or string (MAC address), optional
+    min_bandwidth_mbps: integer, optional
+    max_bandwidth_mbps: integer, optional
+    ipconfig: object, optional, mutation forces replacement
+      ipv4: object, optional
+        address: string - address with prefix
+        gateway: string
+        dns: [string] - max 2 members
+      ipv6: object, optional
+        address: string - address with prefix
+        gateway: string
+        dns: [string] - max 2 members
+      search_suffix: string, optional
+  -----------------------------------------------------------------------
+  specialization_family: "linux" or "windows", optional, mutation forces replacement - throws error if other guest config is set but not included
+  user: object, mutation forces replacement
+    username: string
+    password: sensative
+  domain_join: object, optional, mutation forces replacement
+    domain_name: string
+    organizational_unit: string, optional
+    username: string
+    password: sensative
+  ansible: object, optional, mutation forces replacement
+    username: string
+    ssh_key: string
+  -----------------------------------------------------------------------
+  host_recovery_action: "none", "resume", or "always-start"
+  host_stop_action: "save", "stop", or "shut-down"
+  integration_svcs: object, optional
+    shutdown: bool, optional
+    time: bool, optional
+    data_exchange: bool, optional - throws error if false and guest config options set
+    heartbeat: bool, optional
+    vss_backup: bool, optional
+    guest_services: bool, optional
+
+provider: aetherv
+  server_url: string - AETHERV_SERVER_URL in env
+  client_id: string - AETHERV_CLIENT_ID in env
+  client_secret: sensative - AETHERV_CLIENT_SECRET in env
+  tenant_id: string - AETHERV_TENANT_ID in env
