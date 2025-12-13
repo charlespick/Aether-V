@@ -1513,7 +1513,7 @@ async def create_managed_deployment(
         )
 
     # Check if VM already exists
-    vm_name = request.vm_spec.vm_name
+    vm_name = request.vm_name
     existing_vm = inventory_service.get_vm(target_host, vm_name)
     if existing_vm:
         raise HTTPException(

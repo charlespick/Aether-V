@@ -422,9 +422,10 @@ next_ui_dir = next((path for path in next_ui_candidates if path.is_dir()), None)
 
 if next_ui_dir:
     # Next-UI SPA route handlers (must be registered before StaticFiles mount)
+    _next_ui_dir = next_ui_dir  # Capture for closure (type narrowing)
     async def serve_next_ui_index():
         """Serve Next-UI index.html for SPA routes."""
-        return FileResponse(next_ui_dir / "index.html")
+        return FileResponse(_next_ui_dir / "index.html")
     
     app.get("/next-ui/", response_class=HTMLResponse, tags=["UI"])(serve_next_ui_index)
     app.get("/next-ui/cluster/{cluster_name}", response_class=HTMLResponse, tags=["UI"])(serve_next_ui_index)
