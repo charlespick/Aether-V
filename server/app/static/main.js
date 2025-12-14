@@ -850,17 +850,69 @@ async function logout() {
     window.location.href = redirectTarget;
 }
 
+async function fetchInventoryData() {
+    const [clustersResponse, hostsResponse, vmsResponse, statsResponse] = await Promise.all([
+        fetch('/api/v1/clusters', { credentials: 'same-origin' }),
+        fetch('/api/v1/hosts', { credentials: 'same-origin' }),
+        fetch('/api/v1/virtualmachines', { credentials: 'same-origin' }),
+        fetch('/api/v1/statistics', { credentials: 'same-origin' })
+    ]);
+
+    const unauthorized = [clustersResponse, hostsResponse, vmsResponse, statsResponse].find(
+        resp => resp.status === 401
+    );
+
+    if (unauthorized) {
+        const error = new Error('Authentication required');
+        error.status = 401;
+        throw error;
+    }
+
+    const responses = [clustersResponse, hostsResponse, vmsResponse, statsResponse];
+    const firstFailure = responses.find(resp => !resp.ok);
+    if (firstFailure) {
+        const error = new Error(`HTTP error! status: ${firstFailure.status}`);
+        error.status = firstFailure.status;
+        throw error;
+    }
+
+    const [clusters, hosts, vms, stats] = await Promise.all(
+        responses.map(resp => resp.json())
+    );
+
+    const connectedHosts = (hosts || []).filter(host => host.connected);
+    const disconnectedHosts = (hosts || []).filter(host => !host.connected);
+
+    return {
+        clusters: clusters || [],
+        hosts: connectedHosts,
+        vms: vms || [],
+        disconnected_hosts: disconnectedHosts,
+        total_hosts: (stats && stats.total_hosts) || hosts.length || 0,
+        total_vms: (stats && stats.total_vms) || (vms || []).length || 0,
+        total_clusters: (stats && stats.total_clusters) || (clusters || []).length || 0,
+        disconnected_count: (stats && stats.disconnected_count) || disconnectedHosts.length || 0,
+        last_refresh: stats ? stats.last_refresh : null,
+        environment_name: stats ? stats.environment_name : 'Production Environment'
+    };
+}
+
 async function loadInventory() {
     try {
-        const response = await fetch('/api/v1/inventory', {
-            credentials: 'same-origin'
-        });
-        
-        if (response.status === 401) {
+        const data = await fetchInventoryData();
+
+        // Update sidebar navigation with hosts and VMs
+        updateSidebarNavigation(data);
+
+        return data;
+
+    } catch (error) {
+        console.error('Error loading inventory:', error);
+        if (error.status === 401) {
             if (authEnabled) {
                 console.log('Token invalid, checking auth state');
                 const isAuthenticated = await checkAuthenticationStatus();
-                
+
                 if (!isAuthenticated) {
                     console.log('Not authenticated, redirecting to login');
                     setTimeout(() => {
@@ -868,27 +920,12 @@ async function loadInventory() {
                     }, 1000);
                     return null;
                 }
-                
+
                 return loadInventory();
-            } else {
-                showError('Authentication required. Please configure authentication.');
-                return null;
             }
+            showError('Authentication required. Please configure authentication.');
+            return null;
         }
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        
-        // Update sidebar navigation with hosts and VMs
-        updateSidebarNavigation(data);
-        
-        return data;
-        
-    } catch (error) {
-        console.error('Error loading inventory:', error);
         showError('Failed to load inventory: ' + error.message);
         return null;
     }
@@ -2025,15 +2062,7 @@ class SearchOverlay {
 
         // Get inventory data for searching
         try {
-            const response = await fetch('/api/v1/inventory', { 
-                credentials: 'same-origin'
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const inventory = await response.json();
+            const inventory = await fetchInventoryData();
             this.renderSearchResults(query, inventory);
         } catch (error) {
             console.error('Error searching inventory:', error);

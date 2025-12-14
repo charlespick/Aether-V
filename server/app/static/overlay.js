@@ -1824,7 +1824,7 @@ class DiskCreateOverlay extends BaseOverlay {
         }
 
         try {
-            const response = await fetch('/api/v1/resources/disks', {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/disks`, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
@@ -2016,7 +2016,7 @@ class DiskEditOverlay extends DiskCreateOverlay {
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/disks/${encodeURIComponent(this.resourceId)}`, {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/disks/${encodeURIComponent(this.resourceId)}`, {
                 method: 'PUT',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
@@ -2159,7 +2159,7 @@ class NicCreateOverlay extends BaseOverlay {
         }
 
         try {
-            const response = await fetch('/api/v1/resources/nics', {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/networkadapters`, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
@@ -2300,7 +2300,7 @@ class NicEditOverlay extends NicCreateOverlay {
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/nics/${encodeURIComponent(this.resourceId)}`, {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/networkadapters/${encodeURIComponent(this.resourceId)}`, {
                 method: 'PUT',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
@@ -2488,7 +2488,7 @@ class VMEditOverlay extends BaseOverlay {
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}`, {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}`, {
                 method: 'PUT',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },

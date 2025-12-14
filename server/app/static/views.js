@@ -4,6 +4,51 @@ const { renderDefaultIcon: renderIconDefault } = window.iconUtils;
 function icon(name, options = {}) {
     return renderIconDefault(name, options);
 }
+
+async function fetchInventoryData() {
+    const [clustersResponse, hostsResponse, vmsResponse, statsResponse] = await Promise.all([
+        fetch('/api/v1/clusters', { credentials: 'same-origin' }),
+        fetch('/api/v1/hosts', { credentials: 'same-origin' }),
+        fetch('/api/v1/virtualmachines', { credentials: 'same-origin' }),
+        fetch('/api/v1/statistics', { credentials: 'same-origin' })
+    ]);
+
+    const unauthorized = [clustersResponse, hostsResponse, vmsResponse, statsResponse].find(
+        resp => resp.status === 401
+    );
+
+    if (unauthorized) {
+        const error = new Error('Authentication required');
+        error.status = 401;
+        throw error;
+    }
+
+    const responses = [clustersResponse, hostsResponse, vmsResponse, statsResponse];
+    const firstFailure = responses.find(resp => !resp.ok);
+    if (firstFailure) {
+        const error = new Error(`HTTP error! status: ${firstFailure.status}`);
+        error.status = firstFailure.status;
+        throw error;
+    }
+
+    const [clusters, hosts, vms, stats] = await Promise.all(responses.map(resp => resp.json()));
+
+    const connectedHosts = (hosts || []).filter(host => host.connected);
+    const disconnectedHosts = (hosts || []).filter(host => !host.connected);
+
+    return {
+        clusters: clusters || [],
+        hosts: connectedHosts,
+        vms: vms || [],
+        disconnected_hosts: disconnectedHosts,
+        total_hosts: (stats && stats.total_hosts) || hosts.length || 0,
+        total_vms: (stats && stats.total_vms) || (vms || []).length || 0,
+        total_clusters: (stats && stats.total_clusters) || (clusters || []).length || 0,
+        disconnected_count: (stats && stats.disconnected_count) || disconnectedHosts.length || 0,
+        last_refresh: stats ? stats.last_refresh : null,
+        environment_name: stats ? stats.environment_name : 'Production Environment'
+    };
+}
 class ViewManager {
     constructor() {
         this.currentView = null;
@@ -626,12 +671,7 @@ class OverviewView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', {
-                credentials: 'same-origin'
-            });
-            if (response.ok) {
-                return await response.json();
-            }
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error fetching inventory:', error);
         }
@@ -771,8 +811,7 @@ class ClusterView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
-            if (response.ok) return await response.json();
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
@@ -899,8 +938,7 @@ class HostView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
-            if (response.ok) return await response.json();
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
@@ -1816,7 +1854,7 @@ class VMView extends BaseView {
         const actionLabel = this.getActionLabel(action);
 
         // Use RESTful endpoint with VM ID
-        const endpoint = `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/${action}`;
+        const endpoint = `/api/v1/virtualmachines/${encodeURIComponent(this.vmData.id)}/${action}`;
 
         this.setButtonsBusy(true);
         this.setActionFeedback(`Sending ${actionLabel} request...`, 'info', {
@@ -1893,7 +1931,7 @@ class VMView extends BaseView {
         });
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}?delete_disks=true&force=false`, {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmData.id)}?delete_disks=true&force=false`, {
                 method: 'DELETE',
                 credentials: 'same-origin',
             });
@@ -2187,8 +2225,7 @@ class VMView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
-            if (response.ok) return await response.json();
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
@@ -2197,8 +2234,8 @@ class VMView extends BaseView {
 
     async fetchVmById(vmId) {
         try {
-            const response = await fetch(`/api/v1/vms/by-id/${encodeURIComponent(vmId)}`, { 
-                credentials: 'same-origin' 
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}`, {
+                credentials: 'same-origin'
             });
             if (response.ok) {
                 return await response.json();
@@ -2466,9 +2503,9 @@ class VMView extends BaseView {
 
     async executeResourceDelete(resourceType, resourceId) {
         const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
-        const endpoint = resourceType === 'disk' 
-            ? `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/disks/${encodeURIComponent(resourceId)}`
-            : `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/nics/${encodeURIComponent(resourceId)}`;
+        const endpoint = resourceType === 'disk'
+            ? `/api/v1/virtualmachines/${encodeURIComponent(this.vmData.id)}/disks/${encodeURIComponent(resourceId)}`
+            : `/api/v1/virtualmachines/${encodeURIComponent(this.vmData.id)}/networkadapters/${encodeURIComponent(resourceId)}`;
 
         this.setActionFeedback(`Deleting ${resourceName}...`, 'info', {
             title: 'Deleting resource',
@@ -2586,8 +2623,7 @@ class DisconnectedHostsView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
-            if (response.ok) return await response.json();
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }

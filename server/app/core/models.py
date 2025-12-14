@@ -66,6 +66,16 @@ class Host(BaseModel):
     error: Optional[str] = None
     total_cpu_cores: int = 0
     total_memory_gb: float = 0.0
+    
+
+class HostSummary(BaseModel):
+    """Shallow host representation for list views."""
+
+    hostname: str
+    cluster: Optional[str] = None
+    connected: bool = False
+    last_seen: Optional[datetime] = None
+    vm_count: int = 0
 
 
 class Notification(BaseModel):
@@ -105,6 +115,18 @@ class VM(BaseModel):
     networks: List["VMNetworkAdapter"] = Field(default_factory=list)
 
 
+class VMListItem(BaseModel):
+    """Shallow VM representation for inventory tables."""
+
+    id: Optional[str] = None
+    name: str
+    host: str
+    cluster: Optional[str] = None
+    state: VMState
+    os_name: Optional[str] = None
+    ip_address: Optional[str] = None
+
+
 class VMDisk(BaseModel):
     """Virtual disk attached to a VM."""
 
@@ -129,6 +151,18 @@ class VMNetworkAdapter(BaseModel):
     network_name: Optional[str] = None
     ip_addresses: List[str] = Field(default_factory=list)
     mac_address: Optional[str] = None
+
+
+class DiskDetail(VMDisk):
+    """Disk detail including owning VM reference."""
+
+    vm_id: Optional[str] = None
+
+
+class NetworkAdapterDetail(VMNetworkAdapter):
+    """NIC detail including owning VM reference."""
+
+    vm_id: Optional[str] = None
 
 
 VM.model_rebuild()
@@ -253,6 +287,41 @@ class InventoryResponse(BaseModel):
     disconnected_count: int = 0
     last_refresh: Optional[datetime] = None
     environment_name: str = "Production Environment"  # New field for page titles
+
+
+class ClusterSummary(BaseModel):
+    """Shallow cluster representation."""
+
+    id: str
+    name: str
+    host_count: int = 0
+    vm_count: int = 0
+
+
+class ClusterDetail(BaseModel):
+    """Cluster detail view with shallow child objects."""
+
+    id: str
+    name: str
+    hosts: List[HostSummary] = Field(default_factory=list)
+    virtual_machines: List[VMListItem] = Field(default_factory=list)
+
+
+class HostDetail(HostSummary):
+    """Host detail with shallow VM list."""
+
+    virtual_machines: List[VMListItem] = Field(default_factory=list)
+
+
+class StatisticsResponse(BaseModel):
+    """Inventory statistics replacing legacy inventory summary counts."""
+
+    total_hosts: int
+    total_clusters: int
+    total_vms: int
+    disconnected_count: int = 0
+    environment_name: str
+    last_refresh: Optional[datetime] = None
 
 
 class BuildInfo(BaseModel):
