@@ -1,7 +1,7 @@
 """Tests: Guest Configuration Generator
 
-This test suite validates guest configuration generation from Pydantic models
-for VM provisioning operations.
+This test suite validates guest configuration generation from flat 
+ManagedDeploymentRequest models for VM provisioning operations.
 
 Tests cover:
 1. Minimal guest config (local admin only)
@@ -17,38 +17,33 @@ transmitted to guest VMs via Hyper-V KVP for OS-level customization.
 import pytest
 from pydantic import ValidationError
 
-from app.core.pydantic_models import (
-    VmSpec,
-    DiskSpec,
-    NicSpec,
-    GuestConfigSpec,
-)
-from app.core.guest_config_generator import (
-    generate_guest_config,
-    generate_guest_config_from_dicts,
-)
+from app.core.pydantic_models import ManagedDeploymentRequest
+from app.core.guest_config_generator import generate_guest_config
+
+
+def create_request(**kwargs) -> ManagedDeploymentRequest:
+    """Helper to create a ManagedDeploymentRequest with defaults."""
+    defaults = {
+        "target_host": "hyperv-01.example.com",
+        "vm_name": "test-vm",
+        "gb_ram": 4,
+        "cpu_cores": 2,
+        "network": "Production",
+        "guest_la_uid": "Administrator",
+        "guest_la_pw": "SecurePass123!",
+    }
+    defaults.update(kwargs)
+    return ManagedDeploymentRequest(**defaults)
 
 
 class TestMinimalGuestConfig:
     """Test minimal guest configuration (local admin only)."""
     
-    def test_no_guest_config_returns_empty_dict(self):
-        """Test that no guest config spec returns empty dict."""
-        vm = VmSpec(vm_name="test-vm", gb_ram=4, cpu_cores=2)
-        
-        config = generate_guest_config(vm)
-        
-        assert config == {}
-    
     def test_minimal_guest_config(self):
         """Test minimal guest config with only local admin credentials."""
-        vm = VmSpec(vm_name="web-01", gb_ram=4, cpu_cores=2)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
-        )
+        request = create_request()
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Should contain exactly the local admin fields
         assert "guest_la_uid" in config
@@ -63,13 +58,15 @@ class TestMinimalGuestConfig:
     
     def test_minimal_guest_config_with_different_credentials(self):
         """Test that different credentials are correctly included."""
-        vm = VmSpec(vm_name="db-01", gb_ram=8, cpu_cores=4)
-        guest = GuestConfigSpec(
+        request = create_request(
+            vm_name="db-01",
+            gb_ram=8,
+            cpu_cores=4,
             guest_la_uid="LocalAdmin",
             guest_la_pw="MyP@ssw0rd!",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         assert config["guest_la_uid"] == "LocalAdmin"
         assert config["guest_la_pw"] == "MyP@ssw0rd!"
@@ -80,17 +77,15 @@ class TestDomainJoinConfiguration:
     
     def test_guest_config_with_domain_join(self):
         """Test guest config with complete domain join configuration."""
-        vm = VmSpec(vm_name="web-01", gb_ram=4, cpu_cores=2)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="web-01",
             guest_domain_join_target="corp.example.com",
             guest_domain_join_uid="EXAMPLE\\svc_join",
             guest_domain_join_pw="DomainPass456!",
             guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Should contain local admin credentials
         assert config["guest_la_uid"] == "Administrator"
@@ -104,17 +99,17 @@ class TestDomainJoinConfiguration:
     
     def test_domain_join_with_different_domain(self):
         """Test domain join with different domain values."""
-        vm = VmSpec(vm_name="sql-01", gb_ram=16, cpu_cores=8)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="sql-01",
+            gb_ram=16,
+            cpu_cores=8,
             guest_domain_join_target="internal.company.net",
             guest_domain_join_uid="COMPANY\\domain_admin",
             guest_domain_join_pw="AnotherPass789!",
             guest_domain_join_ou="OU=Database,OU=Production,DC=internal,DC=company,DC=net",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         assert config["guest_domain_join_target"] == "internal.company.net"
         assert config["guest_domain_join_uid"] == "COMPANY\\domain_admin"
@@ -126,18 +121,15 @@ class TestStaticIPConfiguration:
     
     def test_guest_config_with_static_ip(self):
         """Test guest config with static IP configuration."""
-        vm = VmSpec(vm_name="web-01", gb_ram=4, cpu_cores=2)
-        nic = NicSpec(network="Production")
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="web-01",
             guest_v4_ip_addr="192.168.1.100",
             guest_v4_cidr_prefix=24,
             guest_v4_default_gw="192.168.1.1",
             guest_v4_dns1="192.168.1.10",
         )
         
-        config = generate_guest_config(vm, nic, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Should contain local admin credentials
         assert config["guest_la_uid"] == "Administrator"
@@ -154,10 +146,10 @@ class TestStaticIPConfiguration:
     
     def test_guest_config_with_static_ip_and_optional_fields(self):
         """Test static IP config with optional DNS2 and suffix."""
-        vm = VmSpec(vm_name="app-01", gb_ram=8, cpu_cores=4)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="app-01",
+            gb_ram=8,
+            cpu_cores=4,
             guest_v4_ip_addr="10.0.0.50",
             guest_v4_cidr_prefix=16,
             guest_v4_default_gw="10.0.0.1",
@@ -166,7 +158,7 @@ class TestStaticIPConfiguration:
             guest_net_dns_suffix="corp.example.com",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Should contain required IP fields
         assert config["guest_v4_ip_addr"] == "10.0.0.50"
@@ -178,17 +170,17 @@ class TestStaticIPConfiguration:
     
     def test_static_ip_with_different_network_ranges(self):
         """Test static IP with various network configurations."""
-        vm = VmSpec(vm_name="test-vm", gb_ram=2, cpu_cores=1)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="test-vm",
+            gb_ram=2,
+            cpu_cores=1,
             guest_v4_ip_addr="172.16.50.200",
             guest_v4_cidr_prefix=22,
             guest_v4_default_gw="172.16.48.1",
             guest_v4_dns1="8.8.8.8",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         assert config["guest_v4_ip_addr"] == "172.16.50.200"
         assert config["guest_v4_cidr_prefix"] == 22
@@ -199,15 +191,13 @@ class TestAnsibleConfiguration:
     
     def test_guest_config_with_ansible(self):
         """Test guest config with Ansible SSH configuration."""
-        vm = VmSpec(vm_name="web-01", gb_ram=4, cpu_cores=2)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="web-01",
             cnf_ansible_ssh_user="ansible",
             cnf_ansible_ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Should contain local admin credentials
         assert config["guest_la_uid"] == "Administrator"
@@ -218,15 +208,13 @@ class TestAnsibleConfiguration:
     
     def test_ansible_with_different_credentials(self):
         """Test Ansible config with different user and key."""
-        vm = VmSpec(vm_name="app-01", gb_ram=4, cpu_cores=2)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="app-01",
             cnf_ansible_ssh_user="automation",
             cnf_ansible_ssh_key="ssh-rsa AAAAB3NzaC1yc2EAAAAExample",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         assert config["cnf_ansible_ssh_user"] == "automation"
         assert "ssh-rsa" in config["cnf_ansible_ssh_key"]
@@ -237,10 +225,10 @@ class TestCombinedConfigurations:
     
     def test_domain_join_and_static_ip(self):
         """Test guest config with both domain join and static IP."""
-        vm = VmSpec(vm_name="web-01", gb_ram=8, cpu_cores=4)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="web-01",
+            gb_ram=8,
+            cpu_cores=4,
             guest_domain_join_target="corp.example.com",
             guest_domain_join_uid="EXAMPLE\\svc_join",
             guest_domain_join_pw="DomainPass456!",
@@ -251,7 +239,7 @@ class TestCombinedConfigurations:
             guest_v4_dns1="192.168.1.10",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Should have local admin
         assert "guest_la_uid" in config
@@ -266,10 +254,10 @@ class TestCombinedConfigurations:
     
     def test_all_configurations_combined(self):
         """Test guest config with domain join, static IP, and Ansible."""
-        vm = VmSpec(vm_name="app-01", gb_ram=16, cpu_cores=8)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="app-01",
+            gb_ram=16,
+            cpu_cores=8,
             guest_domain_join_target="internal.company.net",
             guest_domain_join_uid="COMPANY\\svc_join",
             guest_domain_join_pw="DomainPass456!",
@@ -284,7 +272,7 @@ class TestCombinedConfigurations:
             cnf_ansible_ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Should have all configuration sections
         assert "guest_la_uid" in config
@@ -313,10 +301,8 @@ class TestCombinedConfigurations:
     
     def test_ansible_and_static_ip(self):
         """Test Ansible with static IP (no domain join)."""
-        vm = VmSpec(vm_name="linux-01", gb_ram=4, cpu_cores=2)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
+            vm_name="linux-01",
             guest_v4_ip_addr="192.168.2.50",
             guest_v4_cidr_prefix=24,
             guest_v4_default_gw="192.168.2.1",
@@ -325,7 +311,7 @@ class TestCombinedConfigurations:
             cnf_ansible_ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample",
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Should have static IP
         assert config["guest_v4_ip_addr"] == "192.168.2.50"
@@ -337,161 +323,12 @@ class TestCombinedConfigurations:
         assert "guest_domain_join_target" not in config
 
 
-class TestGeneratorWithAllSpecs:
-    """Test generator with different combinations of spec objects."""
-    
-    def test_with_vm_and_nic_specs(self):
-        """Test generator with VM and NIC specs provided."""
-        vm = VmSpec(vm_name="web-01", gb_ram=4, cpu_cores=2)
-        nic = NicSpec(network="Production", adapter_name="Ethernet 1")
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
-        )
-        
-        config = generate_guest_config(vm, nic, guest_config_spec=guest)
-        
-        # NIC spec doesn't affect guest config (only guest IP fields do)
-        assert "guest_la_uid" in config
-        assert len(config) == 2  # Only local admin fields
-    
-    def test_with_vm_nic_and_disk_specs(self):
-        """Test generator with all spec types provided."""
-        vm = VmSpec(vm_name="db-01", gb_ram=16, cpu_cores=8)
-        nic = NicSpec(network="Storage", adapter_name="iSCSI Adapter")
-        disk = DiskSpec(image_name="Windows Server 2022", disk_size_gb=500)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
-        )
-        
-        config = generate_guest_config(vm, nic, disk, guest)
-        
-        # Disk spec doesn't affect guest config
-        assert "guest_la_uid" in config
-        assert len(config) == 2
-    
-    def test_with_only_vm_spec(self):
-        """Test generator with only VM spec (no NIC or disk)."""
-        vm = VmSpec(vm_name="standalone-vm", gb_ram=2, cpu_cores=1)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
-        )
-        
-        config = generate_guest_config(vm, guest_config_spec=guest)
-        
-        assert config["guest_la_uid"] == "Administrator"
-
-
-class TestGeneratorFromDicts:
-    """Test the dict-based generator convenience function."""
-    
-    def test_generate_from_dicts_minimal(self):
-        """Test generating guest config from dict inputs."""
-        vm_dict = {
-            "vm_name": "web-01",
-            "gb_ram": 4,
-            "cpu_cores": 2,
-        }
-        guest_dict = {
-            "guest_la_uid": "Administrator",
-            "guest_la_pw": "SecurePass123!",
-        }
-        
-        config = generate_guest_config_from_dicts(vm_dict, guest_config_dict=guest_dict)
-        
-        assert config["guest_la_uid"] == "Administrator"
-        assert config["guest_la_pw"] == "SecurePass123!"
-    
-    def test_generate_from_dicts_with_domain_join(self):
-        """Test generating config from dicts with domain join."""
-        vm_dict = {
-            "vm_name": "app-01",
-            "gb_ram": 8,
-            "cpu_cores": 4,
-        }
-        guest_dict = {
-            "guest_la_uid": "Administrator",
-            "guest_la_pw": "SecurePass123!",
-            "guest_domain_join_target": "corp.example.com",
-            "guest_domain_join_uid": "EXAMPLE\\svc_join",
-            "guest_domain_join_pw": "DomainPass456!",
-            "guest_domain_join_ou": "OU=Servers,DC=corp,DC=example,DC=com",
-        }
-        
-        config = generate_guest_config_from_dicts(vm_dict, guest_config_dict=guest_dict)
-        
-        assert config["guest_domain_join_target"] == "corp.example.com"
-    
-    def test_generate_from_dicts_with_nic(self):
-        """Test generating config with NIC dict."""
-        vm_dict = {
-            "vm_name": "web-01",
-            "gb_ram": 4,
-            "cpu_cores": 2,
-        }
-        nic_dict = {
-            "network": "Production",
-        }
-        guest_dict = {
-            "guest_la_uid": "Administrator",
-            "guest_la_pw": "SecurePass123!",
-            "guest_v4_ip_addr": "192.168.1.100",
-            "guest_v4_cidr_prefix": 24,
-            "guest_v4_default_gw": "192.168.1.1",
-            "guest_v4_dns1": "192.168.1.10",
-        }
-        
-        config = generate_guest_config_from_dicts(
-            vm_dict,
-            nic_dict=nic_dict,
-            guest_config_dict=guest_dict,
-        )
-        
-        assert config["guest_v4_ip_addr"] == "192.168.1.100"
-    
-    def test_generate_from_dicts_validation_error(self):
-        """Test that invalid dict raises ValidationError."""
-        vm_dict = {
-            "vm_name": "a" * 100,  # Too long
-            "gb_ram": 4,
-            "cpu_cores": 2,
-        }
-        guest_dict = {
-            "guest_la_uid": "Administrator",
-            "guest_la_pw": "SecurePass123!",
-        }
-        
-        with pytest.raises(ValidationError) as exc_info:
-            generate_guest_config_from_dicts(vm_dict, guest_config_dict=guest_dict)
-        
-        # Should fail on VM name length
-        errors = exc_info.value.errors()
-        assert any("vm_name" in str(e["loc"]) for e in errors)
-    
-    def test_generate_from_dicts_no_guest_config(self):
-        """Test generating from dicts with no guest config."""
-        vm_dict = {
-            "vm_name": "test-vm",
-            "gb_ram": 2,
-            "cpu_cores": 1,
-        }
-        
-        config = generate_guest_config_from_dicts(vm_dict)
-        
-        assert config == {}
-
-
 class TestEdgeCases:
     """Test edge cases and special scenarios."""
     
     def test_empty_optional_strings_not_included(self):
         """Test that empty optional strings are not included."""
-        vm = VmSpec(vm_name="test-vm", gb_ram=4, cpu_cores=2)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
+        request = create_request(
             guest_v4_ip_addr="192.168.1.100",
             guest_v4_cidr_prefix=24,
             guest_v4_default_gw="192.168.1.1",
@@ -500,7 +337,7 @@ class TestEdgeCases:
             # guest_net_dns_suffix is None
         )
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Optional fields should not be included if None
         assert "guest_v4_dns2" not in config
@@ -508,59 +345,47 @@ class TestEdgeCases:
     
     def test_config_dict_is_flat(self):
         """Test that generated config is a flat dictionary."""
-        vm = VmSpec(vm_name="test-vm", gb_ram=4, cpu_cores=2)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
-        )
+        request = create_request()
         
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # All values should be simple types, not nested dicts
         for value in config.values():
             assert not isinstance(value, dict)
             assert not isinstance(value, list)
     
-    def test_multiple_vms_with_same_generator(self):
-        """Test generating config for multiple VMs."""
-        vms = [
-            VmSpec(vm_name=f"web-{i:02d}", gb_ram=4, cpu_cores=2)
+    def test_multiple_requests_with_same_guest_config(self):
+        """Test generating config for multiple requests."""
+        requests = [
+            create_request(vm_name=f"web-{i:02d}")
             for i in range(1, 4)
         ]
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
-        )
         
-        configs = [generate_guest_config(vm, guest_config_spec=guest) for vm in vms]
+        configs = [generate_guest_config(req) for req in requests]
         
-        # All should have the same guest config (since guest spec is the same)
+        # All should have the same guest config (since same creds)
         for config in configs:
             assert config["guest_la_uid"] == "Administrator"
             assert config["guest_la_pw"] == "SecurePass123!"
     
     def test_generator_is_pure_function(self):
         """Test that generator doesn't mutate inputs."""
-        vm = VmSpec(vm_name="test-vm", gb_ram=4, cpu_cores=2)
-        guest = GuestConfigSpec(
-            guest_la_uid="Administrator",
-            guest_la_pw="SecurePass123!",
-        )
+        request = create_request()
         
         # Store original values
-        original_vm_name = vm.vm_name
-        original_uid = guest.guest_la_uid
+        original_vm_name = request.vm_name
+        original_uid = request.guest_la_uid
         
         # Generate config
-        config = generate_guest_config(vm, guest_config_spec=guest)
+        config = generate_guest_config(request)
         
         # Inputs should be unchanged
-        assert vm.vm_name == original_vm_name
-        assert guest.guest_la_uid == original_uid
+        assert request.vm_name == original_vm_name
+        assert request.guest_la_uid == original_uid
         
         # Modifying config should not affect inputs
         config["guest_la_uid"] = "ModifiedUser"
-        assert guest.guest_la_uid == original_uid
+        assert request.guest_la_uid == original_uid
 
 
 if __name__ == "__main__":

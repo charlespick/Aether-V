@@ -52,7 +52,6 @@ from ..core.pydantic_models import (
     VmSpec,
     DiskSpec,
     NicSpec,
-    GuestConfigSpec,
 )
 from ..core.auth import (
     Permission,
@@ -1464,7 +1463,7 @@ async def initialize_vm_resource(
     )
 
 
-@router.post("/api/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
+@router.post("/api/v1/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
 async def create_managed_deployment(
     request: ManagedDeploymentRequest,
     user: dict = Depends(require_permission(Permission.WRITER))
@@ -1514,7 +1513,7 @@ async def create_managed_deployment(
         )
 
     # Check if VM already exists
-    vm_name = request.vm_spec.vm_name
+    vm_name = request.vm_name
     existing_vm = inventory_service.get_vm(target_host, vm_name)
     if existing_vm:
         raise HTTPException(

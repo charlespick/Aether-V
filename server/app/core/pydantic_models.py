@@ -3,9 +3,23 @@
 These models provide validation and type safety for all VM resource operations.
 
 Models defined here:
-- Resource specifications: VmSpec, DiskSpec, NicSpec, GuestConfigSpec
-- Deployment requests: ManagedDeploymentRequest
+- Resource specifications: VmSpec, DiskSpec, NicSpec (hardware-only models for independent APIs)
+- Deployment requests: ManagedDeploymentRequest (flat form payload for UI-driven flow)
 - Job envelope: JobRequest, JobResult
+
+Architecture Note:
+    The ManagedDeploymentRequest is a FLAT model that mirrors the UI form submission.
+    All form fields are top-level properties, NOT nested in sub-objects. The managed
+    deployment service internally parses this flat payload, constructs hardware specs,
+    and composes the guest configuration for the Initialize step.
+    
+    VmSpec, DiskSpec, and NicSpec are hardware-only models used by the independent
+    resource APIs (Terraform flow). They do NOT contain guest configuration fields.
+    
+    This design:
+    1. Keeps the API contract simple (flat form → flat payload)
+    2. Centralizes parsing/orchestration logic in the managed deployment service
+    3. Maintains clean separation between hardware and guest config concerns
 """
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, model_validator, ConfigDict
@@ -27,8 +41,12 @@ class VmSpec(BaseModel):
     """Virtual machine hardware specification.
     
     This model represents VM hardware configuration that is sent to the
-    host agent for VM creation. It does NOT include guest configuration
-    fields (those are in GuestConfigSpec).
+    host agent for VM creation. It is used by the independent resource API
+    (POST /api/v1/resources/vms) for Terraform and programmatic access.
+    
+    Guest configuration is NOT included in this model - it is handled
+    separately by the Initialize API for independent resources, or
+    automatically by the ManagedDeploymentRequest for UI-driven deployments.
     """
     vm_name: str = Field(
         ...,
@@ -126,8 +144,13 @@ class DiskSpec(BaseModel):
 class NicSpec(BaseModel):
     """Network adapter hardware specification.
     
-    Represents NIC hardware configuration that is sent to the host agent.
-    Guest IP configuration is handled separately in GuestConfigSpec.
+    This model represents NIC hardware configuration that is sent to the
+    host agent for NIC creation. It is used by the independent resource API
+    (POST /api/v1/resources/nics) for Terraform and programmatic access.
+    
+    Guest IP configuration is NOT included in this model - it is handled
+    separately by the Initialize API for independent resources, or as
+    flat fields in ManagedDeploymentRequest for UI-driven deployments.
     """
     vm_id: Optional[str] = Field(
         None,
@@ -155,16 +178,75 @@ class NicSpec(BaseModel):
     )
 
 
-class GuestConfigSpec(BaseModel):
-    """Guest operating system configuration specification.
+class ManagedDeploymentRequest(BaseModel):
+    """Flat request model for managed VM deployment (UI-driven flow).
     
-    This model aggregates all guest-level configuration from VM and NIC specs.
-    It is transmitted to the guest agent via KVP for OS-level provisioning.
+    This model mirrors the UI form submission directly - all fields are top-level
+    properties, NOT nested in sub-objects. The managed deployment service parses
+    this flat payload internally to construct hardware specs and guest config.
     
-    Field names use underscores to match the expected format for the PowerShell
-    host agent and KVP key names (e.g., guest_v4_ip_addr -> hlvmm.data.guest_v4_ip_addr).
+    This design keeps the API contract simple: what the user enters in the form
+    is exactly what gets sent to the API. The server handles all orchestration.
+    
+    For Terraform/programmatic access, use the independent resource APIs instead:
+    - POST /api/v1/resources/vms (VmSpec)
+    - POST /api/v1/resources/disks (DiskSpec)
+    - POST /api/v1/resources/nics (NicSpec)
+    - POST /api/v1/resources/vms/{vm_id}/initialize (guest config dict)
     """
-    # VM-level guest config
+    # === Target Host (required) ===
+    target_host: str = Field(
+        ...,
+        description="Hostname of the connected Hyper-V host that will execute the job",
+    )
+    
+    # === VM Hardware Configuration (required) ===
+    vm_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="Unique name for the new virtual machine",
+    )
+    gb_ram: int = Field(
+        ...,
+        ge=1,
+        le=512,
+        description="Amount of memory to assign to the VM in gigabytes",
+    )
+    cpu_cores: int = Field(
+        ...,
+        ge=1,
+        le=64,
+        description="Number of virtual CPU cores",
+    )
+    storage_class: Optional[str] = Field(
+        None,
+        description="Name of the storage class where VM files will be stored",
+    )
+    vm_clustered: bool = Field(
+        False,
+        description="Request that the new VM be registered with the Failover Cluster",
+    )
+    
+    # === Disk Configuration (optional - if image_name provided, disk is created) ===
+    image_name: Optional[str] = Field(
+        None,
+        description="Name of a golden image to clone. If provided, a disk will be created",
+    )
+    disk_size_gb: int = Field(
+        100,
+        ge=1,
+        le=65536,
+        description="Size of the virtual disk in gigabytes",
+    )
+    
+    # === Network Configuration (required) ===
+    network: str = Field(
+        ...,
+        description="Name of the network to connect the adapter to",
+    )
+    
+    # === Guest Configuration - Local Admin (required for guest init) ===
     guest_la_uid: str = Field(
         ...,
         description="Username for the guest operating system's local administrator",
@@ -174,7 +256,7 @@ class GuestConfigSpec(BaseModel):
         description="Password for the guest operating system's local administrator",
     )
     
-    # Domain join configuration (all-or-none)
+    # === Guest Configuration - Domain Join (optional, all-or-none) ===
     guest_domain_join_target: Optional[str] = Field(
         None,
         description="Fully qualified domain name to join",
@@ -192,7 +274,7 @@ class GuestConfigSpec(BaseModel):
         description="Organizational unit path for the computer account",
     )
     
-    # Ansible configuration (all-or-none)
+    # === Guest Configuration - Ansible (optional, all-or-none) ===
     cnf_ansible_ssh_user: Optional[str] = Field(
         None,
         description="Username used by Ansible for SSH automation",
@@ -202,13 +284,15 @@ class GuestConfigSpec(BaseModel):
         description="Public key provided to the guest for Ansible SSH access",
     )
     
-    # NIC-level guest config (static IP - all-or-none)
+    # === Guest Configuration - Static IP (optional, all-or-none for required fields) ===
     guest_v4_ip_addr: Optional[str] = Field(
         None,
         description="Static IPv4 address to assign to the guest adapter",
     )
     guest_v4_cidr_prefix: Optional[int] = Field(
         None,
+        ge=0,
+        le=32,
         description="CIDR prefix length that accompanies the static IPv4 address",
     )
     guest_v4_default_gw: Optional[str] = Field(
@@ -221,16 +305,16 @@ class GuestConfigSpec(BaseModel):
     )
     guest_v4_dns2: Optional[str] = Field(
         None,
-        description="Secondary IPv4 DNS server for the guest adapter",
+        description="Secondary IPv4 DNS server for the guest adapter (optional)",
     )
     guest_net_dns_suffix: Optional[str] = Field(
         None,
-        description="DNS search suffix for the guest network configuration",
+        description="DNS search suffix for the guest network configuration (optional)",
     )
 
     @model_validator(mode='after')
-    def validate_parameter_sets(self) -> 'GuestConfigSpec':
-        """Validate all-or-none parameter sets for domain join and ansible."""
+    def validate_parameter_sets(self) -> 'ManagedDeploymentRequest':
+        """Validate all-or-none parameter sets for domain join, ansible, and static IP."""
         # Domain join: all-or-none
         domain_fields = [
             self.guest_domain_join_target,
@@ -255,7 +339,7 @@ class GuestConfigSpec(BaseModel):
                 "cnf_ansible_ssh_user, cnf_ansible_ssh_key"
             )
         
-        # Static IP: all-or-none for required fields
+        # Static IP: all-or-none for required fields (dns2, dns_suffix optional)
         static_ip_required = [
             self.guest_v4_ip_addr,
             self.guest_v4_cidr_prefix,
@@ -275,64 +359,17 @@ class GuestConfigSpec(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
+                "target_host": "hyperv-01.example.com",
+                "vm_name": "web-01",
+                "gb_ram": 4,
+                "cpu_cores": 2,
+                "storage_class": "fast-ssd",
+                "vm_clustered": False,
+                "image_name": "Windows Server 2022",
+                "disk_size_gb": 100,
+                "network": "Production",
                 "guest_la_uid": "Administrator",
                 "guest_la_pw": "SecurePass123!",
-                "guest_domain_join_target": "corp.example.com",
-                "guest_domain_join_uid": "EXAMPLE\\svc_join",
-                "guest_domain_join_pw": "DomainPass456!",
-                "guest_domain_join_ou": "OU=Servers,DC=corp,DC=example,DC=com",
-            }
-        }
-    )
-
-
-class ManagedDeploymentRequest(BaseModel):
-    """Request for a managed VM deployment.
-    
-    This represents a complete VM deployment including VM hardware, disk,
-    network adapter, and guest configuration. It is the top-level request
-    for the managed deployment orchestration.
-    """
-    vm_spec: VmSpec = Field(
-        ...,
-        description="VM hardware specification",
-    )
-    disk_spec: Optional[DiskSpec] = Field(
-        None,
-        description="Optional disk specification. If provided, a disk will be created",
-    )
-    nic_spec: Optional[NicSpec] = Field(
-        None,
-        description="Optional NIC specification. If provided, a NIC will be created",
-    )
-    guest_config: Optional[GuestConfigSpec] = Field(
-        None,
-        description="Optional guest configuration. If provided, guest will be initialized",
-    )
-    target_host: str = Field(
-        ...,
-        description="Hostname of the connected Hyper-V host that will execute the job",
-    )
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "vm_spec": {
-                    "vm_name": "web-01",
-                    "gb_ram": 4,
-                    "cpu_cores": 2,
-                },
-                "disk_spec": {
-                    "image_name": "Windows Server 2022",
-                },
-                "nic_spec": {
-                    "network": "Production",
-                },
-                "guest_config": {
-                    "guest_la_uid": "Administrator",
-                    "guest_la_pw": "SecurePass123!",
-                },
-                "target_host": "hyperv-01.example.com",
             }
         }
     )
