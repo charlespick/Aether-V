@@ -1,3 +1,5 @@
+Terraform object model for virtual machine - this is the interface the Terraform provider will expose, NOT the internal model.
+
 Key note - the entire VM is managed as a single resource in TF so that the state can hold all the objects together and the
 tf provider can manage the initialization step at the end. However the provider still uses the descreet nic, vm, and disk
 resources. The Managed Deployment endpoint should NOT be used anywhere in the Terraform provider code. 
