@@ -453,7 +453,7 @@ async def readiness_check(response: Response):
 @router.get(
     "/api/v1/diagnostics/services",
     response_model=ServiceDiagnosticsResponse,
-    tags=["Diagnostics"],
+    tags=["Admin"],
 )
 async def get_service_diagnostics(
     user: dict = Depends(require_permission(Permission.ADMIN)),
@@ -643,7 +643,7 @@ async def get_oss_licenses(user: dict = Depends(require_permission(Permission.RE
     return OSSLicenseResponse(packages=packages, summary=summary)
 
 
-@router.get("/api/v1/statistics", response_model=StatisticsResponse, tags=["Inventory"])
+@router.get("/api/v1/statistics", response_model=StatisticsResponse, tags=["Health"])
 async def get_inventory_statistics(
     user: dict = Depends(require_permission(Permission.READER)),
 ):
@@ -1547,7 +1547,7 @@ async def initialize_vm_resource(
     )
 
 
-@router.post("/api/v1/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
+@router.post("/api/v1/managed-deployments", response_model=JobResult, tags=["Jobs"])
 async def create_managed_deployment(
     request: ManagedDeploymentRequest,
     user: dict = Depends(require_permission(Permission.WRITER))
@@ -1617,7 +1617,7 @@ async def create_managed_deployment(
     )
 
 
-@router.post("/api/v1/noop-test", response_model=JobResult, tags=["Testing"])
+@router.post("/api/v1/noop-test", response_model=JobResult, tags=["Admin"])
 async def submit_noop_test(
     request: NoopTestRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
