@@ -16,13 +16,15 @@
 		extractIpAddresses,
 		formatDate,
 		formatValue,
-		buildMemoryHardwareItems,
-		formatDiskCapacity,
-		extractAdapterAddresses,
-		getNotesContent,
-		getActionLabel,
-		estimateNextState,
-	} from "$lib/utils/vm";
+                buildMemoryHardwareItems,
+                formatDiskCapacity,
+                extractAdapterAddresses,
+                getNotesContent,
+                getActionLabel,
+                estimateNextState,
+                formatBooleanSetting,
+                formatBandwidthRange,
+        } from "$lib/utils/vm";
 
 	interface Props {
 		vmId: string;
@@ -103,19 +105,82 @@
 			: null,
 	);
 
-	// Determine cluster status
-	const clusterStatus = $derived(() => {
-		if (!vm) return { isClustered: false, clusterName: null };
+        // Determine cluster status
+        const clusterStatus = $derived(() => {
+                if (!vm) return { isClustered: false, clusterName: null };
 
-		// Use the authoritative clustered boolean from inventory
-		const isClustered = vm.clustered ?? false;
-		const clusterName = isClustered ? (vm.cluster_name ?? null) : null;
+                // Use the authoritative clustered boolean from inventory
+                const isClustered =
+                        vm.clustered === true || vm.clustered === "true" || vm.clustered === "True";
+                const clusterName = isClustered ? (vm.cluster_name ?? null) : null;
 
-		return {
-			isClustered,
-			clusterName,
-		};
-	});
+                return {
+                        isClustered,
+                        clusterName,
+                };
+        });
+
+        const vmTabs = [
+                { id: "hardware", label: "VM Hardware" },
+                { id: "disks", label: "Disks" },
+                { id: "networks", label: "Networks" },
+                { id: "security", label: "Security" },
+                { id: "boot", label: "Boot & Host" },
+                { id: "integration", label: "Integration Services" },
+                { id: "notes", label: "Notes" },
+        ];
+
+        const integrationServices = $derived([
+                {
+                        key: "shutdown",
+                        label: "Guest Shutdown",
+                        value: vm?.integration_services_shutdown,
+                        description: "Gracefully request shutdown from the guest OS.",
+                },
+                {
+                        key: "time",
+                        label: "Time Synchronization",
+                        value: vm?.integration_services_time,
+                        description: "Keeps guest clocks aligned with the host.",
+                },
+                {
+                        key: "data_exchange",
+                        label: "Data Exchange",
+                        value: vm?.integration_services_data_exchange,
+                        description: "Shares host and guest information for tooling.",
+                },
+                {
+                        key: "heartbeat",
+                        label: "Heartbeat",
+                        value: vm?.integration_services_heartbeat,
+                        description: "Monitors guest health via heartbeat signals.",
+                },
+                {
+                        key: "vss_backup",
+                        label: "Backup (VSS)",
+                        value: vm?.integration_services_vss_backup,
+                        description: "Coordinates backup operations using VSS.",
+                },
+                {
+                        key: "guest_services",
+                        label: "Guest Services",
+                        value: vm?.integration_services_guest_services,
+                        description: "Enables file copy and guest-side utilities.",
+                },
+        ]);
+
+        const securityProfile = $derived({
+                secureBoot: formatBooleanSetting(vm?.secure_boot_enabled),
+                secureBootTemplate: formatValue(vm?.secure_boot_template),
+                tpm: formatBooleanSetting(vm?.trusted_platform_module_enabled),
+                keyProtector: formatValue(vm?.key_protector_kind),
+        });
+
+        const bootProfile = $derived({
+                primaryBootDevice: formatValue(vm?.primary_boot_device, "Not configured"),
+                hostRecoveryAction: formatValue(vm?.host_recovery_action, "Use host policy"),
+                hostStopAction: formatValue(vm?.host_stop_action, "Use host policy"),
+        });
 
 	// Handle action button clicks
 	function handleAction(action: string) {
@@ -389,15 +454,15 @@
 
 		<!-- Tabbed Details -->
 		<section class="vm-detail-tabs" aria-label="Virtual machine details">
-			<div
-				class="vm-tab-list"
-				role="tablist"
-				aria-label="Virtual machine detail tabs"
-			>
-				{#each [{ id: "hardware", label: "VM Hardware" }, { id: "disks", label: "Disks" }, { id: "networks", label: "Networks" }, { id: "notes", label: "Notes" }] as tab}
-					<button
-						class="vm-tab"
-						class:active={activeTab === tab.id}
+                        <div
+                                class="vm-tab-list"
+                                role="tablist"
+                                aria-label="Virtual machine detail tabs"
+                        >
+                                {#each vmTabs as tab}
+                                        <button
+                                                class="vm-tab"
+                                                class:active={activeTab === tab.id}
 						role="tab"
 						id="vm-tab-{tab.id}"
 						aria-selected={activeTab === tab.id}
@@ -464,27 +529,29 @@
 						aria-labelledby="vm-tab-disks"
 					>
 						<div class="vm-table">
-							<div class="table-header">
-								<div>Disk</div>
-								<div>Type</div>
-								<div>Capacity</div>
-								<div>Location</div>
-								<div>Actions</div>
-							</div>
-							{#if disks.length === 0}
+                                                        <div class="table-header">
+                                                                <div>Disk</div>
+                                                                <div>Type</div>
+                                                                <div>Capacity</div>
+                                                                <div>Storage Class</div>
+                                                                <div>Location</div>
+                                                                <div>Actions</div>
+                                                        </div>
+                                                        {#if disks.length === 0}
 								<div class="vm-empty-row">
 									Disk information not available yet.
 								</div>
 							{:else}
 								{#each disks as disk}
-									<div class="table-row">
-										<div>{disk.name || "Disk"}</div>
-										<div>{disk.type || "—"}</div>
-										<div>{formatDiskCapacity(disk)}</div>
-										<div>{disk.path || "—"}</div>
-										<div class="vm-resource-actions">
-											<button
-												type="button"
+                                                                        <div class="table-row">
+                                                                                <div>{disk.name || "Disk"}</div>
+                                                                                <div>{disk.type || "—"}</div>
+                                                                                <div>{formatDiskCapacity(disk)}</div>
+                                                                                <div>{formatValue(disk.storage_class)}</div>
+                                                                                <div>{disk.path || "—"}</div>
+                                                                                <div class="vm-resource-actions">
+                                                                                        <button
+                                                                                                type="button"
 												class="resource-menu-btn"
 												aria-label="Disk actions"
 												title="Actions"
@@ -531,41 +598,83 @@
 						role="tabpanel"
 						aria-labelledby="vm-tab-networks"
 					>
-						<div class="vm-table">
-							<div class="table-header">
-								<div>Adapter</div>
-								<div>IP Address</div>
-								<div>Network</div>
-								<div>Actions</div>
-							</div>
-							{#if networks.length === 0}
-								<div class="vm-empty-row">
-									Network details not available yet.
-								</div>
-							{:else}
-								{#each networks as adapter}
-									{@const networkDisplay =
-										adapter.network ||
-										(adapter.virtual_switch &&
-										adapter.vlan_id
-											? `${adapter.virtual_switch}/${adapter.vlan_id}`
-											: adapter.vlan_id
-												? `VLAN ${adapter.vlan_id}`
-												: adapter.virtual_switch ||
-													"—")}
-									<div class="table-row">
-										<div>
-											{adapter.adapter_name || "Adapter"}
-										</div>
-										<div>
-											{extractAdapterAddresses(adapter)}
-										</div>
-										<div>{networkDisplay}</div>
-										<div class="vm-resource-actions">
-											<button
-												type="button"
-												class="resource-menu-btn"
-												aria-label="Network adapter actions"
+                                                <div class="vm-table">
+                                                        <div class="table-header">
+                                                                <div>Adapter</div>
+                                                                <div>IP Address</div>
+                                                                <div>Network</div>
+                                                                <div>Switch / VLAN</div>
+                                                                <div>MAC & Mode</div>
+                                                                <div>Security</div>
+                                                                <div>Bandwidth</div>
+                                                                <div>Actions</div>
+                                                        </div>
+                                                        {#if networks.length === 0}
+                                                                <div class="vm-empty-row">
+                                                                        Network details not available yet.
+                                                                </div>
+                                                        {:else}
+                                                                {#each networks as adapter}
+                                                                        {@const networkDisplay =
+                                                                                adapter.network ||
+                                                                                (adapter.virtual_switch &&
+                                                                                adapter.vlan_id
+                                                                                        ? `${adapter.virtual_switch}/${adapter.vlan_id}`
+                                                                                        : adapter.vlan_id
+                                                                                                ? `VLAN ${adapter.vlan_id}`
+                                                                                                : adapter.virtual_switch ||
+                                                                                                        "—")}
+                                                                        <div class="table-row">
+                                                                                <div>
+                                                                                        {adapter.adapter_name || "Adapter"}
+                                                                                </div>
+                                                                                <div>
+                                                                                        {extractAdapterAddresses(adapter)}
+                                                                                </div>
+                                                                                <div>{networkDisplay}</div>
+                                                                                <div class="table-metadata">
+                                                                                        <div class="metadata-label">Virtual Switch</div>
+                                                                                        <div class="metadata-value">{formatValue(adapter.virtual_switch)}</div>
+                                                                                        <div class="metadata-label">VLAN</div>
+                                                                                        <div class="metadata-value">{formatValue(adapter.vlan_id)}</div>
+                                                                                </div>
+                                                                                <div class="table-metadata">
+                                                                                        <div class="metadata-label">MAC Address</div>
+                                                                                        <div class="metadata-value">{formatValue(adapter.mac_address)}</div>
+                                                                                        <div class="metadata-label">Assignment</div>
+                                                                                        <div class="metadata-value">{formatValue(adapter.mac_address_config)}</div>
+                                                                                </div>
+                                                                                <div class="security-badges">
+                                                                                        {#if typeof adapter.dhcp_guard !== "undefined"}
+                                                                                                <span class={`badge ${adapter.dhcp_guard ? "badge-success" : "badge-muted"}`}>
+                                                                                                        DHCP Guard {adapter.dhcp_guard ? "On" : "Off"}
+                                                                                                </span>
+                                                                                        {/if}
+                                                                                        {#if typeof adapter.router_guard !== "undefined"}
+                                                                                                <span class={`badge ${adapter.router_guard ? "badge-success" : "badge-muted"}`}>
+                                                                                                        Router Guard {adapter.router_guard ? "On" : "Off"}
+                                                                                                </span>
+                                                                                        {/if}
+                                                                                        {#if typeof adapter.mac_spoof_guard !== "undefined"}
+                                                                                                <span class={`badge ${adapter.mac_spoof_guard ? "badge-success" : "badge-muted"}`}>
+                                                                                                        MAC Spoof Guard {adapter.mac_spoof_guard ? "On" : "Off"}
+                                                                                                </span>
+                                                                                        {/if}
+                                                                                        {#if typeof adapter.dhcp_guard === "undefined" && typeof adapter.router_guard === "undefined" && typeof adapter.mac_spoof_guard === "undefined"}
+                                                                                                <span class="badge badge-muted">Security defaults</span>
+                                                                                        {/if}
+                                                                                </div>
+                                                                                <div>
+                                                                                        {formatBandwidthRange(
+                                                                                                adapter.min_bandwidth_mbps,
+                                                                                                adapter.max_bandwidth_mbps,
+                                                                                        )}
+                                                                                </div>
+                                                                                <div class="vm-resource-actions">
+                                                                                        <button
+                                                                                                type="button"
+                                                                                                class="resource-menu-btn"
+                                                                                                aria-label="Network adapter actions"
 												title="Actions"
 												onclick={() => {
 													toastStore.info(
@@ -600,13 +709,93 @@
 								<span>Add Network Adapter</span>
 							</button>
 						</div>
-					</div>
-				{/if}
+                                        </div>
+                                {/if}
 
-				<!-- Notes Tab -->
-				{#if activeTab === "notes"}
-					<div
-						class="vm-tab-panel vm-tab-panel--notes"
+                                <!-- Security Tab -->
+                                {#if activeTab === "security"}
+                                        <div
+                                                class="vm-tab-panel vm-tab-panel--grid"
+                                                role="tabpanel"
+                                                aria-labelledby="vm-tab-security"
+                                        >
+                                                <div class="vm-grid">
+                                                        <div class="vm-card">
+                                                                <div class="vm-property-label">Secure Boot</div>
+                                                                <div class="vm-property-value">{securityProfile.secureBoot}</div>
+                                                                <div class="vm-helper-text">Template: {securityProfile.secureBootTemplate}</div>
+                                                        </div>
+                                                        <div class="vm-card">
+                                                                <div class="vm-property-label">Trusted Platform Module</div>
+                                                                <div class="vm-property-value">{securityProfile.tpm}</div>
+                                                                <div class="vm-helper-text">Reported status from host</div>
+                                                        </div>
+                                                        <div class="vm-card">
+                                                                <div class="vm-property-label">Key Protector</div>
+                                                                <div class="vm-property-value">{securityProfile.keyProtector}</div>
+                                                                <div class="vm-helper-text">Indicates how the VM is shielded</div>
+                                                        </div>
+                                                </div>
+                                        </div>
+                                {/if}
+
+                                <!-- Boot & Host Tab -->
+                                {#if activeTab === "boot"}
+                                        <div
+                                                class="vm-tab-panel vm-tab-panel--grid"
+                                                role="tabpanel"
+                                                aria-labelledby="vm-tab-boot"
+                                        >
+                                                <div class="vm-grid">
+                                                        <div class="vm-card">
+                                                                <div class="vm-property-label">Primary Boot Device</div>
+                                                                <div class="vm-property-value">{bootProfile.primaryBootDevice}</div>
+                                                                <div class="vm-helper-text">Device Hyper-V uses first during startup</div>
+                                                        </div>
+                                                        <div class="vm-card">
+                                                                <div class="vm-property-label">Host Recovery Action</div>
+                                                                <div class="vm-property-value">{bootProfile.hostRecoveryAction}</div>
+                                                                <div class="vm-helper-text">Action when the host service recovers</div>
+                                                        </div>
+                                                        <div class="vm-card">
+                                                                <div class="vm-property-label">Host Stop Action</div>
+                                                                <div class="vm-property-value">{bootProfile.hostStopAction}</div>
+                                                                <div class="vm-helper-text">Behavior when the host stops unexpectedly</div>
+                                                        </div>
+                                                </div>
+                                        </div>
+                                {/if}
+
+                                <!-- Integration Services Tab -->
+                                {#if activeTab === "integration"}
+                                        <div
+                                                class="vm-tab-panel vm-tab-panel--grid"
+                                                role="tabpanel"
+                                                aria-labelledby="vm-tab-integration"
+                                        >
+                                                <div class="integration-grid">
+                                                        {#each integrationServices as service}
+                                                                <div class="integration-card">
+                                                                        <div class="integration-header">
+                                                                                <span class="integration-name">{service.label}</span>
+                                                                                <span
+                                                                                        class={`badge ${service.value ? "badge-success" : "badge-muted"}`}
+                                                                                        aria-label={`${service.label} is ${service.value ? "enabled" : "disabled"}`}
+                                                                                >
+                                                                                        {formatBooleanSetting(service.value)}
+                                                                                </span>
+                                                                        </div>
+                                                                        <div class="integration-description">{service.description}</div>
+                                                                </div>
+                                                        {/each}
+                                                </div>
+                                        </div>
+                                {/if}
+
+                                <!-- Notes Tab -->
+                                {#if activeTab === "notes"}
+                                        <div
+                                                class="vm-tab-panel vm-tab-panel--notes"
 						role="tabpanel"
 						aria-labelledby="vm-tab-notes"
 					>
@@ -842,17 +1031,17 @@
 		color: var(--text-primary);
 	}
 
-	/* Disks table: 5 columns */
-	.vm-tab-panel[aria-labelledby="vm-tab-disks"] .table-header,
-	.vm-tab-panel[aria-labelledby="vm-tab-disks"] .table-row {
-		grid-template-columns: 2fr 1fr 1fr 2fr 80px;
-	}
+        /* Disks table: 6 columns */
+        .vm-tab-panel[aria-labelledby="vm-tab-disks"] .table-header,
+        .vm-tab-panel[aria-labelledby="vm-tab-disks"] .table-row {
+                grid-template-columns: 1.5fr 1fr 1fr 1fr 1.5fr 80px;
+        }
 
-	/* Networks table: 4 columns */
-	.vm-tab-panel[aria-labelledby="vm-tab-networks"] .table-header,
-	.vm-tab-panel[aria-labelledby="vm-tab-networks"] .table-row {
-		grid-template-columns: 1.5fr 1.5fr 1.5fr 80px;
-	}
+        /* Networks table: 8 columns */
+        .vm-tab-panel[aria-labelledby="vm-tab-networks"] .table-header,
+        .vm-tab-panel[aria-labelledby="vm-tab-networks"] .table-row {
+                grid-template-columns: 1fr 1.2fr 1fr 1fr 1fr 1.1fr 1fr 80px;
+        }
 
 	.table-row {
 		display: grid;
@@ -939,17 +1128,113 @@
 		min-height: 200px;
 	}
 
-	.vm-notes-content {
-		padding: 1.25rem;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		border-radius: var(--radius-md);
-		white-space: pre-wrap;
-		word-wrap: break-word;
-		color: var(--text-primary);
-		line-height: 1.6;
-		font-size: 0.9375rem;
-	}
+        .vm-notes-content {
+                padding: 1.25rem;
+                background: var(--bg-tertiary);
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-md);
+                white-space: pre-wrap;
+                word-wrap: break-word;
+                color: var(--text-primary);
+                line-height: 1.6;
+                font-size: 0.9375rem;
+        }
+
+        .table-metadata {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.25rem 0.75rem;
+        }
+
+        .metadata-label {
+                font-size: 0.75rem;
+                color: var(--text-secondary);
+        }
+
+        .metadata-value {
+                font-weight: 600;
+                color: var(--text-primary);
+        }
+
+        .security-badges {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+        }
+
+        .badge {
+                display: inline-flex;
+                align-items: center;
+                padding: 0.25rem 0.5rem;
+                border-radius: var(--radius-full, 999px);
+                font-size: 0.75rem;
+                font-weight: 700;
+        }
+
+        .badge-success {
+                background: var(--success);
+                color: white;
+        }
+
+        .badge-muted {
+                background: var(--bg-tertiary);
+                color: var(--text-secondary);
+                border: 1px solid var(--border-color);
+        }
+
+        .vm-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 1rem;
+        }
+
+        .vm-card {
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-md);
+                padding: 1rem;
+                background: var(--bg-tertiary);
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
+        }
+
+        .vm-helper-text {
+                color: var(--text-secondary);
+                font-size: 0.875rem;
+        }
+
+        .integration-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+                gap: 1rem;
+        }
+
+        .integration-card {
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-md);
+                padding: 1rem;
+                background: var(--bg-tertiary);
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
+        }
+
+        .integration-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.75rem;
+        }
+
+        .integration-name {
+                font-weight: 600;
+                color: var(--text-primary);
+        }
+
+        .integration-description {
+                color: var(--text-secondary);
+                font-size: 0.9rem;
+        }
 
 	/* Responsive */
 	@media (max-width: 768px) {
