@@ -661,10 +661,6 @@ try {
                     }
                 }
             }
-            
-            if ($clusteredVmGuids.Count -gt 0) {
-                $result.Host.Warnings += "Identified $($clusteredVmGuids.Count) clustered VMs on this host"
-            }
         }
         catch {
             $result.Warnings += "Cluster VM protection query failed: $($_.Exception.Message)"
