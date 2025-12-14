@@ -1,14 +1,14 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
-	import ViewLoader from '$lib/components/ViewLoader.svelte';
-	import Icon from '$lib/components/common/Icon.svelte';
-	import VmActionButtons from '$lib/components/vm/VmActionButtons.svelte';
-	import VmActionConfirmation from '$lib/components/vm/VmActionConfirmation.svelte';
-	import { useAsyncData } from '$lib/composables/useAsyncData';
-	import { inventoryStore } from '$lib/stores/inventoryStore';
-	import { toastStore } from '$lib/stores/toastStore';
-	import type { VM } from '$lib/stores/inventoryStore';
+	import { goto } from "$app/navigation";
+	import { base } from "$app/paths";
+	import ViewLoader from "$lib/components/ViewLoader.svelte";
+	import Icon from "$lib/components/common/Icon.svelte";
+	import VmActionButtons from "$lib/components/vm/VmActionButtons.svelte";
+	import VmActionConfirmation from "$lib/components/vm/VmActionConfirmation.svelte";
+	import { useAsyncData } from "$lib/composables/useAsyncData";
+	import { inventoryStore } from "$lib/stores/inventoryStore";
+	import { toastStore } from "$lib/stores/toastStore";
+	import type { VM } from "$lib/stores/inventoryStore";
 	import {
 		getVmStateMeta,
 		formatOsFamily,
@@ -21,8 +21,8 @@
 		extractAdapterAddresses,
 		getNotesContent,
 		getActionLabel,
-		estimateNextState
-	} from '$lib/utils/vm';
+		estimateNextState,
+	} from "$lib/utils/vm";
 
 	interface Props {
 		vmId: string;
@@ -39,9 +39,12 @@
 	const vmData = useAsyncData<VMData>(
 		async () => {
 			// Fetch specific VM by ID
-			const vmResponse = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}`, {
-				credentials: 'same-origin'
-			});
+			const vmResponse = await fetch(
+				`/api/v1/virtualmachines/${encodeURIComponent(vmId)}`,
+				{
+					credentials: "same-origin",
+				},
+			);
 
 			if (!vmResponse.ok) {
 				throw new Error(`VM ${vmId} not found`);
@@ -50,14 +53,18 @@
 			const vm = await vmResponse.json();
 
 			// Fetch full inventory for context
-			const inventory = inventoryStore.getData() || { hosts: [], vms: [], clusters: [] };
+			const inventory = inventoryStore.getData() || {
+				hosts: [],
+				vms: [],
+				clusters: [],
+			};
 
 			return { vm, inventory };
 		},
 		{
 			cache: false,
-			refetchOnMount: true
-		}
+			refetchOnMount: true,
+		},
 	);
 
 	// Re-fetch data when vmId changes
@@ -71,9 +78,12 @@
 	const environmentName = inventoryStore.environmentName;
 
 	// State management
-	let activeTab = $state('hardware');
+	let activeTab = $state("hardware");
 	let actionInProgress = $state(false);
-	let confirmingAction = $state<{ action: string; buttonRef: HTMLElement } | null>(null);
+	let confirmingAction = $state<{
+		action: string;
+		buttonRef: HTMLElement;
+	} | null>(null);
 	let currentVmState = $state<string | undefined>(undefined);
 
 	// Update local state when VM data changes
@@ -83,14 +93,14 @@
 		}
 	});
 
-	const displayState = $derived(currentVmState || vm?.state || 'Unknown');
+	const displayState = $derived(currentVmState || vm?.state || "Unknown");
 	const meta = $derived(getVmStateMeta(displayState));
 
 	// Find host info
 	const hostInfo = $derived(
 		vm && inventory
 			? inventory.hosts?.find((h: any) => h.hostname === vm.host)
-			: null
+			: null,
 	);
 
 	// Determine cluster status
@@ -98,12 +108,14 @@
 		if (!vm) return { isClustered: false, clusterName: null };
 
 		const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
-		const hostCluster = hostInfo?.cluster ? String(hostInfo.cluster).trim() : '';
+		const hostCluster = hostInfo?.cluster
+			? String(hostInfo.cluster).trim()
+			: "";
 
-		if (typeof rawClustered === 'boolean') {
+		if (typeof rawClustered === "boolean") {
 			return {
 				isClustered: rawClustered,
-				clusterName: rawClustered ? hostCluster : null
+				clusterName: rawClustered ? hostCluster : null,
 			};
 		}
 
@@ -116,15 +128,17 @@
 
 	// Handle action button clicks
 	function handleAction(action: string) {
-		if (action === 'edit') {
+		if (action === "edit") {
 			// TODO: Open edit overlay when implemented
-			toastStore.info('Edit VM functionality coming soon');
+			toastStore.info("Edit VM functionality coming soon");
 			return;
 		}
 
 		// Actions requiring confirmation
-		if (['stop', 'shutdown', 'reset', 'delete'].includes(action)) {
-			const buttonRef = document.querySelector(`[data-action="${action}"]`) as HTMLElement;
+		if (["stop", "shutdown", "reset", "delete"].includes(action)) {
+			const buttonRef = document.querySelector(
+				`[data-action="${action}"]`,
+			) as HTMLElement;
 			if (buttonRef) {
 				confirmingAction = { action, buttonRef };
 			}
@@ -144,28 +158,29 @@
 
 		const actionLabel = getActionLabel(action);
 		const endpoint =
-			action === 'delete'
+			action === "delete"
 				? `/api/v1/virtualmachines/${encodeURIComponent(vm.id)}?delete_disks=true&force=false`
 				: `/api/v1/virtualmachines/${encodeURIComponent(vm.id)}/${action}`;
 
 		toastStore.info(`Sending ${actionLabel} request...`, {
-			title: `${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} in progress`
+			title: `${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} in progress`,
 		});
 
 		try {
 			const response = await fetch(endpoint, {
-				method: action === 'delete' ? 'DELETE' : 'POST',
-				credentials: 'same-origin'
+				method: action === "delete" ? "DELETE" : "POST",
+				credentials: "same-origin",
 			});
 
 			const payload = await response.json().catch(() => null);
 
 			if (response.ok) {
 				const message =
-					payload?.message || `${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} command accepted for VM ${vm.name}.`;
+					payload?.message ||
+					`${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} command accepted for VM ${vm.name}.`;
 
 				toastStore.success(message, {
-					title: 'VM action accepted'
+					title: "VM action accepted",
 				});
 
 				// Update optimistic state
@@ -176,28 +191,33 @@
 					vmData.execute();
 				}, 400);
 			} else {
-				let detail = payload?.detail || payload?.message || response.statusText || 'Request failed';
+				let detail =
+					payload?.detail ||
+					payload?.message ||
+					response.statusText ||
+					"Request failed";
 
 				// Enhanced shutdown error
-				if (action === 'shutdown' && typeof detail === 'string') {
+				if (action === "shutdown" && typeof detail === "string") {
 					const message = detail.toLowerCase();
 					if (
-						message.includes('stop-vm') ||
-						message.includes('shutdown') ||
-						message.includes('unspecified') ||
-						message.includes('failed')
+						message.includes("stop-vm") ||
+						message.includes("shutdown") ||
+						message.includes("unspecified") ||
+						message.includes("failed")
 					) {
-						detail += '\n\nNote: Graceful shutdown requires the guest OS to be responsive and have working Hyper-V Integration Services. If the VM is unresponsive, use "Turn Off" instead.';
+						detail +=
+							'\n\nNote: Graceful shutdown requires the guest OS to be responsive and have working Hyper-V Integration Services. If the VM is unresponsive, use "Turn Off" instead.';
 					}
 				}
 
 				toastStore.error(`Unable to ${actionLabel} VM: ${detail}`, {
-					title: 'VM action failed'
+					title: "VM action failed",
 				});
 			}
 		} catch (error: any) {
 			toastStore.error(`Failed to ${actionLabel} VM: ${error.message}`, {
-				title: 'VM action failed'
+				title: "VM action failed",
 			});
 		} finally {
 			actionInProgress = false;
@@ -205,23 +225,27 @@
 	}
 
 	// Handle resource actions (disk/nic)
-	async function handleResourceDelete(resourceType: 'disk' | 'nic', resourceId: string) {
+	async function handleResourceDelete(
+		resourceType: "disk" | "nic",
+		resourceId: string,
+	) {
 		if (!vm) return;
 
-		const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
+		const resourceName =
+			resourceType === "disk" ? "disk" : "network adapter";
 		const endpoint =
-			resourceType === 'disk'
+			resourceType === "disk"
 				? `/api/v1/virtualmachines/${encodeURIComponent(vm.id)}/disks/${encodeURIComponent(resourceId)}`
 				: `/api/v1/virtualmachines/${encodeURIComponent(vm.id)}/networkadapters/${encodeURIComponent(resourceId)}`;
 
 		toastStore.info(`Deleting ${resourceName}...`, {
-			title: 'Deleting resource'
+			title: "Deleting resource",
 		});
 
 		try {
 			const response = await fetch(endpoint, {
-				method: 'DELETE',
-				credentials: 'same-origin'
+				method: "DELETE",
+				credentials: "same-origin",
 			});
 
 			const payload = await response.json().catch(() => null);
@@ -231,7 +255,7 @@
 					payload?.message ||
 					`${resourceName.charAt(0).toUpperCase() + resourceName.slice(1)} deletion queued.`;
 				toastStore.success(message, {
-					title: 'Resource deletion queued'
+					title: "Resource deletion queued",
 				});
 
 				// Refresh view
@@ -239,22 +263,35 @@
 					vmData.execute();
 				}, 400);
 			} else {
-				const detail = payload?.detail || payload?.message || response.statusText || 'Request failed';
-				const errorMsg = typeof detail === 'string' ? detail : JSON.stringify(detail);
-				toastStore.error(`Failed to delete ${resourceName}: ${errorMsg}`, {
-					title: 'Deletion failed'
-				});
+				const detail =
+					payload?.detail ||
+					payload?.message ||
+					response.statusText ||
+					"Request failed";
+				const errorMsg =
+					typeof detail === "string"
+						? detail
+						: JSON.stringify(detail);
+				toastStore.error(
+					`Failed to delete ${resourceName}: ${errorMsg}`,
+					{
+						title: "Deletion failed",
+					},
+				);
 			}
 		} catch (error: any) {
-			toastStore.error(`Failed to delete ${resourceName}: ${error.message}`, {
-				title: 'Deletion failed'
-			});
+			toastStore.error(
+				`Failed to delete ${resourceName}: ${error.message}`,
+				{
+					title: "Deletion failed",
+				},
+			);
 		}
 	}
 </script>
 
 <svelte:head>
-	<title>{$environmentName} - {vm?.name || 'VM'}</title>
+	<title>{$environmentName} - {vm?.name || "VM"}</title>
 </svelte:head>
 
 <ViewLoader loading={$vmData.loading} error={$vmData.error} skeleton="vm">
@@ -274,8 +311,12 @@
 			</div>
 			<VmActionButtons {vm} {actionInProgress} onAction={handleAction} />
 		</div>
-		
-		<p class="subtitle">Virtual Machine • Generation {formatValue(vm.generation)} • Version {formatValue(vm.version)}</p>
+
+		<p class="subtitle">
+			Virtual Machine • Generation {formatValue(vm.generation)} • Version {formatValue(
+				vm.version,
+			)}
+		</p>
 
 		<!-- Confirmation dialog -->
 		{#if confirmingAction}
@@ -289,7 +330,10 @@
 		{/if}
 
 		<!-- VM Overview -->
-		<section class="vm-overview-panel surface-card" aria-label="Virtual machine overview">
+		<section
+			class="vm-overview-panel surface-card"
+			aria-label="Virtual machine overview"
+		>
 			<div class="section-header">
 				<h2>Virtual Machine Information</h2>
 			</div>
@@ -302,7 +346,9 @@
 							class="vm-link"
 							onclick={(e) => {
 								e.preventDefault();
-								goto(`${base}/host/${encodeURIComponent(vm.host)}`);
+								goto(
+									`${base}/host/${encodeURIComponent(vm.host)}`,
+								);
 							}}
 						>
 							{formatHostname(vm.host)}
@@ -322,36 +368,41 @@
 					<span class="vm-overview-value">
 						{#if cluster.isClustered && cluster.clusterName}
 							Yes (<a
-								href="{base}/cluster/{encodeURIComponent(cluster.clusterName)}"
+								href="{base}/cluster/{encodeURIComponent(
+									cluster.clusterName,
+								)}"
 								class="vm-link"
 								onclick={(e) => {
 									e.preventDefault();
-									goto(`${base}/cluster/${encodeURIComponent(cluster.clusterName)}`);
+									goto(
+										`${base}/cluster/${encodeURIComponent(cluster.clusterName)}`,
+									);
 								}}
 							>
 								{cluster.clusterName}
 							</a>)
 						{:else}
-							{cluster.isClustered ? 'Yes' : 'No'}
+							{cluster.isClustered ? "Yes" : "No"}
 						{/if}
 					</span>
 				</div>
 				<div class="vm-overview-item">
 					<span class="vm-overview-label">Created</span>
-					<span class="vm-overview-value">{formatDate(vm.created_at)}</span>
+					<span class="vm-overview-value"
+						>{formatDate(vm.created_at)}</span
+					>
 				</div>
 			</div>
 		</section>
 
 		<!-- Tabbed Details -->
 		<section class="vm-detail-tabs" aria-label="Virtual machine details">
-			<div class="vm-tab-list" role="tablist" aria-label="Virtual machine detail tabs">
-				{#each [
-					{ id: 'hardware', label: 'VM Hardware' },
-					{ id: 'disks', label: 'Disks' },
-					{ id: 'networks', label: 'Networks' },
-					{ id: 'notes', label: 'Notes' }
-				] as tab}
+			<div
+				class="vm-tab-list"
+				role="tablist"
+				aria-label="Virtual machine detail tabs"
+			>
+				{#each [{ id: "hardware", label: "VM Hardware" }, { id: "disks", label: "Disks" }, { id: "networks", label: "Networks" }, { id: "notes", label: "Notes" }] as tab}
 					<button
 						class="vm-tab"
 						class:active={activeTab === tab.id}
@@ -366,36 +417,60 @@
 				{/each}
 			</div>
 
-			<div class="vm-tab-panels surface-card" class:first-tab-active={activeTab === 'hardware'}>
+			<div
+				class="vm-tab-panels surface-card"
+				class:first-tab-active={activeTab === "hardware"}
+			>
 				<!-- Hardware Tab -->
-				{#if activeTab === 'hardware'}
-					<div class="vm-tab-panel" role="tabpanel" aria-labelledby="vm-tab-hardware">
+				{#if activeTab === "hardware"}
+					<div
+						class="vm-tab-panel"
+						role="tabpanel"
+						aria-labelledby="vm-tab-hardware"
+					>
 						<div class="vm-hardware-grid">
 							<div class="vm-hardware-item">
 								<span class="vm-property-label">CPU Cores</span>
-								<span class="vm-property-value">{formatValue(vm.cpu_cores)}</span>
+								<span class="vm-property-value"
+									>{formatValue(vm.cpu_cores)}</span
+								>
 							</div>
 							{#each memoryItems as item}
 								<div class="vm-hardware-item">
-									<span class="vm-property-label">{item.label}</span>
-									<span class="vm-property-value">{item.value}</span>
+									<span class="vm-property-label"
+										>{item.label}</span
+									>
+									<span class="vm-property-value"
+										>{item.value}</span
+									>
 								</div>
 							{/each}
 							<div class="vm-hardware-item">
-								<span class="vm-property-label">Generation</span>
-								<span class="vm-property-value">{formatValue(vm.generation)}</span>
+								<span class="vm-property-label">Generation</span
+								>
+								<span class="vm-property-value"
+									>{formatValue(vm.generation)}</span
+								>
 							</div>
 							<div class="vm-hardware-item">
-								<span class="vm-property-label">Configuration Version</span>
-								<span class="vm-property-value">{formatValue(vm.version)}</span>
+								<span class="vm-property-label"
+									>Configuration Version</span
+								>
+								<span class="vm-property-value"
+									>{formatValue(vm.version)}</span
+								>
 							</div>
 						</div>
 					</div>
 				{/if}
 
 				<!-- Disks Tab -->
-				{#if activeTab === 'disks'}
-					<div class="vm-tab-panel vm-tab-panel--table" role="tabpanel" aria-labelledby="vm-tab-disks">
+				{#if activeTab === "disks"}
+					<div
+						class="vm-tab-panel vm-tab-panel--table"
+						role="tabpanel"
+						aria-labelledby="vm-tab-disks"
+					>
 						<div class="vm-table">
 							<div class="table-header">
 								<div>Disk</div>
@@ -411,10 +486,10 @@
 							{:else}
 								{#each disks as disk}
 									<div class="table-row">
-										<div>{disk.name || 'Disk'}</div>
-										<div>{disk.type || '—'}</div>
+										<div>{disk.name || "Disk"}</div>
+										<div>{disk.type || "—"}</div>
 										<div>{formatDiskCapacity(disk)}</div>
-										<div>{disk.path || disk.location || '—'}</div>
+										<div>{disk.path || "—"}</div>
 										<div class="vm-resource-actions">
 											<button
 												type="button"
@@ -422,10 +497,15 @@
 												aria-label="Disk actions"
 												title="Actions"
 												onclick={() => {
-													toastStore.info('Disk actions coming soon');
+													toastStore.info(
+														"Disk actions coming soon",
+													);
 												}}
 											>
-												<Icon name="more_vert" size={20} />
+												<Icon
+													name="more_vert"
+													size={20}
+												/>
 											</button>
 										</div>
 									</div>
@@ -436,10 +516,16 @@
 							<button
 								class="action-btn"
 								onclick={() => {
-									toastStore.info('Add disk functionality coming soon');
+									toastStore.info(
+										"Add disk functionality coming soon",
+									);
 								}}
 							>
-								<Icon name="add_circle" className="action-icon" size={24} />
+								<Icon
+									name="add_circle"
+									className="action-icon"
+									size={24}
+								/>
 								<span>Add Disk</span>
 							</button>
 						</div>
@@ -447,8 +533,12 @@
 				{/if}
 
 				<!-- Networks Tab -->
-				{#if activeTab === 'networks'}
-					<div class="vm-tab-panel vm-tab-panel--table" role="tabpanel" aria-labelledby="vm-tab-networks">
+				{#if activeTab === "networks"}
+					<div
+						class="vm-tab-panel vm-tab-panel--table"
+						role="tabpanel"
+						aria-labelledby="vm-tab-networks"
+					>
 						<div class="vm-table">
 							<div class="table-header">
 								<div>Adapter</div>
@@ -463,15 +553,21 @@
 							{:else}
 								{#each networks as adapter}
 									{@const networkDisplay =
-										adapter.network_name ||
-										(adapter.virtual_switch && adapter.vlan
-											? `${adapter.virtual_switch}/${adapter.vlan}`
-											: adapter.vlan
-												? `VLAN ${adapter.vlan}`
-												: adapter.virtual_switch || '—')}
+										adapter.network ||
+										(adapter.virtual_switch &&
+										adapter.vlan_id
+											? `${adapter.virtual_switch}/${adapter.vlan_id}`
+											: adapter.vlan_id
+												? `VLAN ${adapter.vlan_id}`
+												: adapter.virtual_switch ||
+													"—")}
 									<div class="table-row">
-										<div>{adapter.adapter_name || adapter.name || 'Adapter'}</div>
-										<div>{extractAdapterAddresses(adapter)}</div>
+										<div>
+											{adapter.adapter_name || "Adapter"}
+										</div>
+										<div>
+											{extractAdapterAddresses(adapter)}
+										</div>
 										<div>{networkDisplay}</div>
 										<div class="vm-resource-actions">
 											<button
@@ -480,10 +576,15 @@
 												aria-label="Network adapter actions"
 												title="Actions"
 												onclick={() => {
-													toastStore.info('Network adapter actions coming soon');
+													toastStore.info(
+														"Network adapter actions coming soon",
+													);
 												}}
 											>
-												<Icon name="more_vert" size={20} />
+												<Icon
+													name="more_vert"
+													size={20}
+												/>
 											</button>
 										</div>
 									</div>
@@ -494,10 +595,16 @@
 							<button
 								class="action-btn"
 								onclick={() => {
-									toastStore.info('Add network adapter functionality coming soon');
+									toastStore.info(
+										"Add network adapter functionality coming soon",
+									);
 								}}
 							>
-								<Icon name="add_circle" className="action-icon" size={24} />
+								<Icon
+									name="add_circle"
+									className="action-icon"
+									size={24}
+								/>
 								<span>Add Network Adapter</span>
 							</button>
 						</div>
@@ -505,8 +612,12 @@
 				{/if}
 
 				<!-- Notes Tab -->
-				{#if activeTab === 'notes'}
-					<div class="vm-tab-panel vm-tab-panel--notes" role="tabpanel" aria-labelledby="vm-tab-notes">
+				{#if activeTab === "notes"}
+					<div
+						class="vm-tab-panel vm-tab-panel--notes"
+						role="tabpanel"
+						aria-labelledby="vm-tab-notes"
+					>
 						<div class="vm-notes" aria-live="polite">
 							<div class="vm-notes-content">{notesContent}</div>
 						</div>

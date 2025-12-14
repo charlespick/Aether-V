@@ -343,18 +343,6 @@ class TestVMNetworkAdapterWithVlanId:
         assert adapter.network == "Production"
         assert adapter.vlan_id == 100
         assert adapter.virtual_switch == "External-Switch"
-    
-    def test_network_adapter_with_legacy_vlan(self):
-        """Test network adapter with legacy vlan field."""
-        adapter = VMNetworkAdapter(
-            id="12345678-1234-1234-1234-123456789abc",
-            network="Production",
-            vlan="100",  # Legacy string field
-            mac_address="00:15:5D:00:00:01"
-        )
-        
-        assert adapter.vlan == "100"
-        assert adapter.vlan_id is None  # New field not set
 
 
 if __name__ == "__main__":

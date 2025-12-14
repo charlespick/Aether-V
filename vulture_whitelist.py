@@ -70,11 +70,10 @@ ui  # main.py - GET /{path} catchall for SPA
 # These are schema fields that API clients read/write via JSON.
 # Vulture sees them as unused class variables.
 
-_.ip_address  # VM model field
 _.size_gb  # VMDisk model field
 _.file_size_gb  # VMDisk model field
 _.virtual_switch  # VMNetworkAdapter model field
-_.vlan  # VMNetworkAdapter model field
+_.vlan_id  # VMNetworkAdapter model field
 _.mac_address  # VMNetworkAdapter model field
 _.total_clusters  # InventorySummary model field
 _.disconnected_count  # InventorySummary model field

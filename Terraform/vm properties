@@ -4,12 +4,12 @@ intended property names, there is no immediate need to rename properties that al
 
 Legacy UI is only documented in it's current state and is no longer being developed.
 
-| Property                                        | Python Model | APIs | Legacy UI | Next UI |
+| Property                                        | Python Model | APIs | Inventory | Next UI |
 |-------------------------------------------------|--------------|------|-----------|---------|
 | name: string                                    |      x       |  x   |           |         |
 | host: string                                    |      x       |  x   |           |         |
 | state: enum                                     |      x       |  x   |           |         |
-| cluster: string                                 |      x       |      | (Broken)  |         |
+| cluster: string                                 |      x       |      |           |         |
 | id: Hyper-V ID                                  |      x       |  x   |           |         |
 | cpu_cores: integer                              |      x       |  x   |           |         |
 | startup_memory_gb: double                       |      x       |  x   |           |         |
@@ -25,18 +25,21 @@ Legacy UI is only documented in it's current state and is no longer being develo
 |   id: GUID - state only                         |      x       |  x   |           |         |
 |   size_gb: double                               |      x       |  x   |           |         |
 |   storage_class: related to host resources/path |      x       |  x   |           |         |
-|   location: string                              |      x       |  x   |           |         |
+|   path: string                                  |      x       |  x   |           |         |
 | network_if: object (0+ instances)               |      x       |  x   |           |         |
+|   id: GUID - state only                         |      x       |  x   |           |         |
+|   adapter_name: string                          |      x       |  x   |           |         |
 |   network: string                               |      x       |  x   |           |         |
+|   virtual_switch: string                        |      x       |  x   |           |         |
 |   vlan_id: integer                              |      x       |  x   |           |         |
+|   mac_address: string                           |      x       |  x   |           |         |
+|   ip_addresses: string[]                        |      x       |  x   |           |         |
 |   dhcp_guard: bool                              |      x       |      |           |         |
 |   router_guard: bool                            |      x       |      |           |         |
 |   mac_spoof_guard: bool                         |      x       |      |           |         |
 |   mac_address_config: "Dynamic" or "Static"     |      x       |      |           |         |
-|   mac_address: string                           |      x       |  x   |           |         |
 |   min_bandwidth_mbps: integer                   |      x       |      |           |         |
 |   max_bandwidth_mbps: integer                   |      x       |      |           |         |
-|   ip_address: string                            |      x       |  x   |           |         |
 | operating_system: string                        |      x       |  x   |           |         |
 | host_recovery_action: enum                      |      x       |      |           |         |
 | host_stop_action: enum                          |      x       |      |           |         |

@@ -49,17 +49,14 @@ export interface VM {
         size_gb?: number;
         size?: string;
         path?: string;
-        location?: string;
     }>;
     networks?: Array<{
         id?: string;
-        name?: string;
         adapter_name?: string;
         ip_addresses?: string[];
-        ip_address?: string;
-        network_name?: string;
+        network?: string;
         virtual_switch?: string;
-        vlan?: string | number;
+        vlan_id?: number;
     }>;
 }
 

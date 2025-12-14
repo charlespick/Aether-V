@@ -169,7 +169,6 @@ class VM(BaseModel):
     memory_max_gb: Optional[float] = None
     dynamic_memory_enabled: Optional[bool] = None
     dynamic_memory_buffer: Optional[int] = None  # Memory buffer percentage for dynamic memory
-    ip_address: Optional[str] = None
     ip_addresses: List[str] = Field(default_factory=list)
     notes: Optional[str] = None
     os_family: Optional[OSFamily] = None
@@ -208,7 +207,6 @@ class VMListItem(BaseModel):
     cluster: Optional[str] = None
     state: VMState
     os_name: Optional[str] = None
-    ip_address: Optional[str] = None
 
 
 class VMDisk(BaseModel):
@@ -217,7 +215,6 @@ class VMDisk(BaseModel):
     id: Optional[str] = None
     name: Optional[str] = None
     path: Optional[str] = None
-    location: Optional[str] = None
     type: Optional[str] = None
     size_gb: Optional[float] = None
     file_size_gb: Optional[float] = None
@@ -228,13 +225,10 @@ class VMNetworkAdapter(BaseModel):
     """Network adapter attached to a VM."""
 
     id: Optional[str] = None
-    name: Optional[str] = None
     adapter_name: Optional[str] = None
     network: Optional[str] = None  # Network name from host resources
     virtual_switch: Optional[str] = None
     vlan_id: Optional[int] = None  # VLAN ID from network configuration
-    vlan: Optional[str] = None  # Legacy field, kept for backward compatibility
-    network_name: Optional[str] = None
     ip_addresses: List[str] = Field(default_factory=list)
     mac_address: Optional[str] = None
     mac_address_config: Optional[str] = None  # "Dynamic" or "Static"

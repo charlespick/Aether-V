@@ -523,11 +523,10 @@ try {
 
                 $networks.Add(@{
                         Id            = $adapter.Id
-                        Name          = $adapter.Name
                         AdapterName   = $adapter.Name
                         Network       = $adapter.SwitchName
                         VirtualSwitch = $adapter.SwitchName
-                        Vlan          = $vlanId
+                        VlanId        = $vlanId
                         IPAddresses   = [string[]]$adapterIps.ToArray()
                         MacAddress    = $adapter.MacAddress
                     })
@@ -551,7 +550,6 @@ try {
                     Id       = $disk.Id
                     Name     = if ($diskPath) { [System.IO.Path]::GetFileName($diskPath) } else { 'Unknown' }
                     Path     = $diskPath
-                    Location = $diskPath
                     DiskType = $null
                 }
 
@@ -626,23 +624,23 @@ try {
                             $networkName = $null
                                 
                             # Try to match by switch + vlan first (most specific)
-                            if ($adapter.VirtualSwitch -and $adapter.Vlan) {
-                                $compoundKey = "$($adapter.VirtualSwitch)::$($adapter.Vlan)"
+                            if ($adapter.VirtualSwitch -and $adapter.VlanId) {
+                                $compoundKey = "$($adapter.VirtualSwitch)::$($adapter.VlanId)"
                                 if ($switchVlanToNetworkMap.ContainsKey($compoundKey)) {
                                     $networkName = $switchVlanToNetworkMap[$compoundKey]
                                 }
                             }
                                 
                             # Fall back to vlan-only match if no switch+vlan match
-                            if (-not $networkName -and $adapter.Vlan) {
-                                if ($vlanToNetworkMap.ContainsKey([int]$adapter.Vlan)) {
-                                    $networkName = $vlanToNetworkMap[[int]$adapter.Vlan]
+                            if (-not $networkName -and $adapter.VlanId) {
+                                if ($vlanToNetworkMap.ContainsKey([int]$adapter.VlanId)) {
+                                    $networkName = $vlanToNetworkMap[[int]$adapter.VlanId]
                                 }
                             }
                                 
-                            # Assign the resolved network name
+                            # Assign the resolved network name (overwrites switch name with logical network name)
                             if ($networkName) {
-                                $adapter.NetworkName = $networkName
+                                $adapter.Network = $networkName
                             }
                         }
                     }
