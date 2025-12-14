@@ -109,7 +109,7 @@ try {
             -ClassName Msvm_VirtualSystemSettingData `
             -ErrorAction SilentlyContinue |
         Where-Object { $_.VirtualSystemType -eq 'Microsoft:Hyper-V:System:Realized' }
-            
+
         foreach ($vs in $vsSettings) {
             $vmGuid = $vs.VirtualSystemIdentifier.ToUpper()
             if ($vmDataByGuid.ContainsKey($vmGuid)) {
@@ -118,11 +118,17 @@ try {
                     
                 # Notes is an array in CIM, join to plain string for schema compatibility
                 $notes = if ($vs.Notes -is [array]) { $vs.Notes -join "`n" } else { $vs.Notes }
-                    
+
                 $vmDataByGuid[$vmGuid].CreationTime = $vs.CreationTime
                 $vmDataByGuid[$vmGuid].Notes = $notes
                 $vmDataByGuid[$vmGuid].Version = $vs.Version
                 $vmDataByGuid[$vmGuid].Generation = $generation
+                $vmDataByGuid[$vmGuid].BootOrder = $vs.BootOrder
+                $vmDataByGuid[$vmGuid].BootSourceOrder = $vs.BootSourceOrder
+                $vmDataByGuid[$vmGuid].AutomaticRecoveryAction = $vs.AutomaticRecoveryAction
+                $vmDataByGuid[$vmGuid].AutomaticShutdownAction = $vs.AutomaticShutdownAction
+                $vmDataByGuid[$vmGuid].SecureBootEnabled = $vs.SecureBootEnabled
+                $vmDataByGuid[$vmGuid].SecureBootTemplate = $vs.SecureBootTemplateId
             }
         }
     }
@@ -147,6 +153,7 @@ try {
                     $vmDataByGuid[$vmGuid].MemoryMinimum = $mem.Reservation * 1MB
                     $vmDataByGuid[$vmGuid].MemoryMaximum = $mem.Limit * 1MB
                     $vmDataByGuid[$vmGuid].DynamicMemoryEnabled = $mem.DynamicMemoryEnabled
+                    $vmDataByGuid[$vmGuid].DynamicMemoryBuffer = $mem.TargetMemoryBuffer
                 }
             }
         }
@@ -208,6 +215,8 @@ try {
     $adaptersByVm = @{}
     $allAdapterIds = [System.Collections.Generic.List[string]]::new()
     $adapterSettingsByVmGuid = @{}
+    $securityByAdapterId = @{}
+    $bandwidthByAdapterId = @{}
     
     # Batch: Get all synthetic ethernet port settings (contains adapter name, MAC, etc.)
     try {
@@ -282,6 +291,63 @@ try {
     catch {
         $result.Warnings += "CIM ethernet allocation query failed: $($_.Exception.Message)"
     }
+
+    # Batch: Network security settings
+    try {
+        $portSecurity = Get-CimInstance -Namespace root\virtualization\v2 `
+            -ClassName Msvm_EthernetSwitchPortSecuritySettingData `
+            -ErrorAction SilentlyContinue
+        foreach ($sec in $portSecurity) {
+            if ($sec.InstanceID -match 'Microsoft:([A-F0-9-]+)\\([A-F0-9-]+)\\') {
+                $vmGuid = $Matches[1].ToUpper()
+                $adapterGuid = $Matches[2].ToUpper()
+                $psAdapterId = "Microsoft:$vmGuid\$adapterGuid"
+
+                $securityByAdapterId[$psAdapterId] = @{
+                    DhcpGuard    = $sec.DhcpGuard
+                    RouterGuard  = $sec.RouterGuard
+                    MacSpoofGuard = if ($sec.AllowMacSpoofing -ne $null) { -not [bool]$sec.AllowMacSpoofing } else { $null }
+                }
+            }
+        }
+    }
+    catch {
+        $result.Warnings += "CIM ethernet security query failed: $($_.Exception.Message)"
+    }
+
+    # Batch: Network bandwidth settings
+    try {
+        $bandwidthSettings = Get-CimInstance -Namespace root\virtualization\v2 `
+            -ClassName Msvm_EthernetSwitchPortBandwidthSettingData `
+            -ErrorAction SilentlyContinue
+        $mbpsDivisor = 1MB * 8  # Convert bits-per-second to Mbps using MiB divisor
+
+        foreach ($bw in $bandwidthSettings) {
+            if ($bw.InstanceID -match 'Microsoft:([A-F0-9-]+)\\([A-F0-9-]+)\\') {
+                $vmGuid = $Matches[1].ToUpper()
+                $adapterGuid = $Matches[2].ToUpper()
+                $psAdapterId = "Microsoft:$vmGuid\$adapterGuid"
+
+                $minMbps = $null
+                if ($bw.Reservation) {
+                    $minMbps = [int][math]::Round($bw.Reservation / $mbpsDivisor)
+                }
+
+                $maxMbps = $null
+                if ($bw.Limit) {
+                    $maxMbps = [int][math]::Round($bw.Limit / $mbpsDivisor)
+                }
+
+                $bandwidthByAdapterId[$psAdapterId] = @{
+                    MinBandwidthMbps = $minMbps
+                    MaxBandwidthMbps = $maxMbps
+                }
+            }
+        }
+    }
+    catch {
+        $result.Warnings += "CIM ethernet bandwidth query failed: $($_.Exception.Message)"
+    }
     
     # Batch: IP addresses via CIM (much faster than accessing IPAddresses property on each adapter)
     $ipsByAdapterId = @{}
@@ -315,7 +381,9 @@ try {
             $adapterId = $adapterSetting.Id
             $adapterIps = if ($ipsByAdapterId.ContainsKey($adapterId)) { $ipsByAdapterId[$adapterId] } else { @() }
             $switchName = $switchByAdapterId[$adapterId]
-                
+            $securitySettings = $securityByAdapterId[$adapterId]
+            $bandwidthSettings = $bandwidthByAdapterId[$adapterId]
+
             $adapterData = @{
                 Id          = $adapterId
                 VMName      = $vmName
@@ -323,8 +391,20 @@ try {
                 SwitchName  = $switchName
                 MacAddress  = $adapterSetting.MacAddress
                 IPAddresses = $adapterIps
+                MacAddressConfig = if ($adapterSetting.StaticMac) { 'Static' } else { 'Dynamic' }
             }
-                
+
+            if ($securitySettings) {
+                $adapterData.DhcpGuard = $securitySettings.DhcpGuard
+                $adapterData.RouterGuard = $securitySettings.RouterGuard
+                $adapterData.MacSpoofGuard = $securitySettings.MacSpoofGuard
+            }
+
+            if ($bandwidthSettings) {
+                $adapterData.MinBandwidthMbps = $bandwidthSettings.MinBandwidthMbps
+                $adapterData.MaxBandwidthMbps = $bandwidthSettings.MaxBandwidthMbps
+            }
+
             if (-not $adaptersByVm.ContainsKey($vmName)) {
                 $adaptersByVm[$vmName] = [System.Collections.Generic.List[object]]::new()
             }
@@ -352,6 +432,80 @@ try {
     }
     catch {
         $result.Warnings += "CIM VLAN query failed: $($_.Exception.Message)"
+    }
+
+    # Batch: Security setting data (TPM, key protector)
+    try {
+        $securitySettings = Get-CimInstance -Namespace root\virtualization\v2 `
+            -ClassName Msvm_SecuritySettingData `
+            -ErrorAction SilentlyContinue
+        foreach ($sec in $securitySettings) {
+            if ($sec.InstanceID -match 'Microsoft:([A-F0-9-]+)\\') {
+                $vmGuid = $Matches[1].ToUpper()
+                if ($vmDataByGuid.ContainsKey($vmGuid)) {
+                    $vmDataByGuid[$vmGuid].TpmEnabled = $sec.TpmEnabled
+                    $vmDataByGuid[$vmGuid].KeyProtector = $sec.KeyProtector
+                }
+            }
+        }
+    }
+    catch {
+        $result.Warnings += "CIM security settings query failed: $($_.Exception.Message)"
+    }
+
+    # Batch: Boot source data for resolving primary boot device
+    $bootSourceById = @{}
+    try {
+        $bootSources = Get-CimInstance -Namespace root\virtualization\v2 `
+            -ClassName Msvm_BootSourceSettingData `
+            -ErrorAction SilentlyContinue
+        foreach ($source in $bootSources) {
+            if ($source.InstanceID) {
+                $bootSourceById[$source.InstanceID] = $source
+            }
+        }
+    }
+    catch {
+        $result.Warnings += "CIM boot source query failed: $($_.Exception.Message)"
+    }
+
+    # Batch: Integration services
+    function Get-IntegrationState($state) {
+        if ($state -eq $null) { return $null }
+        return ([int]$state -eq 2 -or [int]$state -eq 6)
+    }
+
+    $integrationStatusByVmGuid = @{}
+
+    $integrationQueries = @(
+        @{ ClassName = 'Msvm_ShutdownComponent'; Property = 'integration_services_shutdown' },
+        @{ ClassName = 'Msvm_TimeSyncComponent'; Property = 'integration_services_time' },
+        @{ ClassName = 'Msvm_KvpExchangeComponent'; Property = 'integration_services_data_exchange' },
+        @{ ClassName = 'Msvm_HeartbeatComponent'; Property = 'integration_services_heartbeat' },
+        @{ ClassName = 'Msvm_GuestServiceInterfaceComponent'; Property = 'integration_services_guest_services' },
+        @{ ClassName = 'Msvm_VssIntegrationComponent'; Property = 'integration_services_vss_backup' }
+    )
+
+    foreach ($query in $integrationQueries) {
+        try {
+            $components = Get-CimInstance -Namespace root\virtualization\v2 `
+                -ClassName $query.ClassName `
+                -ErrorAction SilentlyContinue
+
+            foreach ($component in $components) {
+                $vmGuid = $component.SystemName.ToUpper()
+                if ($vmDataByGuid.ContainsKey($vmGuid)) {
+                    if (-not $integrationStatusByVmGuid.ContainsKey($vmGuid)) {
+                        $integrationStatusByVmGuid[$vmGuid] = @{}
+                    }
+
+                    $integrationStatusByVmGuid[$vmGuid][$query.Property] = Get-IntegrationState $component.EnabledState
+                }
+            }
+        }
+        catch {
+            $result.Warnings += "Integration service query for $($query.ClassName) failed: $($_.Exception.Message)"
+        }
     }
 
     # Batch: Hard disk drives via CIM (bypasses slow Get-VMHardDiskDrive cmdlet)
@@ -454,6 +608,9 @@ try {
         # Use pre-extracted VM data (avoids slow WMI property access)
         $vm = $vmDataByName[$vmName]
 
+        $vmGuid = $null
+        if ($vm.Id) { $vmGuid = $vm.Id.ToString().ToUpper() }
+
         # Creation time
         $creationTime = $null
         if ($vm.CreationTime) {
@@ -466,6 +623,7 @@ try {
         $memoryMinimumGb = $null
         $memoryMaximumGb = $null
         $dynamicMemoryEnabled = $null
+        $dynamicMemoryBuffer = $vm.DynamicMemoryBuffer
 
         if ($vm.MemoryStartup) { $memoryStartupGb = [math]::Round(($vm.MemoryStartup / 1GB), 2) }
         if ($vm.MemoryMinimum) { $memoryMinimumGb = [math]::Round(($vm.MemoryMinimum / 1GB), 2) }
@@ -482,10 +640,68 @@ try {
         # Guest OS
         $osName = $guestOsByVmName[$vmName]
 
+        # Security
+        $secureBootEnabled = $vm.SecureBootEnabled
+        $secureBootTemplate = $vm.SecureBootTemplate
+        $tpmEnabled = $vm.TpmEnabled
+        $tpmKeyProtector = $null
+        if ($vm.KeyProtector) {
+            if ($vm.KeyProtector -is [byte[]]) {
+                $tpmKeyProtector = [Convert]::ToBase64String($vm.KeyProtector)
+            }
+            else {
+                $tpmKeyProtector = [string]$vm.KeyProtector
+            }
+        }
+
+        # Boot configuration
+        $primaryBootDevice = $null
+        if ($vm.BootSourceOrder -is [array] -and $vm.BootSourceOrder.Count -gt 0) {
+            foreach ($bootSource in $vm.BootSourceOrder) {
+                $instanceId = $null
+                if ($bootSource -match 'InstanceID="([^"]+)"') {
+                    $instanceId = $Matches[1]
+                }
+                elseif ($bootSource) {
+                    $instanceId = $bootSource
+                }
+
+                if ($instanceId -and $bootSourceById.ContainsKey($instanceId)) {
+                    $sourceData = $bootSourceById[$instanceId]
+                    $primaryBootDevice = $sourceData.BootSourceDescription
+                    if (-not $primaryBootDevice -and $sourceData.BootSourceType) {
+                        $primaryBootDevice = $sourceData.BootSourceType.ToString()
+                    }
+                    break
+                }
+            }
+        }
+        elseif ($vm.BootOrder -is [array] -and $vm.BootOrder.Count -gt 0) {
+            $primaryBootDevice = $vm.BootOrder[0].ToString()
+        }
+
+        # Host actions
+        $hostRecoveryAction = $null
+        $hostStopAction = $null
+        $recoveryMap = @{ 2 = 'none'; 3 = 'resume'; 4 = 'always-start' }
+        $stopMap = @{ 2 = 'stop'; 3 = 'save'; 4 = 'shut-down' }
+
+        if ($vm.AutomaticRecoveryAction -ne $null -and $recoveryMap.ContainsKey([int]$vm.AutomaticRecoveryAction)) {
+            $hostRecoveryAction = $recoveryMap[[int]$vm.AutomaticRecoveryAction]
+        }
+
+        if ($vm.AutomaticShutdownAction -ne $null -and $stopMap.ContainsKey([int]$vm.AutomaticShutdownAction)) {
+            $hostStopAction = $stopMap[[int]$vm.AutomaticShutdownAction]
+        }
+
+        # Integration services
+        $integrationStatus = if ($vmGuid) { $integrationStatusByVmGuid[$vmGuid] } else { $null }
+
         # Build VM info (preserving exact schema)
         $vmInfo = [ordered]@{
             Name                 = $vm.Name
             Id                   = $vm.Id
+            Cluster              = $result.Host.ClusterName
             State                = $vm.State
             ProcessorCount       = $vm.ProcessorCount
             MemoryGB             = $memoryGb
@@ -493,11 +709,28 @@ try {
             MinimumMemoryGB      = $memoryMinimumGb
             MaximumMemoryGB      = $memoryMaximumGb
             DynamicMemoryEnabled = $dynamicMemoryEnabled
+            DynamicMemoryBuffer  = $dynamicMemoryBuffer
             CreationTime         = $creationTime
             Generation           = $vm.Generation
             Version              = $vm.Version
             Notes                = $vm.Notes
             OperatingSystem      = $osName
+            SecureBootEnabled                 = $secureBootEnabled
+            SecureBootTemplate                = $secureBootTemplate
+            TrustedPlatformModuleEnabled      = $tpmEnabled
+            TpmKeyProtector                   = $tpmKeyProtector
+            PrimaryBootDevice                 = $primaryBootDevice
+            HostRecoveryAction                = $hostRecoveryAction
+            HostStopAction                    = $hostStopAction
+        }
+
+        if ($integrationStatus) {
+            $vmInfo.IntegrationServicesShutdown = $integrationStatus.integration_services_shutdown
+            $vmInfo.IntegrationServicesTime = $integrationStatus.integration_services_time
+            $vmInfo.IntegrationServicesDataExchange = $integrationStatus.integration_services_data_exchange
+            $vmInfo.IntegrationServicesHeartbeat = $integrationStatus.integration_services_heartbeat
+            $vmInfo.IntegrationServicesVssBackup = $integrationStatus.integration_services_vss_backup
+            $vmInfo.IntegrationServicesGuestServices = $integrationStatus.integration_services_guest_services
         }
 
         # Networks - use HashSet for O(1) IP deduplication
@@ -529,6 +762,12 @@ try {
                         VlanId        = $vlanId
                         IPAddresses   = [string[]]$adapterIps.ToArray()
                         MacAddress    = $adapter.MacAddress
+                        MacAddressConfig = $adapter.MacAddressConfig
+                        DhcpGuard     = $adapter.DhcpGuard
+                        RouterGuard   = $adapter.RouterGuard
+                        MacSpoofGuard = $adapter.MacSpoofGuard
+                        MinBandwidthMbps = $adapter.MinBandwidthMbps
+                        MaxBandwidthMbps = $adapter.MaxBandwidthMbps
                     })
             }
 
