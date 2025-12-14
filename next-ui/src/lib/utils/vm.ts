@@ -185,13 +185,44 @@ export function extractIpAddresses(vm: VM): string {
  * Extract IP addresses from network adapter
  */
 export function extractAdapterAddresses(adapter: any): string {
-	if (!adapter) {
-		return '—';
-	}
-	if (Array.isArray(adapter.ip_addresses) && adapter.ip_addresses.length > 0) {
-		return adapter.ip_addresses.join(', ');
-	}
-	return '—';
+        if (!adapter) {
+                return '—';
+        }
+        if (Array.isArray(adapter.ip_addresses) && adapter.ip_addresses.length > 0) {
+                return adapter.ip_addresses.join(', ');
+        }
+        return '—';
+}
+
+/**
+ * Format boolean settings with enterprise-friendly labels
+ */
+export function formatBooleanSetting(value: boolean | undefined | null, fallback = '—'): string {
+        if (typeof value === 'undefined' || value === null) {
+                return fallback;
+        }
+        return value ? 'Enabled' : 'Disabled';
+}
+
+/**
+ * Format bandwidth range if present
+ */
+export function formatBandwidthRange(min?: number | null, max?: number | null): string {
+        const parts: string[] = [];
+
+        if (typeof min !== 'undefined' && min !== null) {
+                parts.push(`Min ${min} Mbps`);
+        }
+
+        if (typeof max !== 'undefined' && max !== null) {
+                parts.push(`Max ${max} Mbps`);
+        }
+
+        if (parts.length === 0) {
+                return '—';
+        }
+
+        return parts.join(' · ');
 }
 
 /**
@@ -390,31 +421,37 @@ export function buildMemoryHardwareItems(vm: VM): Array<{ label: string; value: 
 	const resolvedMemory = resolveVmMemoryValue(vm);
 	const isDynamic = vm.dynamic_memory_enabled === true;
 
-	items.push({
-		label: 'Memory',
-		value: formatMemory(resolvedMemory, isDynamic)
-	});
+        items.push({
+                label: 'Memory',
+                value: formatMemory(resolvedMemory, isDynamic)
+        });
 
-	if (isDynamic) {
-		if (typeof vm.memory_startup_gb !== 'undefined') {
-			items.push({
-				label: 'Startup Memory',
-				value: formatMemoryAmount(vm.memory_startup_gb)
-			});
-		}
-		if (typeof vm.memory_min_gb !== 'undefined') {
-			items.push({
-				label: 'Minimum Memory',
-				value: formatMemoryAmount(vm.memory_min_gb)
-			});
-		}
-		if (typeof vm.memory_max_gb !== 'undefined') {
-			items.push({
-				label: 'Maximum Memory',
-				value: formatMemoryAmount(vm.memory_max_gb)
-			});
-		}
-	}
+        if (isDynamic) {
+                if (typeof vm.memory_startup_gb !== 'undefined') {
+                        items.push({
+                                label: 'Startup Memory',
+                                value: formatMemoryAmount(vm.memory_startup_gb)
+                        });
+                }
+                if (typeof vm.memory_min_gb !== 'undefined') {
+                        items.push({
+                                label: 'Minimum Memory',
+                                value: formatMemoryAmount(vm.memory_min_gb)
+                        });
+                }
+                if (typeof vm.memory_max_gb !== 'undefined') {
+                        items.push({
+                                label: 'Maximum Memory',
+                                value: formatMemoryAmount(vm.memory_max_gb)
+                        });
+                }
+                if (typeof vm.dynamic_memory_buffer !== 'undefined') {
+                        items.push({
+                                label: 'Dynamic Memory Buffer',
+                                value: `${vm.dynamic_memory_buffer}%`
+                        });
+                }
+        }
 
-	return items;
+        return items;
 }
