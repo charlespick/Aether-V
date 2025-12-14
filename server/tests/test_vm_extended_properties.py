@@ -20,15 +20,17 @@ class TestVMExtendedProperties:
     """Test VM model with extended properties."""
     
     def test_vm_with_cluster(self):
-        """Test VM with cluster field."""
+        """Test VM with cluster protection."""
         vm = VM(
             name="test-vm",
             host="hyperv-01.example.com",
-            cluster="production-cluster",
+            clustered=True,
+            cluster_name="production-cluster",
             state=VMState.RUNNING
         )
         
-        assert vm.cluster == "production-cluster"
+        assert vm.clustered is True
+        assert vm.cluster_name == "production-cluster"
     
     def test_vm_with_dynamic_memory_buffer(self):
         """Test VM with dynamic memory buffer percentage."""
@@ -66,11 +68,11 @@ class TestVMExtendedProperties:
             host="hyperv-01.example.com",
             state=VMState.RUNNING,
             trusted_platform_module_enabled=True,
-            tpm_key_protector="sample-key-protector"
+            key_protector_kind="host-guardian-service"
         )
         
         assert vm.trusted_platform_module_enabled is True
-        assert vm.tpm_key_protector == "sample-key-protector"
+        assert vm.key_protector_kind == "host-guardian-service"
     
     def test_vm_with_primary_boot_device(self):
         """Test VM with primary boot device."""
@@ -133,7 +135,8 @@ class TestVMExtendedProperties:
         vm = VM(
             name="test-vm",
             host="hyperv-01.example.com",
-            cluster="production-cluster",
+            clustered=True,
+            cluster_name="production-cluster",
             state=VMState.RUNNING,
             cpu_cores=4,
             memory_startup_gb=8.0,
@@ -144,7 +147,7 @@ class TestVMExtendedProperties:
             secure_boot_enabled=True,
             secure_boot_template="Microsoft Windows",
             trusted_platform_module_enabled=True,
-            tpm_key_protector="key-protector-guid",
+            key_protector_kind="host",
             primary_boot_device="SCSI",
             host_recovery_action=HostRecoveryAction.ALWAYS_START,
             host_stop_action=HostStopAction.SHUT_DOWN,
@@ -157,7 +160,8 @@ class TestVMExtendedProperties:
         )
         
         # Verify all properties
-        assert vm.cluster == "production-cluster"
+        assert vm.clustered is True
+        assert vm.cluster_name == "production-cluster"
         assert vm.dynamic_memory_buffer == 20
         assert vm.secure_boot_enabled is True
         assert vm.trusted_platform_module_enabled is True
@@ -172,13 +176,15 @@ class TestVMExtendedProperties:
             name="test-vm",
             host="hyperv-01.example.com",
             state=VMState.RUNNING,
-            cluster="production-cluster",
+            clustered=True,
+            cluster_name="production-cluster",
             secure_boot_enabled=True,
             host_recovery_action=HostRecoveryAction.RESUME
         )
         
         data = vm.model_dump()
-        assert data["cluster"] == "production-cluster"
+        assert data["clustered"] is True
+        assert data["cluster_name"] == "production-cluster"
         assert data["secure_boot_enabled"] is True
         assert data["host_recovery_action"] == "resume"
     
@@ -188,14 +194,16 @@ class TestVMExtendedProperties:
             "name": "test-vm",
             "host": "hyperv-01.example.com",
             "state": "Running",
-            "cluster": "production-cluster",
+            "clustered": True,
+            "cluster_name": "production-cluster",
             "secure_boot_enabled": True,
             "host_recovery_action": "always-start",
             "host_stop_action": "shut-down"
         }
         
         vm = VM(**data)
-        assert vm.cluster == "production-cluster"
+        assert vm.clustered is True
+        assert vm.cluster_name == "production-cluster"
         assert vm.secure_boot_enabled is True
         assert vm.host_recovery_action == HostRecoveryAction.ALWAYS_START
         assert vm.host_stop_action == HostStopAction.SHUT_DOWN
@@ -340,7 +348,8 @@ class TestBackwardCompatibility:
         )
         
         # All extended properties should be None by default
-        assert vm.cluster is None
+        assert vm.clustered is None
+        assert vm.cluster_name is None
         assert vm.dynamic_memory_buffer is None
         assert vm.secure_boot_enabled is None
         assert vm.trusted_platform_module_enabled is None

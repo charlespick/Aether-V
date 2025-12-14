@@ -20,15 +20,20 @@ All new properties are optional and maintain full backward compatibility.
 
 ### Cluster and Host Configuration
 
-**New Fields:**
-- `cluster` (Optional[str]): Cluster name this VM belongs to
+**Fields:**
+- `clustered` (Optional[bool]): Whether the VM has failover cluster protection
+- `cluster_name` (Optional[str]): Name of the cluster protecting this VM (only set if clustered=True)
+
+**Important Distinction:**
+A VM is "clustered" only if it is registered as a failover cluster resource. This is distinct from the host being part of a cluster. A VM on a clustered host is NOT automatically protected by the cluster.
 
 **Example:**
 ```python
 VM(
     name="web-01",
     host="hyperv-01.example.com",
-    cluster="production-cluster",
+    clustered=True,
+    cluster_name="production-cluster",
     state=VMState.RUNNING
 )
 ```
@@ -58,7 +63,12 @@ VM(
 - `secure_boot_enabled` (Optional[bool]): Whether secure boot is enabled
 - `secure_boot_template` (Optional[str]): Secure boot template name (e.g., "Microsoft Windows")
 - `trusted_platform_module_enabled` (Optional[bool]): Whether TPM is enabled
-- `tpm_key_protector` (Optional[str]): TPM key protector identifier
+- `key_protector_kind` (Optional[str]): VM protection model - possible values:
+  - `'none'`: No key protector
+  - `'host'`: Host-based (local) key protector
+  - `'host-guardian-service'`: Shielded VM with HGS attestation
+  - `'unknown'`: Unrecognized protector type
+  - **Note**: This field reflects the trust model without exposing cryptographic material
 
 **Example:**
 ```python
@@ -69,7 +79,7 @@ VM(
     secure_boot_enabled=True,
     secure_boot_template="Microsoft Windows",
     trusted_platform_module_enabled=True,
-    tpm_key_protector="key-protector-guid"
+    key_protector_kind="host-guardian-service"
 )
 ```
 
@@ -143,7 +153,8 @@ vm = VM(
     id="12345678-1234-1234-1234-123456789abc",
     name="production-vm-01",
     host="hyperv-01.example.com",
-    cluster="production-cluster",
+    clustered=True,
+    cluster_name="production-cluster",
     state=VMState.RUNNING,
     cpu_cores=8,
     memory_startup_gb=16.0,
@@ -154,7 +165,7 @@ vm = VM(
     secure_boot_enabled=True,
     secure_boot_template="Microsoft Windows",
     trusted_platform_module_enabled=True,
-    tpm_key_protector="sample-key-protector-guid",
+    key_protector_kind="host-guardian-service",
     primary_boot_device="SCSI",
     host_recovery_action=HostRecoveryAction.ALWAYS_START,
     host_stop_action=HostStopAction.SHUT_DOWN,

@@ -15,6 +15,8 @@ from ..core.config import settings
 from ..core.models import (
     Cluster,
     Host,
+    HostRecoveryAction,
+    HostStopAction,
     NotificationLevel,
     OSFamily,
     VM,
@@ -1562,6 +1564,9 @@ class InventoryService:
             dynamic_memory_enabled = self._coerce_bool(
                 vm_data.get("DynamicMemoryEnabled")
             )
+            dynamic_memory_buffer = self._coerce_int(
+                vm_data.get("DynamicMemoryBuffer"), default=None
+            )
 
             if (memory_gb is None or memory_gb == 0) and memory_startup_gb:
                 memory_gb = memory_startup_gb
@@ -1579,6 +1584,8 @@ class InventoryService:
             generation = self._coerce_int(vm_data.get("Generation"), default=None)
             version = self._coerce_str(vm_data.get("Version"))
             notes = self._coerce_str(vm_data.get("Notes"))
+            clustered = self._coerce_bool(vm_data.get("Clustered"))
+            cluster_name = self._coerce_str(vm_data.get("ClusterName"))
             networks = self._deserialize_networks(vm_data.get("Networks"))
             disks = self._deserialize_disks(vm_data.get("Disks"))
             ip_addresses = self._normalise_ip_list(vm_data.get("IPAddresses"))
@@ -1588,10 +1595,50 @@ class InventoryService:
             if not primary_ip and ip_addresses:
                 primary_ip = ip_addresses[0]
 
+            secure_boot_enabled = self._coerce_bool(
+                vm_data.get("SecureBootEnabled")
+            )
+            secure_boot_template = self._coerce_str(
+                vm_data.get("SecureBootTemplate")
+            )
+            tpm_enabled = self._coerce_bool(
+                vm_data.get("TrustedPlatformModuleEnabled")
+            )
+            key_protector_kind = self._coerce_str(vm_data.get("KeyProtectorKind"))
+            primary_boot_device = self._coerce_str(
+                vm_data.get("PrimaryBootDevice")
+            )
+            host_recovery_action = self._coerce_host_recovery_action(
+                vm_data.get("HostRecoveryAction")
+            )
+            host_stop_action = self._coerce_host_stop_action(
+                vm_data.get("HostStopAction")
+            )
+            integration_services_shutdown = self._coerce_bool(
+                vm_data.get("IntegrationServicesShutdown")
+            )
+            integration_services_time = self._coerce_bool(
+                vm_data.get("IntegrationServicesTime")
+            )
+            integration_services_data_exchange = self._coerce_bool(
+                vm_data.get("IntegrationServicesDataExchange")
+            )
+            integration_services_heartbeat = self._coerce_bool(
+                vm_data.get("IntegrationServicesHeartbeat")
+            )
+            integration_services_vss_backup = self._coerce_bool(
+                vm_data.get("IntegrationServicesVssBackup")
+            )
+            integration_services_guest_services = self._coerce_bool(
+                vm_data.get("IntegrationServicesGuestServices")
+            )
+
             vm = VM(
                 id=vm_id,
                 name=vm_data.get("Name", ""),
                 host=hostname,
+                clustered=clustered,
+                cluster_name=cluster_name,
                 state=state,
                 cpu_cores=cpu_cores,
                 memory_gb=memory_gb,
@@ -1599,6 +1646,7 @@ class InventoryService:
                 memory_min_gb=memory_min_gb,
                 memory_max_gb=memory_max_gb,
                 dynamic_memory_enabled=dynamic_memory_enabled,
+                dynamic_memory_buffer=dynamic_memory_buffer,
                 ip_addresses=ip_addresses,
                 notes=notes,
                 os_family=os_family,
@@ -1606,6 +1654,19 @@ class InventoryService:
                 generation=generation,
                 version=version,
                 created_at=vm_data.get("CreationTime"),
+                secure_boot_enabled=secure_boot_enabled,
+                secure_boot_template=secure_boot_template,
+                trusted_platform_module_enabled=tpm_enabled,
+                key_protector_kind=key_protector_kind,
+                primary_boot_device=primary_boot_device,
+                host_recovery_action=host_recovery_action,
+                host_stop_action=host_stop_action,
+                integration_services_shutdown=integration_services_shutdown,
+                integration_services_time=integration_services_time,
+                integration_services_data_exchange=integration_services_data_exchange,
+                integration_services_heartbeat=integration_services_heartbeat,
+                integration_services_vss_backup=integration_services_vss_backup,
+                integration_services_guest_services=integration_services_guest_services,
                 disks=disks,
                 networks=networks,
             )
@@ -1743,6 +1804,48 @@ class InventoryService:
 
         return None
 
+    def _coerce_host_recovery_action(
+        self, value: Any
+    ) -> Optional[HostRecoveryAction]:
+        if not value:
+            return None
+
+        mapping = {
+            "none": HostRecoveryAction.NONE,
+            "resume": HostRecoveryAction.RESUME,
+            "always-start": HostRecoveryAction.ALWAYS_START,
+        }
+
+        if isinstance(value, HostRecoveryAction):
+            return value
+
+        try:
+            lowered = str(value).strip().lower()
+        except Exception:
+            return None
+
+        return mapping.get(lowered)
+
+    def _coerce_host_stop_action(self, value: Any) -> Optional[HostStopAction]:
+        if not value:
+            return None
+
+        mapping = {
+            "save": HostStopAction.SAVE,
+            "stop": HostStopAction.STOP,
+            "shut-down": HostStopAction.SHUT_DOWN,
+        }
+
+        if isinstance(value, HostStopAction):
+            return value
+
+        try:
+            lowered = str(value).strip().lower()
+        except Exception:
+            return None
+
+        return mapping.get(lowered)
+
     def _infer_os_family(self, os_name: Any) -> Optional[OSFamily]:
         if not os_name or not isinstance(os_name, str):
             return None
@@ -1803,6 +1906,20 @@ class InventoryService:
                     vlan_id=adapter_data.get("VlanId"),
                     ip_addresses=ip_addresses,
                     mac_address=self._coerce_str(adapter_data.get("MacAddress")),
+                    mac_address_config=self._coerce_str(
+                        adapter_data.get("MacAddressConfig")
+                    ),
+                    dhcp_guard=self._coerce_bool(adapter_data.get("DhcpGuard")),
+                    router_guard=self._coerce_bool(adapter_data.get("RouterGuard")),
+                    mac_spoof_guard=self._coerce_bool(
+                        adapter_data.get("MacSpoofGuard")
+                    ),
+                    min_bandwidth_mbps=self._coerce_int(
+                        adapter_data.get("MinBandwidthMbps"), default=None
+                    ),
+                    max_bandwidth_mbps=self._coerce_int(
+                        adapter_data.get("MaxBandwidthMbps"), default=None
+                    ),
                 )
             )
 

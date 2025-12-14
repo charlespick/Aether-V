@@ -107,23 +107,14 @@
 	const clusterStatus = $derived(() => {
 		if (!vm) return { isClustered: false, clusterName: null };
 
-		const rawClustered = vm.clustered ?? vm.is_clustered ?? vm.vm_clustered;
-		const hostCluster = hostInfo?.cluster
-			? String(hostInfo.cluster).trim()
-			: "";
+		// Use the authoritative clustered boolean from inventory
+		const isClustered = vm.clustered ?? false;
+		const clusterName = isClustered ? (vm.cluster_name ?? null) : null;
 
-		if (typeof rawClustered === "boolean") {
-			return {
-				isClustered: rawClustered,
-				clusterName: rawClustered ? hostCluster : null,
-			};
-		}
-
-		if (hostCluster) {
-			return { isClustered: true, clusterName: hostCluster };
-		}
-
-		return { isClustered: false, clusterName: null };
+		return {
+			isClustered,
+			clusterName,
+		};
 	});
 
 	// Handle action button clicks
@@ -367,19 +358,20 @@
 					<span class="vm-overview-label">Clustered</span>
 					<span class="vm-overview-value">
 						{#if cluster.isClustered && cluster.clusterName}
+							{@const clusterName = cluster.clusterName}
 							Yes (<a
 								href="{base}/cluster/{encodeURIComponent(
-									cluster.clusterName,
+									clusterName,
 								)}"
 								class="vm-link"
 								onclick={(e) => {
 									e.preventDefault();
 									goto(
-										`${base}/cluster/${encodeURIComponent(cluster.clusterName)}`,
+										`${base}/cluster/${encodeURIComponent(clusterName)}`,
 									);
 								}}
 							>
-								{cluster.clusterName}
+								{clusterName}
 							</a>)
 						{:else}
 							{cluster.isClustered ? "Yes" : "No"}
