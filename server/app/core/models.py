@@ -54,6 +54,20 @@ class NetworkModel(str, Enum):
     VLAN = "vlan"
 
 
+class HostRecoveryAction(str, Enum):
+    """VM automatic start action after host recovery."""
+    NONE = "none"
+    RESUME = "resume"
+    ALWAYS_START = "always-start"
+
+
+class HostStopAction(str, Enum):
+    """VM action when host stops."""
+    SAVE = "save"
+    STOP = "stop"
+    SHUT_DOWN = "shut-down"
+
+
 class StorageClass(BaseModel):
     """Storage class configuration for a host.
     
@@ -146,6 +160,7 @@ class VM(BaseModel):
     id: Optional[str] = None
     name: str
     host: str
+    cluster: Optional[str] = None
     state: VMState
     cpu_cores: int = 0
     memory_gb: float = 0.0
@@ -153,6 +168,7 @@ class VM(BaseModel):
     memory_min_gb: Optional[float] = None
     memory_max_gb: Optional[float] = None
     dynamic_memory_enabled: Optional[bool] = None
+    dynamic_memory_buffer: Optional[int] = None  # Memory buffer percentage for dynamic memory
     ip_address: Optional[str] = None
     ip_addresses: List[str] = Field(default_factory=list)
     notes: Optional[str] = None
@@ -161,6 +177,24 @@ class VM(BaseModel):
     generation: Optional[int] = None
     version: Optional[str] = None
     created_at: Optional[datetime] = None
+    # Security settings
+    secure_boot_enabled: Optional[bool] = None
+    secure_boot_template: Optional[str] = None
+    trusted_platform_module_enabled: Optional[bool] = None
+    tpm_key_protector: Optional[str] = None
+    # Boot settings
+    primary_boot_device: Optional[str] = None
+    # Host actions
+    host_recovery_action: Optional[HostRecoveryAction] = None
+    host_stop_action: Optional[HostStopAction] = None
+    # Integration services
+    integration_services_shutdown: Optional[bool] = None
+    integration_services_time: Optional[bool] = None
+    integration_services_data_exchange: Optional[bool] = None
+    integration_services_heartbeat: Optional[bool] = None
+    integration_services_vss_backup: Optional[bool] = None
+    integration_services_guest_services: Optional[bool] = None
+    # Related objects
     disks: List["VMDisk"] = Field(default_factory=list)
     networks: List["VMNetworkAdapter"] = Field(default_factory=list)
 
@@ -203,6 +237,14 @@ class VMNetworkAdapter(BaseModel):
     network_name: Optional[str] = None
     ip_addresses: List[str] = Field(default_factory=list)
     mac_address: Optional[str] = None
+    mac_address_config: Optional[str] = None  # "Dynamic" or "Static"
+    # Security settings
+    dhcp_guard: Optional[bool] = None
+    router_guard: Optional[bool] = None
+    mac_spoof_guard: Optional[bool] = None
+    # Bandwidth settings
+    min_bandwidth_mbps: Optional[int] = None
+    max_bandwidth_mbps: Optional[int] = None
 
 
 class DiskDetail(VMDisk):
