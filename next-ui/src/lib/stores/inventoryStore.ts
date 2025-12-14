@@ -81,6 +81,15 @@ export interface Cluster {
     vm_count: number;
 }
 
+interface InventoryStatistics {
+    total_hosts: number;
+    total_clusters: number;
+    total_vms: number;
+    disconnected_count: number;
+    last_refresh?: string | null;
+    environment_name: string;
+}
+
 export interface InventoryData {
     clusters: Cluster[];
     hosts: Host[];
@@ -90,8 +99,8 @@ export interface InventoryData {
     total_vms: number;
     total_clusters: number;
     disconnected_count: number;
-    last_refresh?: string;
-    environment_name?: string;
+    last_refresh: string | null;
+    environment_name: string;
 }
 
 interface InventoryState {
@@ -176,14 +185,7 @@ class InventoryStore {
                 apiClient.get<Cluster[]>('/api/v1/clusters'),
                 apiClient.get<Host[]>('/api/v1/hosts'),
                 apiClient.get<VM[]>('/api/v1/virtualmachines'),
-                apiClient.get<{
-                    total_hosts: number;
-                    total_clusters: number;
-                    total_vms: number;
-                    disconnected_count: number;
-                    last_refresh?: string;
-                    environment_name: string;
-                }>('/api/v1/statistics')
+                apiClient.get<InventoryStatistics>('/api/v1/statistics')
             ]);
 
             if (!clusters.ok || !hosts.ok || !vms.ok || !stats.ok) {
@@ -195,17 +197,26 @@ class InventoryStore {
             const connectedHosts = hostData.filter(h => h.connected);
             const disconnectedHosts = hostData.filter(h => !h.connected);
 
+            const statsData: InventoryStatistics = stats.data ?? {
+                total_hosts: hostData.length,
+                total_clusters: clusters.data?.length ?? 0,
+                total_vms: vms.data?.length ?? 0,
+                disconnected_count: disconnectedHosts.length,
+                last_refresh: null,
+                environment_name: 'Production Environment'
+            };
+
             const inventory: InventoryData = {
                 clusters: clusters.data ?? [],
                 hosts: connectedHosts,
                 vms: vms.data ?? [],
                 disconnected_hosts: disconnectedHosts,
-                total_hosts: stats.data?.total_hosts ?? hostData.length,
-                total_vms: stats.data?.total_vms ?? (vms.data?.length ?? 0),
-                total_clusters: stats.data?.total_clusters ?? (clusters.data?.length ?? 0),
-                disconnected_count: stats.data?.disconnected_count ?? disconnectedHosts.length,
-                last_refresh: stats.data?.last_refresh,
-                environment_name: stats.data?.environment_name
+                total_hosts: statsData.total_hosts,
+                total_vms: statsData.total_vms,
+                total_clusters: statsData.total_clusters,
+                disconnected_count: statsData.disconnected_count,
+                last_refresh: statsData.last_refresh ?? null,
+                environment_name: statsData.environment_name ?? 'Production Environment'
             };
 
             state.update($s => ({
