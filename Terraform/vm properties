@@ -19,7 +19,7 @@ Legacy UI is only documented in it's current state and is no longer being develo
 | secure_boot_enabled: bool                       |      x       |  x   |     x     |         |
 | secure_boot_template: string                    |      x       |  x   |     x     |         |
 | trusted_platform_module_enabled: bool           |      x       |  x   |     x     |         |
-| tpm_key_protector: string                       |      x       |  x   |     x     |         |
+| key_protector_kind: string                      |      x       |  x   |     x     |         |
 | primary_boot_device: string                     |      x       |  x   |     x     |         |
 | disk: object (0+ instances)                     |      x       |  x   |     x     |         |
 |   id: GUID - state only                         |      x       |  x   |     x     |         |

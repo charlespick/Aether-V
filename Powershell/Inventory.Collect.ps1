@@ -5,6 +5,33 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Get-KeyProtectorKind {
+    <#
+    .SYNOPSIS
+        Converts KeyProtectorType enum to human-readable trust model descriptor.
+    .DESCRIPTION
+        Maps Hyper-V KeyProtectorType values to descriptive strings indicating
+        the VM's protection model without exposing cryptographic material.
+    .PARAMETER Type
+        The KeyProtectorType value from Msvm_SecuritySettingData.
+    #>
+    param (
+        [Parameter(Mandatory = $false)]
+        $Type
+    )
+
+    if ($null -eq $Type) {
+        return $null
+    }
+
+    switch ([int]$Type) {
+        0 { return 'none' }
+        1 { return 'host' }
+        2 { return 'host-guardian-service' }
+        default { return 'unknown' }
+    }
+}
+
 $result = @{
     Host            = @{
         ComputerName = $ComputerName
@@ -434,7 +461,11 @@ try {
         $result.Warnings += "CIM VLAN query failed: $($_.Exception.Message)"
     }
 
-    # Batch: Security setting data (TPM, key protector)
+    # Batch: Security setting data (TPM, key protector metadata only)
+    # SECURITY NOTE:
+    # Do NOT export vm.KeyProtector or SecuritySettingData.KeyProtector.
+    # This is sensitive cryptographic material that can be used to decrypt VM disks.
+    # Inventory intentionally captures only KeyProtectorType (trust model), never key data.
     try {
         $securitySettings = Get-CimInstance -Namespace root\virtualization\v2 `
             -ClassName Msvm_SecuritySettingData `
@@ -444,7 +475,7 @@ try {
                 $vmGuid = $Matches[1].ToUpper()
                 if ($vmDataByGuid.ContainsKey($vmGuid)) {
                     $vmDataByGuid[$vmGuid].TpmEnabled = $sec.TpmEnabled
-                    $vmDataByGuid[$vmGuid].KeyProtector = $sec.KeyProtector
+                    $vmDataByGuid[$vmGuid].KeyProtectorType = $sec.KeyProtectorType
                 }
             }
         }
@@ -644,14 +675,9 @@ try {
         $secureBootEnabled = $vm.SecureBootEnabled
         $secureBootTemplate = $vm.SecureBootTemplate
         $tpmEnabled = $vm.TpmEnabled
-        $tpmKeyProtector = $null
-        if ($vm.KeyProtector) {
-            if ($vm.KeyProtector -is [byte[]]) {
-                $tpmKeyProtector = [Convert]::ToBase64String($vm.KeyProtector)
-            }
-            else {
-                $tpmKeyProtector = [string]$vm.KeyProtector
-            }
+        $keyProtectorKind = $null
+        if ($vm.KeyProtectorType -ne $null) {
+            $keyProtectorKind = Get-KeyProtectorKind $vm.KeyProtectorType
         }
 
         # Boot configuration
@@ -718,7 +744,7 @@ try {
             SecureBootEnabled                 = $secureBootEnabled
             SecureBootTemplate                = $secureBootTemplate
             TrustedPlatformModuleEnabled      = $tpmEnabled
-            TpmKeyProtector                   = $tpmKeyProtector
+            KeyProtectorKind                  = $keyProtectorKind
             PrimaryBootDevice                 = $primaryBootDevice
             HostRecoveryAction                = $hostRecoveryAction
             HostStopAction                    = $hostStopAction

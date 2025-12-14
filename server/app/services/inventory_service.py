@@ -1603,7 +1603,7 @@ class InventoryService:
             tpm_enabled = self._coerce_bool(
                 vm_data.get("TrustedPlatformModuleEnabled")
             )
-            tpm_key_protector = self._coerce_str(vm_data.get("TpmKeyProtector"))
+            key_protector_kind = self._coerce_str(vm_data.get("KeyProtectorKind"))
             primary_boot_device = self._coerce_str(
                 vm_data.get("PrimaryBootDevice")
             )
@@ -1655,7 +1655,7 @@ class InventoryService:
                 secure_boot_enabled=secure_boot_enabled,
                 secure_boot_template=secure_boot_template,
                 trusted_platform_module_enabled=tpm_enabled,
-                tpm_key_protector=tpm_key_protector,
+                key_protector_kind=key_protector_kind,
                 primary_boot_device=primary_boot_device,
                 host_recovery_action=host_recovery_action,
                 host_stop_action=host_stop_action,

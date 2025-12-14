@@ -66,11 +66,11 @@ class TestVMExtendedProperties:
             host="hyperv-01.example.com",
             state=VMState.RUNNING,
             trusted_platform_module_enabled=True,
-            tpm_key_protector="sample-key-protector"
+            key_protector_kind="host-guardian-service"
         )
         
         assert vm.trusted_platform_module_enabled is True
-        assert vm.tpm_key_protector == "sample-key-protector"
+        assert vm.key_protector_kind == "host-guardian-service"
     
     def test_vm_with_primary_boot_device(self):
         """Test VM with primary boot device."""
@@ -144,7 +144,7 @@ class TestVMExtendedProperties:
             secure_boot_enabled=True,
             secure_boot_template="Microsoft Windows",
             trusted_platform_module_enabled=True,
-            tpm_key_protector="key-protector-guid",
+            key_protector_kind="host",
             primary_boot_device="SCSI",
             host_recovery_action=HostRecoveryAction.ALWAYS_START,
             host_stop_action=HostStopAction.SHUT_DOWN,

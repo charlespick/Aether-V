@@ -180,7 +180,7 @@ class VM(BaseModel):
     secure_boot_enabled: Optional[bool] = None
     secure_boot_template: Optional[str] = None
     trusted_platform_module_enabled: Optional[bool] = None
-    tpm_key_protector: Optional[str] = None
+    key_protector_kind: Optional[str] = None  # Values: 'none', 'host', 'host-guardian-service', 'unknown'
     # Boot settings
     primary_boot_device: Optional[str] = None
     # Host actions
