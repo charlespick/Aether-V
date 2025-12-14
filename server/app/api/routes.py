@@ -262,7 +262,7 @@ def _vm_counts_by_cluster(cluster_by_host: Dict[str, Optional[str]], vms: List[V
 def _to_vm_list_item(vm: VM, cluster_by_host: Dict[str, Optional[str]]) -> VMListItem:
     """Convert a VM record to its shallow representation."""
 
-    ip_address = vm.ip_address or (vm.ip_addresses[0] if vm.ip_addresses else None)
+    ip_address = vm.ip_addresses[0] if vm.ip_addresses else None
     return VMListItem(
         id=vm.id,
         name=vm.name,

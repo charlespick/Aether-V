@@ -373,8 +373,8 @@ class InventoryService:
                         id="nic-web-01-eth0",
                         adapter_name="Network Adapter",
                         virtual_switch="Production-vSwitch",
-                        vlan="100",
-                        network_name="Production",
+                        vlan_id=100,
+                        network="Production",
                         ip_addresses=["10.0.0.21"],
                         mac_address="00:15:5D:01:02:03"
                     ),
@@ -423,8 +423,8 @@ class InventoryService:
                         id="nic-db-01-eth0",
                         adapter_name="Network Adapter",
                         virtual_switch="Production-vSwitch",
-                        vlan="100",
-                        network_name="Production",
+                        vlan_id=100,
+                        network="Production",
                         ip_addresses=["10.0.0.22"],
                         mac_address="00:15:5D:01:02:04"
                     ),
@@ -432,8 +432,8 @@ class InventoryService:
                         id="nic-db-01-eth1",
                         adapter_name="Network Adapter 2",
                         virtual_switch="Storage-vSwitch",
-                        vlan="200",
-                        network_name="Storage",
+                        vlan_id=200,
+                        network="Storage",
                         ip_addresses=["192.168.100.22"],
                         mac_address="00:15:5D:01:03:04"
                     ),
@@ -466,8 +466,8 @@ class InventoryService:
                         id="nic-win-app-01-eth0",
                         adapter_name="Network Adapter",
                         virtual_switch="Production-vSwitch",
-                        vlan="100",
-                        network_name="Production",
+                        vlan_id=100,
+                        network="Production",
                         ip_addresses=["10.0.0.23"],
                         mac_address="00:15:5D:01:02:05"
                     ),
@@ -500,7 +500,7 @@ class InventoryService:
                         id="nic-lb-01-wan",
                         adapter_name="WAN",
                         virtual_switch="External-vSwitch",
-                        network_name="External",
+                        network="External",
                         ip_addresses=["203.0.113.10"],
                         mac_address="00:15:5D:02:01:01"
                     ),
@@ -508,8 +508,8 @@ class InventoryService:
                         id="nic-lb-01-lan",
                         adapter_name="LAN",
                         virtual_switch="Production-vSwitch",
-                        vlan="100",
-                        network_name="Production",
+                        vlan_id=100,
+                        network="Production",
                         ip_addresses=["10.0.1.10"],
                         mac_address="00:15:5D:02:01:02"
                     ),
@@ -549,8 +549,8 @@ class InventoryService:
                         id="nic-mon-01-mgmt",
                         adapter_name="Management",
                         virtual_switch="Production-vSwitch",
-                        vlan="100",
-                        network_name="Production",
+                        vlan_id=100,
+                        network="Production",
                         ip_addresses=["10.0.1.11"],
                         mac_address="00:15:5D:02:02:01"
                     ),
@@ -582,8 +582,8 @@ class InventoryService:
                         id="nic-backup-eth0",
                         adapter_name="Network Adapter",
                         virtual_switch="Production-vSwitch",
-                        vlan="100",
-                        network_name="Production",
+                        vlan_id=100,
+                        network="Production",
                         ip_addresses=["10.0.1.12"],
                         mac_address="00:15:5D:02:03:01"
                     ),
@@ -616,7 +616,7 @@ class InventoryService:
                         id="nic-test-01",
                         adapter_name="Network Adapter",
                         virtual_switch="Dev-vSwitch",
-                        network_name="Development",
+                        network="Development",
                         ip_addresses=["10.0.2.50"],
                         mac_address="00:15:5D:03:01:01"
                     ),
@@ -656,7 +656,7 @@ class InventoryService:
                         id="nic-dev-ws",
                         adapter_name="Network Adapter",
                         virtual_switch="Dev-vSwitch",
-                        network_name="Development",
+                        network="Development",
                         ip_addresses=["10.0.2.51"],
                         mac_address="00:15:5D:03:02:01"
                     ),
@@ -1599,7 +1599,6 @@ class InventoryService:
                 memory_min_gb=memory_min_gb,
                 memory_max_gb=memory_max_gb,
                 dynamic_memory_enabled=dynamic_memory_enabled,
-                ip_address=primary_ip,
                 ip_addresses=ip_addresses,
                 notes=notes,
                 os_family=os_family,
@@ -1798,12 +1797,10 @@ class InventoryService:
             adapters.append(
                 VMNetworkAdapter(
                     id=self._coerce_str(adapter_data.get("Id")),
-                    name=adapter_data.get("Name"),
                     adapter_name=adapter_data.get("AdapterName"),
                     network=adapter_data.get("Network"),
                     virtual_switch=adapter_data.get("VirtualSwitch"),
-                    vlan=self._coerce_str(adapter_data.get("Vlan")),
-                    network_name=self._coerce_str(adapter_data.get("NetworkName")),
+                    vlan_id=adapter_data.get("VlanId"),
                     ip_addresses=ip_addresses,
                     mac_address=self._coerce_str(adapter_data.get("MacAddress")),
                 )
@@ -1825,7 +1822,6 @@ class InventoryService:
                     id=self._coerce_str(disk_data.get("Id")),
                     name=disk_data.get("Name"),
                     path=disk_data.get("Path"),
-                    location=disk_data.get("Location"),
                     type=disk_data.get("DiskType"),
                     size_gb=self._coerce_float(disk_data.get("CapacityGB"), default=None),
                     file_size_gb=self._coerce_float(

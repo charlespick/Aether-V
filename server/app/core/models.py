@@ -49,6 +49,69 @@ class VMState(str, Enum):
     DELETING = "Deleting"
 
 
+class NetworkModel(str, Enum):
+    """Network model type."""
+    VLAN = "vlan"
+
+
+class HostRecoveryAction(str, Enum):
+    """VM automatic start action after host recovery."""
+    NONE = "none"
+    RESUME = "resume"
+    ALWAYS_START = "always-start"
+
+
+class HostStopAction(str, Enum):
+    """VM action when host stops."""
+    SAVE = "save"
+    STOP = "stop"
+    SHUT_DOWN = "shut-down"
+
+
+class StorageClass(BaseModel):
+    """Storage class configuration for a host.
+    
+    Represents a named storage location where VM disks can be stored.
+    Maps storage class names to filesystem paths.
+    """
+    name: str = Field(..., description="Unique identifier for the storage class")
+    path: str = Field(..., description="Filesystem path where VM disks will be stored")
+
+
+class VlanConfiguration(BaseModel):
+    """VLAN network configuration.
+    
+    Configuration specific to VLAN-based networks.
+    """
+    virtual_switch: str = Field(..., description="Name of the Hyper-V virtual switch")
+    vlan_id: int = Field(..., ge=1, le=4094, description="VLAN identifier")
+
+
+class Network(BaseModel):
+    """Network configuration for a host.
+    
+    Represents a named network that VMs can connect to.
+    Maps network names to VLAN IDs and virtual switches.
+    """
+    name: str = Field(..., description="Unique identifier for the network")
+    model: NetworkModel = Field(..., description="Network model type")
+    configuration: VlanConfiguration = Field(..., description="Network configuration data")
+
+
+class HostResources(BaseModel):
+    """Host resources configuration.
+    
+    Complete resource configuration for a host including storage classes,
+    networks, and default paths. This model matches the hostresources.json
+    schema that can be deployed to hosts.
+    """
+    version: int = Field(..., description="Schema version number")
+    schema_name: str = Field(..., description="Name of the schema")
+    storage_classes: List[StorageClass] = Field(default_factory=list, description="Available storage classes")
+    networks: List[Network] = Field(default_factory=list, description="Available networks")
+    virtual_machines_path: str = Field(..., description="Default path for VM configuration files")
+
+
 class Cluster(BaseModel):
     """Hyper-V cluster information."""
     name: str
@@ -66,6 +129,7 @@ class Host(BaseModel):
     error: Optional[str] = None
     total_cpu_cores: int = 0
     total_memory_gb: float = 0.0
+    resources: Optional[HostResources] = None  # Host resource configuration
     
 
 class HostSummary(BaseModel):
@@ -96,6 +160,7 @@ class VM(BaseModel):
     id: Optional[str] = None
     name: str
     host: str
+    cluster: Optional[str] = None
     state: VMState
     cpu_cores: int = 0
     memory_gb: float = 0.0
@@ -103,7 +168,7 @@ class VM(BaseModel):
     memory_min_gb: Optional[float] = None
     memory_max_gb: Optional[float] = None
     dynamic_memory_enabled: Optional[bool] = None
-    ip_address: Optional[str] = None
+    dynamic_memory_buffer: Optional[int] = None  # Memory buffer percentage for dynamic memory
     ip_addresses: List[str] = Field(default_factory=list)
     notes: Optional[str] = None
     os_family: Optional[OSFamily] = None
@@ -111,6 +176,24 @@ class VM(BaseModel):
     generation: Optional[int] = None
     version: Optional[str] = None
     created_at: Optional[datetime] = None
+    # Security settings
+    secure_boot_enabled: Optional[bool] = None
+    secure_boot_template: Optional[str] = None
+    trusted_platform_module_enabled: Optional[bool] = None
+    tpm_key_protector: Optional[str] = None
+    # Boot settings
+    primary_boot_device: Optional[str] = None
+    # Host actions
+    host_recovery_action: Optional[HostRecoveryAction] = None
+    host_stop_action: Optional[HostStopAction] = None
+    # Integration services
+    integration_services_shutdown: Optional[bool] = None
+    integration_services_time: Optional[bool] = None
+    integration_services_data_exchange: Optional[bool] = None
+    integration_services_heartbeat: Optional[bool] = None
+    integration_services_vss_backup: Optional[bool] = None
+    integration_services_guest_services: Optional[bool] = None
+    # Related objects
     disks: List["VMDisk"] = Field(default_factory=list)
     networks: List["VMNetworkAdapter"] = Field(default_factory=list)
 
@@ -133,24 +216,30 @@ class VMDisk(BaseModel):
     id: Optional[str] = None
     name: Optional[str] = None
     path: Optional[str] = None
-    location: Optional[str] = None
     type: Optional[str] = None
     size_gb: Optional[float] = None
     file_size_gb: Optional[float] = None
+    storage_class: Optional[str] = None  # Storage class name from host resources
 
 
 class VMNetworkAdapter(BaseModel):
     """Network adapter attached to a VM."""
 
     id: Optional[str] = None
-    name: Optional[str] = None
     adapter_name: Optional[str] = None
-    network: Optional[str] = None
+    network: Optional[str] = None  # Network name from host resources
     virtual_switch: Optional[str] = None
-    vlan: Optional[str] = None
-    network_name: Optional[str] = None
+    vlan_id: Optional[int] = None  # VLAN ID from network configuration
     ip_addresses: List[str] = Field(default_factory=list)
     mac_address: Optional[str] = None
+    mac_address_config: Optional[str] = None  # "Dynamic" or "Static"
+    # Security settings
+    dhcp_guard: Optional[bool] = None
+    router_guard: Optional[bool] = None
+    mac_spoof_guard: Optional[bool] = None
+    # Bandwidth settings
+    min_bandwidth_mbps: Optional[int] = None
+    max_bandwidth_mbps: Optional[int] = None
 
 
 class DiskDetail(VMDisk):

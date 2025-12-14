@@ -76,9 +76,6 @@ export function extractIpAddresses(vm: any): string {
     if (Array.isArray(vm.ip_addresses) && vm.ip_addresses.length > 0) {
         return vm.ip_addresses.join(', ');
     }
-    if (vm.ip_address) {
-        return vm.ip_address;
-    }
     return 'Not available';
 }
 
@@ -88,9 +85,6 @@ export function extractAdapterAddresses(adapter: any): string {
     }
     if (Array.isArray(adapter.ip_addresses) && adapter.ip_addresses.length > 0) {
         return adapter.ip_addresses.join(', ');
-    }
-    if (adapter.ip_address) {
-        return adapter.ip_address;
     }
     return '—';
 }
