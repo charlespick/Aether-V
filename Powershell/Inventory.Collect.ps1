@@ -347,7 +347,7 @@ try {
         $bandwidthSettings = Get-CimInstance -Namespace root\virtualization\v2 `
             -ClassName Msvm_EthernetSwitchPortBandwidthSettingData `
             -ErrorAction SilentlyContinue
-        $mbpsDivisor = 1MB * 8  # Convert bits-per-second to Mbps using MiB divisor
+        $mbpsDivisor = 1000000  # Convert bits-per-second to Mbps (SI units: 1 Mbps = 1,000,000 bps)
 
         foreach ($bw in $bandwidthSettings) {
             if ($bw.InstanceID -match 'Microsoft:([A-F0-9-]+)\\([A-F0-9-]+)\\') {
