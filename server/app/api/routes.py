@@ -34,8 +34,12 @@ from ..core.models import (
     BuildInfo,
     VMState,
     ServiceDiagnosticsResponse,
-    ResourceCreateRequest,
-    ResourceUpdateRequest,
+    VMCreateRequest,
+    VMUpdateRequest,
+    DiskCreateRequest,
+    DiskUpdateRequest,
+    NicCreateRequest,
+    NicUpdateRequest,
     VMInitializationRequest,
     NoopTestRequest,
     JobResult,
@@ -886,19 +890,19 @@ async def get_job(
 
 @router.post("/api/v1/virtualmachines", response_model=JobResult, tags=["Virtual Machines"])
 async def create_vm_resource(
-    request: ResourceCreateRequest,
+    request: VMCreateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Create a new virtual machine (without disk or NIC)."""
 
-    # Validate using Pydantic instead of schema
-    try:
-        vm_spec = VmSpec(**request.values)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]}
-        )
+    vm_spec = VmSpec(
+        vm_name=request.vm_name,
+        gb_ram=request.gb_ram,
+        cpu_cores=request.cpu_cores,
+        storage_class=request.storage_class,
+        vm_clustered=request.vm_clustered,
+        os_family=request.os_family,
+    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -920,20 +924,16 @@ async def create_vm_resource(
             detail=f"Host {target_host} is not currently connected",
         )
 
-    vm_name = vm_spec.vm_name
-    if vm_name:
-        existing_vm = inventory_service.get_vm(target_host, vm_name)
-        if existing_vm:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"VM {vm_name} already exists on host {target_host}",
-            )
+    if inventory_service.get_vm(target_host, vm_spec.vm_name):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm_spec.vm_name} already exists on host {target_host}",
+        )
 
-    # Use the validated Pydantic model's dict for the job payload
     job_definition = {
         "schema": {
             "id": "vm-create",
-            "version": 1,  # Static version, not schema-based
+            "version": 1,
         },
         "fields": vm_spec.model_dump(),
     }
@@ -957,20 +957,26 @@ async def create_vm_resource(
 )
 async def update_vm_resource(
     vm_id: str,
-    request: ResourceUpdateRequest,
+    request: VMUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Update an existing virtual machine."""
 
     vm = _get_vm_or_404(vm_id)
 
-    # Validate using Pydantic instead of schema
-    try:
-        vm_spec = VmSpec(**request.values)
-    except Exception as exc:
+    vm_spec = VmSpec(
+        vm_name=request.vm_name,
+        gb_ram=request.gb_ram,
+        cpu_cores=request.cpu_cores,
+        storage_class=request.storage_class,
+        vm_clustered=request.vm_clustered,
+        os_family=request.os_family,
+    )
+
+    if vm_spec.vm_name != vm.name:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]},
+            status_code=status.HTTP_409_CONFLICT,
+            detail="VM name in payload does not match existing VM",
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -983,16 +989,8 @@ async def update_vm_resource(
             },
         )
 
-    target_host = request.target_host.strip()
-    if target_host != vm.host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
-        )
+    _ensure_connected_host(vm.host)
 
-    _ensure_connected_host(target_host)
-
-    # Add vm_id to the validated values
     validated_values = vm_spec.model_dump()
     validated_values["vm_id"] = vm_id
 
@@ -1008,7 +1006,7 @@ async def update_vm_resource(
         job_type="update_vm",
         schema_id="vm-create",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -1071,23 +1069,19 @@ async def delete_vm_resource(
 )
 async def create_disk_resource(
     vm_id: str,
-    request: Dict[str, Any],
+    request: DiskCreateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Create and attach a new disk to an existing VM."""
 
-    # Validate using Pydantic instead of schema
-    try:
-        payload_values = request.get("values") or {
-            key: value for key, value in request.items() if key != "target_host"
-        }
-        values_with_vm = {**payload_values, "vm_id": vm_id}
-        disk_spec = DiskSpec(**values_with_vm)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]}
-        )
+    disk_spec = DiskSpec(
+        vm_id=vm_id,
+        image_name=request.image_name,
+        disk_size_gb=request.disk_size_gb,
+        storage_class=request.storage_class,
+        disk_type=request.disk_type,
+        controller_type=request.controller_type,
+    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -1099,29 +1093,9 @@ async def create_disk_resource(
             },
         )
 
-    target_host = str(request.get("target_host") or vm.host).strip()
-    connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next(
-        (host for host in connected_hosts if host.hostname == target_host), None)
-    if not host_match:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host {target_host} is not currently connected",
-        )
-
-    # Validate that VM exists
-    if disk_spec.vm_id and disk_spec.vm_id != vm_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="VM ID in payload does not match VM in path",
-        )
-
     vm = _get_vm_or_404(vm_id)
-    if target_host != vm.host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
-        )
+
+    _ensure_connected_host(vm.host)
 
     job_definition = {
         "schema": {
@@ -1135,7 +1109,7 @@ async def create_disk_resource(
         job_type="create_disk",
         schema_id="disk-create",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -1189,7 +1163,7 @@ async def get_vm_disk(
 async def update_disk_resource(
     vm_id: str,
     disk_id: str,
-    request: Dict[str, Any],
+    request: DiskUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Update an existing disk resource."""
@@ -1202,27 +1176,14 @@ async def update_disk_resource(
             detail=f"Disk {disk_id} not found on VM {vm_id}",
         )
 
-    resource_id = request.get("resource_id") or disk_id
-    if resource_id != disk_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Resource ID in payload does not match disk in path",
-        )
-
-    # Validate using Pydantic instead of schema
-    try:
-        payload_values = request.get("values") or {
-            key: value
-            for key, value in request.items()
-            if key not in {"target_host", "resource_id"}
-        }
-        values_with_vm = {**payload_values, "vm_id": vm_id}
-        disk_spec = DiskSpec(**values_with_vm)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]},
-        )
+    disk_spec = DiskSpec(
+        vm_id=vm_id,
+        image_name=request.image_name,
+        disk_size_gb=request.disk_size_gb,
+        storage_class=request.storage_class,
+        disk_type=request.disk_type,
+        controller_type=request.controller_type,
+    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -1234,17 +1195,10 @@ async def update_disk_resource(
             },
         )
 
-    target_host = str(request.get("target_host") or vm.host).strip()
-    if target_host != vm.host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
-        )
-
-    _ensure_connected_host(target_host)
+    _ensure_connected_host(vm.host)
 
     validated_values = disk_spec.model_dump()
-    validated_values["resource_id"] = resource_id
+    validated_values["resource_id"] = disk_id
 
     job_definition = {
         "schema": {
@@ -1258,7 +1212,7 @@ async def update_disk_resource(
         job_type="update_disk",
         schema_id="disk-create",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -1326,23 +1280,16 @@ async def delete_disk_resource(
 )
 async def create_nic_resource(
     vm_id: str,
-    request: Dict[str, Any],
+    request: NicCreateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Create and attach a new network adapter to an existing VM."""
 
-    # Validate using Pydantic instead of schema
-    try:
-        payload_values = request.get("values") or {
-            key: value for key, value in request.items() if key != "target_host"
-        }
-        values_with_vm = {**payload_values, "vm_id": vm_id}
-        nic_spec = NicSpec(**values_with_vm)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]}
-        )
+    nic_spec = NicSpec(
+        vm_id=vm_id,
+        network=request.network,
+        adapter_name=request.adapter_name,
+    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -1354,29 +1301,9 @@ async def create_nic_resource(
             },
         )
 
-    target_host = str(request.get("target_host") or vm.host).strip()
-    connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next(
-        (host for host in connected_hosts if host.hostname == target_host), None)
-    if not host_match:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host {target_host} is not currently connected",
-        )
-
-    # Validate that VM exists
-    if nic_spec.vm_id and nic_spec.vm_id != vm_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="VM ID in payload does not match VM in path",
-        )
-
     vm = _get_vm_or_404(vm_id)
-    if target_host != vm.host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
-        )
+
+    _ensure_connected_host(vm.host)
 
     job_definition = {
         "schema": {
@@ -1390,7 +1317,7 @@ async def create_nic_resource(
         job_type="create_nic",
         schema_id="nic-create",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -1444,7 +1371,7 @@ async def get_vm_nic(
 async def update_nic_resource(
     vm_id: str,
     nic_id: str,
-    request: Dict[str, Any],
+    request: NicUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Update an existing NIC resource."""
@@ -1457,27 +1384,11 @@ async def update_nic_resource(
             detail=f"NIC {nic_id} not found on VM {vm_id}",
         )
 
-    resource_id = request.get("resource_id") or nic_id
-    if resource_id != nic_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Resource ID in payload does not match NIC in path",
-        )
-
-    # Validate using Pydantic instead of schema
-    try:
-        payload_values = request.get("values") or {
-            key: value
-            for key, value in request.items()
-            if key not in {"target_host", "resource_id"}
-        }
-        values_with_vm = {**payload_values, "vm_id": vm_id}
-        nic_spec = NicSpec(**values_with_vm)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]},
-        )
+    nic_spec = NicSpec(
+        vm_id=vm_id,
+        network=request.network,
+        adapter_name=request.adapter_name,
+    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -1489,17 +1400,10 @@ async def update_nic_resource(
             },
         )
 
-    target_host = str(request.get("target_host") or vm.host).strip()
-    if target_host != vm.host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
-        )
-
-    _ensure_connected_host(target_host)
+    _ensure_connected_host(vm.host)
 
     validated_values = nic_spec.model_dump()
-    validated_values["resource_id"] = resource_id
+    validated_values["resource_id"] = nic_id
 
     job_definition = {
         "schema": {
@@ -1513,7 +1417,7 @@ async def update_nic_resource(
         job_type="update_nic",
         schema_id="nic-create",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(

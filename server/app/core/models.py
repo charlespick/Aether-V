@@ -178,42 +178,98 @@ class VMDeleteRequest(BaseModel):
         False, description="Delete all attached disks with the VM (validates no shared disks)")
 
 
-class ResourceCreateRequest(BaseModel):
-    """Base class for resource creation requests."""
-    values: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Field values keyed by schema field id",
-    )
+class VMCreateRequest(BaseModel):
+    """Request to create a virtual machine on a specific host."""
+
     target_host: str = Field(
-        ...,
-        description="Hostname of the connected Hyper-V host that will execute the job",
+        ..., description="Hostname of the connected Hyper-V host that will execute the job",
+    )
+    vm_name: str = Field(
+        ..., min_length=1, max_length=64, description="Unique name for the new virtual machine",
+    )
+    gb_ram: int = Field(
+        ..., ge=1, le=512, description="Amount of memory to assign to the VM in gigabytes",
+    )
+    cpu_cores: int = Field(
+        ..., ge=1, le=64, description="Number of virtual CPU cores",
+    )
+    storage_class: Optional[str] = Field(
+        None, description="Name of the storage class where VM configuration files will be stored",
+    )
+    vm_clustered: bool = Field(
+        False, description="Request that the new VM be registered with the Failover Cluster",
+    )
+    os_family: Optional[OSFamily] = Field(
+        None,
+        description="Operating system family (windows or linux) used to configure secure boot settings",
     )
 
 
-class DiskCreateRequest(ResourceCreateRequest):
-    """Request to create a new disk."""
-    pass
+class VMUpdateRequest(BaseModel):
+    """Request to update VM hardware properties."""
 
-
-class NicCreateRequest(ResourceCreateRequest):
-    """Request to create a new network adapter."""
-    pass
-
-
-class ResourceUpdateRequest(ResourceCreateRequest):
-    """Request to update an existing resource."""
-
-    resource_id: str = Field(
-        ..., description="Hyper-V ID of the resource being updated"
+    vm_name: str = Field(
+        ..., min_length=1, max_length=64, description="Existing name of the virtual machine",
+    )
+    gb_ram: int = Field(
+        ..., ge=1, le=512, description="Amount of memory to assign to the VM in gigabytes",
+    )
+    cpu_cores: int = Field(
+        ..., ge=1, le=64, description="Number of virtual CPU cores",
+    )
+    storage_class: Optional[str] = Field(
+        None, description="Name of the storage class where VM configuration files will be stored",
+    )
+    vm_clustered: bool = Field(
+        False, description="Request that the VM be registered with the Failover Cluster",
+    )
+    os_family: Optional[OSFamily] = Field(
+        None,
+        description="Operating system family (windows or linux) used to configure secure boot settings",
     )
 
 
-class ResourceDeleteRequest(BaseModel):
-    """Request to delete a resource by ID."""
-    resource_id: str = Field(...,
-                             description="Hyper-V ID of the resource to delete")
-    hyperv_host: str = Field(...,
-                             description="Host where the resource is located")
+class DiskCreateRequest(BaseModel):
+    """Request to create a new disk attached to a VM."""
+
+    disk_size_gb: int = Field(
+        100, ge=1, le=65536, description="Size of the virtual disk in gigabytes",
+    )
+    disk_type: str = Field(
+        "Dynamic", description="Type of virtual hard disk (Dynamic or Fixed)",
+    )
+    controller_type: str = Field(
+        "SCSI", description="Type of controller to attach the disk to (SCSI or IDE)",
+    )
+    image_name: Optional[str] = Field(
+        None, description="Optional golden image name to clone for the disk",
+    )
+    storage_class: Optional[str] = Field(
+        None,
+        deprecated=True,
+        description="[Deprecated] Storage class is determined by the VM location and is ignored",
+    )
+
+
+class DiskUpdateRequest(DiskCreateRequest):
+    """Request to update an existing disk attached to a VM."""
+    pass
+
+
+class NicCreateRequest(BaseModel):
+    """Request to create a new network adapter on a VM."""
+
+    network: str = Field(
+        ..., description="Name of the network to connect the adapter to",
+    )
+    adapter_name: Optional[str] = Field(
+        None, description="Optional name for the network adapter",
+    )
+
+
+class NicUpdateRequest(NicCreateRequest):
+    """Request to update an existing network adapter on a VM."""
+    pass
 
 
 class VMInitializationRequest(BaseModel):
