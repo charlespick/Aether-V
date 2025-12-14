@@ -595,7 +595,7 @@ class JobService:
                     if resource_id and vm.networks:
                         for nic in vm.networks:
                             if nic.id and nic.id.lower() == resource_id.lower():
-                                resource_name = nic.name or f"NIC {resource_id[:8]}"
+                                resource_name = nic.adapter_name or f"NIC {resource_id[:8]}"
                                 break
                     
                     # Fallback to field values for create operations

@@ -207,6 +207,7 @@ class VMListItem(BaseModel):
     cluster: Optional[str] = None
     state: VMState
     os_name: Optional[str] = None
+    ip_address: Optional[str] = None
 
 
 class VMDisk(BaseModel):
