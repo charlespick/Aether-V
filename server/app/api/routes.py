@@ -690,7 +690,7 @@ async def list_clusters(user: dict = Depends(require_permission(Permission.READE
         ClusterSummary(
             id=cluster.name,
             name=cluster.name,
-            host_count=host_counts.get(cluster.name, len(cluster.hosts)),
+            host_count=host_counts[cluster.name],
             vm_count=vm_counts.get(cluster.name, 0),
         )
         for cluster in clusters
