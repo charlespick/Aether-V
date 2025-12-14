@@ -64,7 +64,7 @@
 		isSubmitting = true;
 
 		try {
-			const response = await fetch(`/api/v1/resources/nics/${nic.id}`, {
+			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}/networkadapters/${encodeURIComponent(nic.id || '')}`, {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({

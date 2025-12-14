@@ -67,7 +67,7 @@
 		isSubmitting = true;
 
 		try {
-			const response = await fetch(`/api/v1/resources/disks/${disk.id}`, {
+			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}/disks/${encodeURIComponent(disk.id || '')}`, {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
