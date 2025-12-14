@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, JSONResponse
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 from datetime import datetime, timezone
 from dataclasses import dataclass
 
