@@ -195,6 +195,37 @@ export function extractAdapterAddresses(adapter: any): string {
 }
 
 /**
+ * Format boolean settings with enterprise-friendly labels
+ */
+export function formatBooleanSetting(value: boolean | undefined | null, fallback = '—'): string {
+	if (typeof value === 'undefined' || value === null) {
+		return fallback;
+	}
+	return value ? 'Enabled' : 'Disabled';
+}
+
+/**
+ * Format bandwidth range if present
+ */
+export function formatBandwidthRange(min?: number | null, max?: number | null): string {
+	const parts: string[] = [];
+
+	if (typeof min !== 'undefined' && min !== null) {
+		parts.push(`Min ${min} Mbps`);
+	}
+
+	if (typeof max !== 'undefined' && max !== null) {
+		parts.push(`Max ${max} Mbps`);
+	}
+
+	if (parts.length === 0) {
+		return '—';
+	}
+
+	return parts.join(' · ');
+}
+
+/**
  * Format disk capacity
  */
 export function formatDiskCapacity(disk: any): string {
@@ -412,6 +443,12 @@ export function buildMemoryHardwareItems(vm: VM): Array<{ label: string; value: 
 			items.push({
 				label: 'Maximum Memory',
 				value: formatMemoryAmount(vm.memory_max_gb)
+			});
+		}
+		if (typeof vm.dynamic_memory_buffer !== 'undefined') {
+			items.push({
+				label: 'Dynamic Memory Buffer',
+				value: `${vm.dynamic_memory_buffer}%`
 			});
 		}
 	}

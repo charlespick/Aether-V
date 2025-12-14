@@ -5,7 +5,6 @@ function icon(name, options = {}) {
     return renderIconDefault(name, options);
 }
 
-const fetchInventoryData = window.fetchInventoryData;
 class ViewManager {
     constructor() {
         this.currentView = null;
@@ -528,7 +527,7 @@ class OverviewView extends BaseView {
     async render() {
         // Fetch latest inventory data
         const inventory = await this.fetchInventory();
-        
+
         return `
             <h1 class="page-title">Aether Overview</h1>
 
@@ -628,7 +627,7 @@ class OverviewView extends BaseView {
 
     async fetchInventory() {
         try {
-            return await fetchInventoryData();
+            return await window.fetchInventoryData();
         } catch (error) {
             console.error('Error fetching inventory:', error);
         }
@@ -641,14 +640,14 @@ class ClusterView extends BaseView {
     async render() {
         const clusterName = this.data.name || 'Unknown Cluster';
         const inventory = await this.fetchInventory();
-        
+
         // Filter hosts and VMs for this specific cluster
         const clusterHosts = inventory.hosts.filter(h => h.cluster === clusterName);
         const clusterVMs = inventory.vms.filter(vm => {
             const vmHost = inventory.hosts.find(h => h.hostname === vm.host);
             return vmHost && vmHost.cluster === clusterName;
         });
-        
+
         return `
             <h1 class="page-title">${clusterName}</h1>
 
@@ -768,7 +767,7 @@ class ClusterView extends BaseView {
 
     async fetchInventory() {
         try {
-            return await fetchInventoryData();
+            return await window.fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
@@ -895,26 +894,25 @@ class HostView extends BaseView {
 
     async fetchInventory() {
         try {
-            return await fetchInventoryData();
+            return await window.fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
         return { hosts: [], vms: [] };
     }
 }
-
 // VM View
 class VMView extends BaseView {
     async render() {
         const vmId = this.data.id || '';
-        
+
         if (!vmId) {
             return `
                 <h1 class="page-title">VM Not Found</h1>
                 <p class="empty">Virtual machine ID not provided</p>
             `;
         }
-        
+
         const vm = await this.fetchVmById(vmId);
 
         if (!vm) {
@@ -926,7 +924,7 @@ class VMView extends BaseView {
 
         this.vmData = vm;
         this.vmHost = vm.host;
-        
+
         // Fetch full inventory for host/cluster context
         const inventory = await this.fetchInventory();
         this.lastInventory = inventory;
@@ -991,7 +989,7 @@ class VMView extends BaseView {
                 } else if (adapter.virtual_switch) {
                     networkDisplay = adapter.virtual_switch;
                 }
-                
+
                 return `
                 <tr>
                     <td>${this.escapeHtml(adapter.adapter_name || adapter.name || 'Adapter')}</td>
@@ -1217,12 +1215,12 @@ class VMView extends BaseView {
         }
 
         const action = button.dataset.action;
-        
+
         // Handle edit action - open VM edit overlay
         if (action === 'edit') {
-            overlayManager.open('vm-edit', { 
+            overlayManager.open('vm-edit', {
                 vm_id: this.vmData.id,
-                vm_name: this.vmData.name, 
+                vm_name: this.vmData.name,
                 host: this.vmData.host,
                 vm_data: this.vmData  // Pass actual VM data for pre-filling
             });
@@ -1744,11 +1742,11 @@ class VMView extends BaseView {
         }
 
         const message = String(errorMessage).toLowerCase();
-        
+
         // Check if this looks like a graceful shutdown failure
         if (message.includes('stop-vm') || message.includes('shutdown')) {
-            if (message.includes('unspecified') || 
-                message.includes('failed') || 
+            if (message.includes('unspecified') ||
+                message.includes('failed') ||
                 message.includes('timeout') ||
                 message.includes('not respond')) {
                 return `${errorMessage}\n\nNote: Graceful shutdown requires the guest OS to be responsive and have working Hyper-V Integration Services. If the VM is unresponsive, use "Turn Off" instead.`;
@@ -1847,20 +1845,20 @@ class VMView extends BaseView {
                 this.updateActionButtonStates();
 
                 setTimeout(() => {
-                    viewManager.switchView('vm', { 
+                    viewManager.switchView('vm', {
                         id: this.vmData.id,
-                        name: this.vmData.name, 
-                        host 
+                        name: this.vmData.name,
+                        host
                     }, { skipHistory: true });
                 }, 400);
             } else {
                 let detail = this.extractActionMessage(payload) || response.statusText || 'Request failed';
-                
+
                 // Enhance shutdown error messages with helpful guidance
                 if (action === 'shutdown') {
                     detail = this.enhanceShutdownError(detail);
                 }
-                
+
                 this.setActionFeedback(`Unable to ${actionLabel} VM: ${detail}`, 'error', {
                     title: 'VM action failed',
                 });
@@ -1915,10 +1913,10 @@ class VMView extends BaseView {
                 this.updateActionButtonStates();
 
                 setTimeout(() => {
-                    viewManager.switchView('vm', { 
+                    viewManager.switchView('vm', {
                         id: this.vmData.id,
-                        name: this.vmData.name, 
-                        host 
+                        name: this.vmData.name,
+                        host
                     }, { skipHistory: true });
                 }, 400);
             } else {
@@ -2182,7 +2180,7 @@ class VMView extends BaseView {
 
     async fetchInventory() {
         try {
-            return await fetchInventoryData();
+            return await window.fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
@@ -2247,10 +2245,10 @@ class VMView extends BaseView {
         const menu = document.createElement('div');
         menu.className = 'resource-menu';
         menu.setAttribute('role', 'menu');
-        
+
         const editLabel = resourceType === 'disk' ? 'Edit Disk' : 'Edit Network Adapter';
         const deleteLabel = resourceType === 'disk' ? 'Delete Disk' : 'Delete Network Adapter';
-        
+
         menu.innerHTML = `
             <button type="button" class="resource-menu-item" data-action="edit" role="menuitem">
                 ${icon('edit', { size: 18 })}
@@ -2286,7 +2284,7 @@ class VMView extends BaseView {
                 this.closeResourceMenu();
             }
         };
-        
+
         setTimeout(() => {
             document.addEventListener('click', this.boundResourceMenuOutsideHandler, true);
         }, 0);
@@ -2297,7 +2295,7 @@ class VMView extends BaseView {
                 this.positionResourceMenu(menu, button);
             }
         };
-        
+
         window.addEventListener('scroll', this.boundResourceMenuRepositionHandler, true);
         window.addEventListener('resize', this.boundResourceMenuRepositionHandler, true);
 
@@ -2315,7 +2313,7 @@ class VMView extends BaseView {
 
         const { menu } = this.activeResourceMenu;
         menu.classList.remove('visible');
-        
+
         if (this.boundResourceMenuOutsideHandler) {
             document.removeEventListener('click', this.boundResourceMenuOutsideHandler, true);
             this.boundResourceMenuOutsideHandler = null;
@@ -2344,33 +2342,33 @@ class VMView extends BaseView {
         const viewportWidth = window.innerWidth;
         const viewportHeight = window.innerHeight;
         const edgeMargin = 20;
-        
+
         // Default positioning: below the button, aligned to the left
         let top = scrollY + buttonRect.bottom + 4;
         let left = scrollX + buttonRect.left;
-        
+
         // Check if menu would extend past right edge of viewport
         if (left + menuRect.width > viewportWidth - edgeMargin) {
             // Align to the right edge of the button instead
             left = scrollX + buttonRect.right - menuRect.width;
         }
-        
+
         // Ensure menu doesn't go past left edge
         if (left < edgeMargin) {
             left = edgeMargin;
         }
-        
+
         // Check if menu would extend past bottom edge of viewport
         if (buttonRect.bottom + menuRect.height > viewportHeight - edgeMargin) {
             // Position above the button instead
             top = scrollY + buttonRect.top - menuRect.height - 4;
         }
-        
+
         // Ensure menu doesn't go past top edge
         if (top < scrollY + edgeMargin) {
             top = scrollY + edgeMargin;
         }
-        
+
         // Apply final position
         menu.style.top = `${Math.round(top)}px`;
         menu.style.left = `${Math.round(left)}px`;
@@ -2385,7 +2383,7 @@ class VMView extends BaseView {
             } else if (resourceType === 'nic') {
                 resourceData = this.vmData.networks.find(n => n.id === resourceId);
             }
-            
+
             const overlayName = resourceType === 'disk' ? 'disk-edit' : 'nic-edit';
             overlayManager.open(overlayName, {
                 vm_id: this.vmData.id,
@@ -2404,13 +2402,13 @@ class VMView extends BaseView {
         const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
         const title = `Confirm ${resourceName} deletion`;
         const message = `Delete this ${resourceName}? This action cannot be undone.`;
-        
+
         // Create confirmation dialog
         const overlay = document.createElement('div');
         overlay.className = 'resource-delete-confirm';
         overlay.setAttribute('role', 'dialog');
         overlay.setAttribute('aria-modal', 'true');
-        
+
         overlay.innerHTML = `
             <div class="resource-delete-backdrop"></div>
             <div class="resource-delete-dialog">
@@ -2426,14 +2424,14 @@ class VMView extends BaseView {
                 </div>
             </div>
         `;
-        
+
         document.body.appendChild(overlay);
         document.body.style.overflow = 'hidden';
-        
+
         const confirmBtn = overlay.querySelector('[data-action="confirm"]');
         const cancelBtn = overlay.querySelector('[data-action="cancel"]');
         const backdrop = overlay.querySelector('.resource-delete-backdrop');
-        
+
         const close = () => {
             overlay.classList.remove('visible');
             document.body.style.overflow = '';
@@ -2443,15 +2441,15 @@ class VMView extends BaseView {
                 }
             }, 200);
         };
-        
+
         confirmBtn.addEventListener('click', async () => {
             close();
             await this.executeResourceDelete(resourceType, resourceId);
         });
-        
+
         cancelBtn.addEventListener('click', close);
         backdrop.addEventListener('click', close);
-        
+
         requestAnimationFrame(() => {
             overlay.classList.add('visible');
             confirmBtn.focus();
@@ -2484,8 +2482,8 @@ class VMView extends BaseView {
             }
 
             if (response.ok) {
-                const message = payload && payload.message 
-                    ? payload.message 
+                const message = payload && payload.message
+                    ? payload.message
                     : `${resourceName.charAt(0).toUpperCase() + resourceName.slice(1)} deletion queued.`;
                 this.setActionFeedback(message, 'success', {
                     title: 'Resource deletion queued',
@@ -2493,10 +2491,10 @@ class VMView extends BaseView {
 
                 // Refresh the view after a short delay
                 setTimeout(() => {
-                    viewManager.switchView('vm', { 
+                    viewManager.switchView('vm', {
                         id: this.vmData.id,
-                        name: this.vmData.name, 
-                        host: this.vmData.host 
+                        name: this.vmData.name,
+                        host: this.vmData.host
                     }, { skipHistory: true });
                 }, 400);
             } else {
@@ -2580,7 +2578,7 @@ class DisconnectedHostsView extends BaseView {
 
     async fetchInventory() {
         try {
-            return await fetchInventoryData();
+            return await window.fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }

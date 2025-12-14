@@ -29,6 +29,7 @@ export interface VM {
     memory_min_gb?: number; // For dynamic memory
     memory_max_gb?: number; // For dynamic memory
     dynamic_memory_enabled?: boolean;
+    dynamic_memory_buffer?: number;
     ip_addresses?: string[];
     ip_address?: string; // Fallback for single IP
     notes?: string | string[];
@@ -39,6 +40,19 @@ export interface VM {
     generation?: number | string;
     version?: string;
     created_at?: string;
+    secure_boot_enabled?: boolean;
+    secure_boot_template?: string;
+    trusted_platform_module_enabled?: boolean;
+    key_protector_kind?: string;
+    primary_boot_device?: string;
+    host_recovery_action?: string;
+    host_stop_action?: string;
+    integration_services_shutdown?: boolean;
+    integration_services_time?: boolean;
+    integration_services_data_exchange?: boolean;
+    integration_services_heartbeat?: boolean;
+    integration_services_vss_backup?: boolean;
+    integration_services_guest_services?: boolean;
     disks?: Array<{
         id?: string;
         name?: string;
@@ -47,6 +61,7 @@ export interface VM {
         size_gb?: number;
         size?: string;
         path?: string;
+        storage_class?: string;
     }>;
     networks?: Array<{
         id?: string;
@@ -55,6 +70,13 @@ export interface VM {
         network?: string;
         virtual_switch?: string;
         vlan_id?: number;
+        mac_address?: string;
+        mac_address_config?: string;
+        dhcp_guard?: boolean;
+        router_guard?: boolean;
+        mac_spoof_guard?: boolean;
+        min_bandwidth_mbps?: number;
+        max_bandwidth_mbps?: number;
     }>;
 }
 
