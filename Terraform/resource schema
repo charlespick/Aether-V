@@ -9,6 +9,8 @@ resource: aetherv_virtual_machine
   name: string, mutation forces replacement
   host: string, optional, mutation forces replacement - needed if cluster not set
   cluster: string, optional, mutation forces replacement - needed if host not set, enables failover
+  # Note: The 'cluster' parameter in TF resource creation specifies WHERE to place the VM (target cluster).
+  # The runtime 'clustered' status (whether VM has cluster protection) is read-only state data.
   id: GUID - state only
   -----------------------------------------------------------------------
   cpu_cores: integer

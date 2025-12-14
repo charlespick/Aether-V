@@ -20,15 +20,20 @@ All new properties are optional and maintain full backward compatibility.
 
 ### Cluster and Host Configuration
 
-**New Fields:**
-- `cluster` (Optional[str]): Cluster name this VM belongs to
+**Fields:**
+- `clustered` (Optional[bool]): Whether the VM has failover cluster protection
+- `cluster_name` (Optional[str]): Name of the cluster protecting this VM (only set if clustered=True)
+
+**Important Distinction:**
+A VM is "clustered" only if it is registered as a failover cluster resource. This is distinct from the host being part of a cluster. A VM on a clustered host is NOT automatically protected by the cluster.
 
 **Example:**
 ```python
 VM(
     name="web-01",
     host="hyperv-01.example.com",
-    cluster="production-cluster",
+    clustered=True,
+    cluster_name="production-cluster",
     state=VMState.RUNNING
 )
 ```
@@ -148,7 +153,8 @@ vm = VM(
     id="12345678-1234-1234-1234-123456789abc",
     name="production-vm-01",
     host="hyperv-01.example.com",
-    cluster="production-cluster",
+    clustered=True,
+    cluster_name="production-cluster",
     state=VMState.RUNNING,
     cpu_cores=8,
     memory_startup_gb=16.0,

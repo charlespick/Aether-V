@@ -160,7 +160,8 @@ class VM(BaseModel):
     id: Optional[str] = None
     name: str
     host: str
-    cluster: Optional[str] = None
+    clustered: Optional[bool] = None  # Whether VM has failover cluster protection
+    cluster_name: Optional[str] = None  # Cluster name if VM is clustered
     state: VMState
     cpu_cores: int = 0
     memory_gb: float = 0.0
@@ -204,7 +205,8 @@ class VMListItem(BaseModel):
     id: Optional[str] = None
     name: str
     host: str
-    cluster: Optional[str] = None
+    clustered: Optional[bool] = None  # Whether VM has failover cluster protection
+    cluster_name: Optional[str] = None  # Cluster name if VM is clustered
     state: VMState
     os_name: Optional[str] = None
     ip_address: Optional[str] = None

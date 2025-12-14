@@ -634,6 +634,43 @@ try {
         $result.Warnings += "Batch guest OS query failed: $($_.Exception.Message)"
     }
 
+    # Batch: Cluster protection status (failover cluster membership)
+    # Query cluster CIM to determine which VMs are actually protected by the cluster.
+    # A VM is clustered if it exists as a "Virtual Machine" resource in the failover cluster.
+    $clusteredVmGuids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    if ($result.Host.ClusterName) {
+        try {
+            # Query cluster resources of type "Virtual Machine"
+            $clusterVmResources = Get-CimInstance -Namespace root\MSCluster `
+                -ClassName MSCluster_Resource `
+                -Filter "Type='Virtual Machine'" `
+                -ErrorAction SilentlyContinue
+
+            foreach ($resource in $clusterVmResources) {
+                if ($resource.PrivateProperties) {
+                    # PrivateProperties is an embedded object containing the VmId
+                    # Extract VmId from the embedded instance
+                    try {
+                        $vmId = $resource.PrivateProperties.CimInstanceProperties['VmId'].Value
+                        if ($vmId) {
+                            $null = $clusteredVmGuids.Add($vmId.ToUpper())
+                        }
+                    }
+                    catch {
+                        # If PrivateProperties parsing fails, continue to next resource
+                    }
+                }
+            }
+            
+            if ($clusteredVmGuids.Count -gt 0) {
+                $result.Host.Warnings += "Identified $($clusteredVmGuids.Count) clustered VMs on this host"
+            }
+        }
+        catch {
+            $result.Warnings += "Cluster VM protection query failed: $($_.Exception.Message)"
+        }
+    }
+
     # === MERGE ALL DATA ===
     $vmDetails = foreach ($vmName in $vmDataByName.Keys) {
         # Use pre-extracted VM data (avoids slow WMI property access)
@@ -723,11 +760,20 @@ try {
         # Integration services
         $integrationStatus = if ($vmGuid) { $integrationStatusByVmGuid[$vmGuid] } else { $null }
 
+        # Cluster protection status
+        # A VM is "clustered" if it's registered as a failover cluster resource.
+        # This is distinct from the host being part of a cluster.
+        $isClustered = $false
+        if ($vmGuid -and $clusteredVmGuids.Contains($vmGuid)) {
+            $isClustered = $true
+        }
+
         # Build VM info (preserving exact schema)
         $vmInfo = [ordered]@{
             Name                 = $vm.Name
             Id                   = $vm.Id
-            Cluster              = $result.Host.ClusterName
+            Clustered            = $isClustered
+            ClusterName          = if ($isClustered) { $result.Host.ClusterName } else { $null }
             State                = $vm.State
             ProcessorCount       = $vm.ProcessorCount
             MemoryGB             = $memoryGb

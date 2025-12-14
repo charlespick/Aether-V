@@ -9,7 +9,8 @@ Legacy UI is only documented in it's current state and is no longer being develo
 | name: string                                    |      x       |  x   |     x     |         |
 | host: string                                    |      x       |  x   |     x     |         |
 | state: enum                                     |      x       |  x   |     x     |         |
-| cluster: string                                 |      x       |  x   |     x     |         |
+| clustered: bool                                 |      x       |  x   |     x     |         |
+| cluster_name: string                            |      x       |  x   |     x     |         |
 | id: Hyper-V ID                                  |      x       |  x   |     x     |         |
 | cpu_cores: integer                              |      x       |  x   |     x     |         |
 | startup_memory_gb: double                       |      x       |  x   |     x     |         |

@@ -1584,7 +1584,8 @@ class InventoryService:
             generation = self._coerce_int(vm_data.get("Generation"), default=None)
             version = self._coerce_str(vm_data.get("Version"))
             notes = self._coerce_str(vm_data.get("Notes"))
-            cluster = self._coerce_str(vm_data.get("Cluster"))
+            clustered = self._coerce_bool(vm_data.get("Clustered"))
+            cluster_name = self._coerce_str(vm_data.get("ClusterName"))
             networks = self._deserialize_networks(vm_data.get("Networks"))
             disks = self._deserialize_disks(vm_data.get("Disks"))
             ip_addresses = self._normalise_ip_list(vm_data.get("IPAddresses"))
@@ -1636,7 +1637,8 @@ class InventoryService:
                 id=vm_id,
                 name=vm_data.get("Name", ""),
                 host=hostname,
-                cluster=cluster,
+                clustered=clustered,
+                cluster_name=cluster_name,
                 state=state,
                 cpu_cores=cpu_cores,
                 memory_gb=memory_gb,

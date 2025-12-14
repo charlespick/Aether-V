@@ -32,10 +32,8 @@ export interface VM {
     ip_addresses?: string[];
     ip_address?: string; // Fallback for single IP
     notes?: string | string[];
-    cluster?: string;
-    clustered?: boolean;
-    is_clustered?: boolean;
-    vm_clustered?: boolean;
+    clustered?: boolean; // Whether VM has failover cluster protection
+    cluster_name?: string; // Cluster name if VM is clustered
     os_name?: string;
     os_family?: string;
     generation?: number | string;
