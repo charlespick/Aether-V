@@ -24,7 +24,7 @@ Legacy UI is only documented in it's current state and is no longer being develo
 | disk: object (0+ instances)                     |      x       |  x   |           |         |
 |   id: GUID - state only                         |      x       |  x   |           |         |
 |   size_gb: double                               |      x       |  x   |           |         |
-|   storage_class: related to host resources/path |              |      |           |         |
+|   storage_class: related to host resources/path |      x       |  x   |           |         |
 |   location: string                              |      x       |  x   |           |         |
 | network_if: object (0+ instances)               |      x       |  x   |           |         |
 |   network: string                               |      x       |  x   |           |         |
