@@ -24,17 +24,12 @@ Architecture Note:
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, model_validator, ConfigDict
 from enum import Enum
+from .models import OSFamily
 
 
 # ============================================================================
 # Resource Specification Models
 # ============================================================================
-
-
-class OSFamily(str, Enum):
-    """Operating system family for secure boot configuration."""
-    WINDOWS = "windows"
-    LINUX = "linux"
 
 
 class VmSpec(BaseModel):

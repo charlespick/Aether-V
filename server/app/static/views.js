@@ -4,6 +4,8 @@ const { renderDefaultIcon: renderIconDefault } = window.iconUtils;
 function icon(name, options = {}) {
     return renderIconDefault(name, options);
 }
+
+const fetchInventoryData = window.fetchInventoryData;
 class ViewManager {
     constructor() {
         this.currentView = null;
@@ -626,12 +628,7 @@ class OverviewView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', {
-                credentials: 'same-origin'
-            });
-            if (response.ok) {
-                return await response.json();
-            }
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error fetching inventory:', error);
         }
@@ -771,8 +768,7 @@ class ClusterView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
-            if (response.ok) return await response.json();
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
@@ -899,8 +895,7 @@ class HostView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
-            if (response.ok) return await response.json();
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
@@ -1816,7 +1811,7 @@ class VMView extends BaseView {
         const actionLabel = this.getActionLabel(action);
 
         // Use RESTful endpoint with VM ID
-        const endpoint = `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/${action}`;
+        const endpoint = `/api/v1/virtualmachines/${encodeURIComponent(this.vmData.id)}/${action}`;
 
         this.setButtonsBusy(true);
         this.setActionFeedback(`Sending ${actionLabel} request...`, 'info', {
@@ -1893,7 +1888,7 @@ class VMView extends BaseView {
         });
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}?delete_disks=true&force=false`, {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmData.id)}?delete_disks=true&force=false`, {
                 method: 'DELETE',
                 credentials: 'same-origin',
             });
@@ -2187,8 +2182,7 @@ class VMView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
-            if (response.ok) return await response.json();
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }
@@ -2197,8 +2191,8 @@ class VMView extends BaseView {
 
     async fetchVmById(vmId) {
         try {
-            const response = await fetch(`/api/v1/vms/by-id/${encodeURIComponent(vmId)}`, { 
-                credentials: 'same-origin' 
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}`, {
+                credentials: 'same-origin'
             });
             if (response.ok) {
                 return await response.json();
@@ -2466,9 +2460,9 @@ class VMView extends BaseView {
 
     async executeResourceDelete(resourceType, resourceId) {
         const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
-        const endpoint = resourceType === 'disk' 
-            ? `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/disks/${encodeURIComponent(resourceId)}`
-            : `/api/v1/resources/vms/${encodeURIComponent(this.vmData.id)}/nics/${encodeURIComponent(resourceId)}`;
+        const endpoint = resourceType === 'disk'
+            ? `/api/v1/virtualmachines/${encodeURIComponent(this.vmData.id)}/disks/${encodeURIComponent(resourceId)}`
+            : `/api/v1/virtualmachines/${encodeURIComponent(this.vmData.id)}/networkadapters/${encodeURIComponent(resourceId)}`;
 
         this.setActionFeedback(`Deleting ${resourceName}...`, 'info', {
             title: 'Deleting resource',
@@ -2586,8 +2580,7 @@ class DisconnectedHostsView extends BaseView {
 
     async fetchInventory() {
         try {
-            const response = await fetch('/api/v1/inventory', { credentials: 'same-origin' });
-            if (response.ok) return await response.json();
+            return await fetchInventoryData();
         } catch (error) {
             console.error('Error:', error);
         }

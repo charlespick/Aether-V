@@ -151,7 +151,7 @@ def test_vm_lookup_by_id_route_uses_global_search(monkeypatch):
     monkeypatch.setattr(routes.settings, "allow_dev_auth", True, raising=False)
 
     client = TestClient(app)
-    response = client.get("/api/v1/vms/by-id/abc")
+    response = client.get("/api/v1/virtualmachines/abc")
 
     assert response.status_code == status.HTTP_200_OK
     body = response.json()

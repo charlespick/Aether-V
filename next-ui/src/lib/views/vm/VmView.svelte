@@ -39,7 +39,7 @@
 	const vmData = useAsyncData<VMData>(
 		async () => {
 			// Fetch specific VM by ID
-			const vmResponse = await fetch(`/api/v1/vms/by-id/${encodeURIComponent(vmId)}`, {
+			const vmResponse = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}`, {
 				credentials: 'same-origin'
 			});
 
@@ -145,8 +145,8 @@
 		const actionLabel = getActionLabel(action);
 		const endpoint =
 			action === 'delete'
-				? `/api/v1/resources/vms/${encodeURIComponent(vm.id)}?delete_disks=true&force=false`
-				: `/api/v1/resources/vms/${encodeURIComponent(vm.id)}/${action}`;
+				? `/api/v1/virtualmachines/${encodeURIComponent(vm.id)}?delete_disks=true&force=false`
+				: `/api/v1/virtualmachines/${encodeURIComponent(vm.id)}/${action}`;
 
 		toastStore.info(`Sending ${actionLabel} request...`, {
 			title: `${actionLabel.charAt(0).toUpperCase()}${actionLabel.slice(1)} in progress`
@@ -211,8 +211,8 @@
 		const resourceName = resourceType === 'disk' ? 'disk' : 'network adapter';
 		const endpoint =
 			resourceType === 'disk'
-				? `/api/v1/resources/vms/${encodeURIComponent(vm.id)}/disks/${encodeURIComponent(resourceId)}`
-				: `/api/v1/resources/vms/${encodeURIComponent(vm.id)}/nics/${encodeURIComponent(resourceId)}`;
+				? `/api/v1/virtualmachines/${encodeURIComponent(vm.id)}/disks/${encodeURIComponent(resourceId)}`
+				: `/api/v1/virtualmachines/${encodeURIComponent(vm.id)}/networkadapters/${encodeURIComponent(resourceId)}`;
 
 		toastStore.info(`Deleting ${resourceName}...`, {
 			title: 'Deleting resource'

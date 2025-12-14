@@ -67,6 +67,7 @@ export interface Host {
     hostname: string;
     cluster: string;
     connected: boolean;
+    vm_count?: number;
     total_cpu_cores?: number;
     total_memory_gb?: number;
     version?: string;
@@ -74,8 +75,19 @@ export interface Host {
 }
 
 export interface Cluster {
+    id: string;
     name: string;
-    connected_hosts: number;
+    host_count: number;
+    vm_count: number;
+}
+
+interface InventoryStatistics {
+    total_hosts: number;
+    total_clusters: number;
+    total_vms: number;
+    disconnected_count: number;
+    last_refresh?: string | null;
+    environment_name: string;
 }
 
 export interface InventoryData {
@@ -87,8 +99,8 @@ export interface InventoryData {
     total_vms: number;
     total_clusters: number;
     disconnected_count: number;
-    last_refresh?: string;
-    environment_name?: string;
+    last_refresh: string | null;
+    environment_name: string;
 }
 
 interface InventoryState {
@@ -169,15 +181,47 @@ class InventoryStore {
         state.update($s => ({ ...$s, loading: true, error: null }));
 
         try {
-            const response = await apiClient.get<InventoryData>('/api/v1/inventory');
+            const [clusters, hosts, vms, stats] = await Promise.all([
+                apiClient.get<Cluster[]>('/api/v1/clusters'),
+                apiClient.get<Host[]>('/api/v1/hosts'),
+                apiClient.get<VM[]>('/api/v1/virtualmachines'),
+                apiClient.get<InventoryStatistics>('/api/v1/statistics')
+            ]);
 
-            if (!response.ok) {
-                throw new Error(response.error || 'Failed to fetch inventory');
+            if (!clusters.ok || !hosts.ok || !vms.ok || !stats.ok) {
+                const firstError = clusters.error || hosts.error || vms.error || stats.error;
+                throw new Error(firstError || 'Failed to fetch inventory');
             }
+
+            const hostData = hosts.data ?? [];
+            const connectedHosts = hostData.filter(h => h.connected);
+            const disconnectedHosts = hostData.filter(h => !h.connected);
+
+            const statsData: InventoryStatistics = stats.data ?? {
+                total_hosts: hostData.length,
+                total_clusters: clusters.data?.length ?? 0,
+                total_vms: vms.data?.length ?? 0,
+                disconnected_count: disconnectedHosts.length,
+                last_refresh: null,
+                environment_name: 'Production Environment'
+            };
+
+            const inventory: InventoryData = {
+                clusters: clusters.data ?? [],
+                hosts: connectedHosts,
+                vms: vms.data ?? [],
+                disconnected_hosts: disconnectedHosts,
+                total_hosts: statsData.total_hosts,
+                total_vms: statsData.total_vms,
+                total_clusters: statsData.total_clusters,
+                disconnected_count: statsData.disconnected_count,
+                last_refresh: statsData.last_refresh ?? null,
+                environment_name: statsData.environment_name ?? 'Production Environment'
+            };
 
             state.update($s => ({
                 ...$s,
-                data: response.data!,
+                data: inventory,
                 loading: false,
                 error: null,
                 lastUpdate: Date.now()

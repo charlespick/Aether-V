@@ -1811,27 +1811,24 @@ class DiskCreateOverlay extends BaseOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = { vm_id: this.vmId };
+        const body = {};
 
         // Collect form values based on Pydantic DiskSpec model
-        values.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
-        values.disk_type = formData.get('disk_type');
-        values.controller_type = formData.get('controller_type');
-        
+        body.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
+        body.disk_type = formData.get('disk_type');
+        body.controller_type = formData.get('controller_type');
+
         const storageClass = formData.get('storage_class');
         if (storageClass && storageClass.trim()) {
-            values.storage_class = storageClass.trim();
+            body.storage_class = storageClass.trim();
         }
 
         try {
-            const response = await fetch('/api/v1/resources/disks', {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/disks`, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host
-                })
+                body: JSON.stringify(body)
             });
 
             const result = await response.json();
@@ -1997,34 +1994,30 @@ class DiskEditOverlay extends DiskCreateOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = { vm_id: this.vmId };
+        const body = {};
 
         // Collect form values based on Pydantic DiskSpec model
-        values.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
-        values.disk_type = formData.get('disk_type');
-        values.controller_type = formData.get('controller_type');
-        
+        body.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
+        body.disk_type = formData.get('disk_type');
+        body.controller_type = formData.get('controller_type');
+
         const storageClass = formData.get('storage_class');
         if (storageClass && storageClass.trim()) {
-            values.storage_class = storageClass.trim();
+            body.storage_class = storageClass.trim();
         }
 
         // Client-side validation: prevent disk shrinking
-        if (values.disk_size_gb && this.originalDiskSize && values.disk_size_gb < this.originalDiskSize) {
+        if (body.disk_size_gb && this.originalDiskSize && body.disk_size_gb < this.originalDiskSize) {
             this.messagesEl.innerHTML = `<div class="form-error">Disk size cannot be reduced below its current size of ${this.originalDiskSize} GB.</div>`;
             return;
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/disks/${encodeURIComponent(this.resourceId)}`, {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/disks/${encodeURIComponent(this.resourceId)}`, {
                 method: 'PUT',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host,
-                    resource_id: this.resourceId
-                })
+                body: JSON.stringify(body)
             });
 
             const result = await response.json();
@@ -2148,25 +2141,22 @@ class NicCreateOverlay extends BaseOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = { vm_id: this.vmId };
+        const body = {};
 
         // Collect form values based on Pydantic NicSpec model
-        values.network = formData.get('network');
-        
+        body.network = formData.get('network');
+
         const adapterName = formData.get('adapter_name');
         if (adapterName && adapterName.trim()) {
-            values.adapter_name = adapterName.trim();
+            body.adapter_name = adapterName.trim();
         }
 
         try {
-            const response = await fetch('/api/v1/resources/nics', {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/networkadapters`, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host
-                })
+                body: JSON.stringify(body)
             });
 
             const result = await response.json();
@@ -2283,32 +2273,28 @@ class NicEditOverlay extends NicCreateOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = { vm_id: this.vmId };
+        const body = {};
 
         // Collect form values based on Pydantic NicSpec model
-        values.network = formData.get('network');
-        
+        body.network = formData.get('network');
+
         const adapterName = formData.get('adapter_name');
         if (adapterName && adapterName.trim()) {
-            values.adapter_name = adapterName.trim();
+            body.adapter_name = adapterName.trim();
         }
 
         // Client-side validation: ensure network is specified
-        if (!values.network?.trim()) {
+        if (!body.network?.trim()) {
             this.messagesEl.innerHTML = `<div class="form-error">Network name is required.</div>`;
             return;
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/nics/${encodeURIComponent(this.resourceId)}`, {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/networkadapters/${encodeURIComponent(this.resourceId)}`, {
                 method: 'PUT',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host,
-                    resource_id: this.resourceId
-                })
+                body: JSON.stringify(body)
             });
 
             const result = await response.json();
@@ -2474,28 +2460,25 @@ class VMEditOverlay extends BaseOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = {};
+        const body = {};
 
         // Collect form values based on Pydantic VmSpec model
-        values.vm_name = this.vmName;  // VM name is not editable, use existing name
-        values.cpu_cores = parseInt(formData.get('cpu_cores'), 10);
-        values.gb_ram = parseInt(formData.get('gb_ram'), 10);
-        values.vm_clustered = formData.has('vm_clustered');
-        
+        body.vm_name = this.vmName;  // VM name is not editable, use existing name
+        body.cpu_cores = parseInt(formData.get('cpu_cores'), 10);
+        body.gb_ram = parseInt(formData.get('gb_ram'), 10);
+        body.vm_clustered = formData.has('vm_clustered');
+
         const storageClass = formData.get('storage_class');
         if (storageClass && storageClass.trim()) {
-            values.storage_class = storageClass.trim();
+            body.storage_class = storageClass.trim();
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}`, {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}`, {
                 method: 'PUT',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host
-                })
+                body: JSON.stringify(body)
             });
 
             const result = await response.json();

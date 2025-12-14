@@ -850,17 +850,24 @@ async function logout() {
     window.location.href = redirectTarget;
 }
 
+const fetchInventoryData = window.fetchInventoryData;
+
 async function loadInventory() {
     try {
-        const response = await fetch('/api/v1/inventory', {
-            credentials: 'same-origin'
-        });
-        
-        if (response.status === 401) {
+        const data = await fetchInventoryData();
+
+        // Update sidebar navigation with hosts and VMs
+        updateSidebarNavigation(data);
+
+        return data;
+
+    } catch (error) {
+        console.error('Error loading inventory:', error);
+        if (error.status === 401) {
             if (authEnabled) {
                 console.log('Token invalid, checking auth state');
                 const isAuthenticated = await checkAuthenticationStatus();
-                
+
                 if (!isAuthenticated) {
                     console.log('Not authenticated, redirecting to login');
                     setTimeout(() => {
@@ -868,27 +875,12 @@ async function loadInventory() {
                     }, 1000);
                     return null;
                 }
-                
+
                 return loadInventory();
-            } else {
-                showError('Authentication required. Please configure authentication.');
-                return null;
             }
+            showError('Authentication required. Please configure authentication.');
+            return null;
         }
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        
-        // Update sidebar navigation with hosts and VMs
-        updateSidebarNavigation(data);
-        
-        return data;
-        
-    } catch (error) {
-        console.error('Error loading inventory:', error);
         showError('Failed to load inventory: ' + error.message);
         return null;
     }
@@ -2025,15 +2017,7 @@ class SearchOverlay {
 
         // Get inventory data for searching
         try {
-            const response = await fetch('/api/v1/inventory', { 
-                credentials: 'same-origin'
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const inventory = await response.json();
+            const inventory = await fetchInventoryData();
             this.renderSearchResults(query, inventory);
         } catch (error) {
             console.error('Error searching inventory:', error);
