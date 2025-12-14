@@ -1,0 +1,348 @@
+=== Selecting Test VM ===
+Using test VM: termsrv02 (ID: CD4853C4-0E7E-4077-B69C-B3C2329C6948)
+
+=== Discovering Dynamic Memory Buffer ===
+Found Msvm_MemorySettingData for VM
+Available properties: Address, AddressOnParent, AllocationUnits, AutomaticAllocation, AutomaticDeallocation, BackingPageSize, BackingType, Caption, Connection, ConsumerVisibility, Description, DynamicMemoryEnabled, ElementName, EnableColdHint, EnableEpf, EnableHotHint, EnablePrivateCompressionStore, HostResource, HugePagesEnabled, InstanceID, IsVirtualized, Limit, MappingBehavior, MaxMemoryBlocksPerNumaNode, MemoryAccessTrackingPolicy, MemoryAccessTrackingState, MemoryEncryptionPolicy, OtherResourceType, Parent, PoolID, PSComputerName, Reservation, ResourceSubType, ResourceType, SgxEnabled, SgxLaunchControlDefault, SgxLaunchControlMode, SgxSize, SwapFilesInUse, TargetMemoryBuffer, VirtualQuantity, VirtualQuantityUnits, Weight
+  VirtualQuantity: 8000 (UInt64)
+  Reservation: 512 (UInt64)
+  Limit: 1048576 (UInt64)
+  DynamicMemoryEnabled: False (Boolean)
+  TargetMemoryBuffer: 20 (UInt32)
+
+Buffer-related properties found:
+  TargetMemoryBuffer: 20 (UInt32)
+  Weight: 5000 (UInt32)
+
+=== Discovering Secure Boot Settings ===
+
+Trying class: Msvm_VirtualSystemSettingData
+Found Msvm_VirtualSystemSettingData
+Security-related properties:
+  BootOrder: 1 2 3 0 (UInt16[])
+  BootPciExpress: False (Boolean)
+  BootPciExpressInstanceFilter:  (String)
+  BootSourceOrder: \\TMPEHV01\root\virtualization\v2:Msvm_BootSourceSettingData.InstanceID="Microsoft:CD4853C4-0E7E-4077-B69C-B3C2329C6948\\61AD109C-68DA-4C38-8418-C559F08F4B07\\BOOT0003" \\TMPEHV01\root\virtualization\v2:Msvm_BootSourceSettingData.InstanceID="Microsoft:CD4853C4-0E7E-4077-B69C-B3C2329C6948\\3D15D2A9-4790-47C4-B433-9AAEE5E80684\\0\\1\\D\\B" \\TMPEHV01\root\virtualization\v2:Msvm_BootSourceSettingData.InstanceID="Microsoft:CD4853C4-0E7E-4077-B69C-B3C2329C6948\\AEB72B83-0489-484D-8630-8CE083E7DDC1\\B" \\TMPEHV01\root\virtualization\v2:Msvm_BootSourceSettingData.InstanceID="Microsoft:CD4853C4-0E7E-4077-B69C-B3C2329C6948\\3D15D2A9-4790-47C4-B433-9AAEE5E80684\\0\\0\\D\\B" (String[])
+  NetworkBootPreferredProtocol: 4096 (UInt16)
+  PauseAfterBootFailure: False (Boolean)
+  SecureBootEnabled: True (Boolean)
+  SecureBootTemplateId: 1734C6E8-3154-4DDA-BA5F-A874CC483422 (String)
+
+Trying class: Msvm_SecuritySettingData
+Found Msvm_SecuritySettingData
+Security-related properties:
+  BindToHostTpm: False (Boolean)
+  TpmEnabled: False (Boolean)
+
+Trying class: Msvm_SecurityElement
+Found Msvm_SecurityElement
+Security-related properties:
+  Shielded: False (Boolean)
+
+=== Discovering TPM Settings ===
+
+Trying class: Msvm_SecuritySettingData
+Found Msvm_SecuritySettingData
+TPM-related properties:
+  BindToHostTpm: False (Boolean)
+  TpmEnabled: False (Boolean)
+
+Trying class: Msvm_KeyProtector
+
+=== Discovering Boot Device Settings ===
+
+Trying class: Msvm_VirtualSystemSettingData
+Found Msvm_VirtualSystemSettingData
+Boot-related properties:
+  BootOrder: Array[4] (UInt16[])
+  BootPciExpress: False (Boolean)
+  BootPciExpressInstanceFilter:  (String)
+  BootSourceOrder: Array[4] (String[])
+  FirmwareFile:  (String)
+  FirmwareParameters: Array[0] (null)
+  NetworkBootPreferredProtocol: 4096 (UInt16)
+  PauseAfterBootFailure: False (Boolean)
+  SecureBootEnabled: True (Boolean)
+  SecureBootTemplateId: 1734C6E8-3154-4DDA-BA5F-A874CC483422 (String)
+  SourceGuestStateFile:  (null)
+
+Trying class: Msvm_BootSourceSettingData
+Found Msvm_BootSourceSettingData
+Boot-related properties:
+  BootSourceDescription: Array[4] (Object[])
+  BootSourceType: Array[4] (Object[])
+  FirmwareDevicePath: Array[4] (Object[])
+
+=== Discovering Host Recovery and Stop Actions ===
+Found Msvm_VirtualSystemSettingData
+Action-related properties:
+  AdditionalRecoveryInformation:  (null)
+  AutomaticCriticalErrorAction: 1 (UInt16)
+  AutomaticCriticalErrorActionTimeout: 00:30:00 (TimeSpan)
+  AutomaticRecoveryAction: 2 (UInt16)
+-AdditionalProperties : The term '-AdditionalProperties' is not recognized as the name of a cmdlet, function, script
+file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct
+and try again.
+At C:\Users\Public\DiscoverCIM.ps1:461 char:21
++                     -AdditionalProperties @('AutomaticStartupAction', ...
++                     ~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (-AdditionalProperties:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+  AutomaticShutdownAction: 3 (UInt16)
+  AutomaticSnapshotsEnabled: False (Boolean)
+  AutomaticStartupAction: 2 (UInt16)
+  AutomaticStartupActionDelay: 00:00:00 (TimeSpan)
+  AutomaticStartupActionSequenceNumber:  (null)
+  IsAutomaticSnapshot: False (Boolean)
+  RecoveryFile:  (null)
+  TurnOffOnGuestRestart: False (Boolean)
+
+=== Discovering Integration Services ===
+
+Trying class: Msvm_ShutdownComponent
+Found Msvm_ShutdownComponent
+Status properties:
+  AvailableRequestedStates:  (null)
+  CommunicationStatus:  (null)
+  DetailedStatus:  (null)
+  EnabledDefault: 7 (UInt16)
+  EnabledState: 2 (UInt16)
+  HealthState: 5 (UInt16)
+  OperatingStatus:  (null)
+  OperationalStatus: 2 (UInt16[])
+  OtherEnabledState:  (null)
+  PrimaryStatus:  (null)
+  RequestedState: 12 (UInt16)
+  Status:  (null)
+  StatusDescriptions: OK (String[])
+  StatusInfo:  (null)
+  TimeOfLastStateChange:  (null)
+  TransitioningToState: 12 (UInt16)
+
+Trying class: Msvm_TimeSyncComponent
+Found Msvm_TimeSyncComponent
+Status properties:
+  AvailableRequestedStates:  (null)
+  CommunicationStatus:  (null)
+  DetailedStatus:  (null)
+  EnabledDefault: 7 (UInt16)
+  EnabledState: 2 (UInt16)
+  HealthState: 5 (UInt16)
+  OperatingStatus:  (null)
+  OperationalStatus: 2 (UInt16[])
+  OtherEnabledState:  (null)
+  PrimaryStatus:  (null)
+  RequestedState: 12 (UInt16)
+  Status:  (null)
+  StatusDescriptions: OK (String[])
+  StatusInfo:  (null)
+  TimeOfLastStateChange:  (null)
+  TransitioningToState: 12 (UInt16)
+
+Trying class: Msvm_KvpExchangeComponent
+Found Msvm_KvpExchangeComponent
+Status properties:
+  AvailableRequestedStates:  (null)
+  CommunicationStatus:  (null)
+  DetailedStatus:  (null)
+  EnabledDefault: 7 (UInt16)
+  EnabledState: 2 (UInt16)
+  HealthState: 5 (UInt16)
+  OperatingStatus:  (null)
+  OperationalStatus: 2 (UInt16[])
+  OtherEnabledState:  (null)
+  PrimaryStatus:  (null)
+  RequestedState: 12 (UInt16)
+  Status:  (null)
+  StatusDescriptions: OK (String[])
+  StatusInfo:  (null)
+  TimeOfLastStateChange:  (null)
+  TransitioningToState: 12 (UInt16)
+
+Trying class: Msvm_HeartbeatComponent
+Found Msvm_HeartbeatComponent
+Status properties:
+  AvailableRequestedStates:  (null)
+  CommunicationStatus:  (null)
+  DetailedStatus:  (null)
+  EnabledDefault: 7 (UInt16)
+  EnabledState: 2 (UInt16)
+  HealthState: 5 (UInt16)
+  OperatingStatus:  (null)
+  OperationalStatus: 2 (UInt16[])
+  OtherEnabledState:  (null)
+  PrimaryStatus:  (null)
+  RequestedState: 12 (UInt16)
+  Status:  (null)
+  StatusDescriptions: OK (String[])
+  StatusInfo:  (null)
+  TimeOfLastStateChange:  (null)
+  TransitioningToState: 12 (UInt16)
+
+Trying class: Msvm_VssIntegrationComponent
+Not found or not applicable
+
+Trying class: Msvm_GuestServiceInterfaceComponent
+Found Msvm_GuestServiceInterfaceComponent
+Status properties:
+  AvailableRequestedStates:  (null)
+  CommunicationStatus:  (null)
+  DetailedStatus:  (null)
+  EnabledDefault: 7 (UInt16)
+  EnabledState: 3 (UInt16)
+  HealthState: 5 (UInt16)
+  OperatingStatus:  (null)
+  OperationalStatus: 2 (UInt16[])
+  OtherEnabledState:  (null)
+  PrimaryStatus:  (null)
+  RequestedState: 12 (UInt16)
+  Status:  (null)
+  StatusDescriptions: OK (String[])
+  StatusInfo:  (null)
+  TimeOfLastStateChange:  (null)
+  TransitioningToState: 12 (UInt16)
+
+=== Discovering Additional Useful Properties ===
+
+Checking Msvm_ComputerSystem for additional properties...
+Potentially useful properties:
+  FailedOverReplicationType: 0 (UInt16)
+  LastApplicationConsistentReplicationTime: 12/31/1600 17:00:00 (DateTime)
+  LastReplicationTime: 12/31/1600 17:00:00 (DateTime)
+  LastReplicationType: 0 (UInt16)
+  NumberOfNumaNodes: 1 (UInt16)
+  ReplicationHealth: 0 (UInt16)
+  ReplicationMode: 0 (UInt16)
+  ReplicationState: 0 (UInt16)
+
+Checking Msvm_ProcessorSettingData for additional properties...
+Potentially useful processor properties:
+  Caption: Processor (String)
+  ExposeVirtualizationExtensions: False (Boolean)
+  Limit: 100000 (UInt64)
+  LimitCPUID: False (Boolean)
+  LimitProcessorFeatures: False (Boolean)
+  LimitProcessorFeaturesMode: 1 (Byte)
+  MaxNumaNodesPerSocket: 1 (UInt64)
+  MaxProcessorsPerNumaNode: 8 (UInt64)
+  PerfCpuFreqCapMhz: 0 (UInt32)
+  Reservation: 0 (UInt64)
+  Weight: 100 (UInt32)
+
+=== Performance Summary ===
+
+Measure-Object : The property "DurationMs" cannot be found in the input for any objects.
+At C:\Users\Public\DiscoverCIM.ps1:632 char:49
++ ... ts.PerformanceMetrics | Measure-Object -Property DurationMs -Sum).Sum
++                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [Measure-Object], PSArgumentException
+    + FullyQualifiedErrorId : GenericMeasurePropertyNotFound,Microsoft.PowerShell.Commands.MeasureObjectCommand
+Total queries: 17
+Successful: 15
+Failed: 2
+Total duration: ms
+
+✓ Msvm_KvpExchangeComponent query: 29ms
+✓ Msvm_HeartbeatComponent query: 17ms
+✓ Msvm_ShutdownComponent query: 80ms
+✓ Msvm_TimeSyncComponent query: 20ms
+✓ Msvm_ComputerSystem query: 56ms
+
+=== Implementation Recommendations ===
+
+1. Batch Query Strategy: Query each CIM class once for all VMs to minimize WMI overhead
+2. Use InstanceID/SystemName filtering: Filter results by VM GUID to map to specific VMs
+3. Integration Services: Query all 6 component classes in parallel or sequence
+4. Security Settings: Msvm_VirtualSystemSettingData and Msvm_SecuritySettingData contain most security properties
+5. Enum Mapping: Create lookup tables for EnabledState and Action enums to match PowerShell values
+6. Error Handling: Not all VMs have all components (e.g., Gen1 VMs don't have TPM)
+
+=== Discovery Summary ===
+
+Discovered 13 property mappings:
+
+Dynamic Memory:
+  ✓ dynamic_memory_buffer
+    Class: Msvm_MemorySettingData
+    Property: TargetMemoryBuffer
+    Sample: 20
+    Notes: Memory buffer percentage for dynamic memory. TargetMemoryBuffer is the most likely property. Verify if this maps to the PowerShell Get-VM's MemoryMaximum calculation or is a separate buffer setting.
+
+Security:
+  ✓ secure_boot_enabled
+    Class: Msvm_VirtualSystemSettingData
+    Property: SecureBootEnabled
+    Sample: True
+    Notes: Secure boot enabled/disabled flag
+
+  ✓ secure_boot_template
+    Class: Msvm_VirtualSystemSettingData
+    Property: SecureBootTemplateId
+    Sample: 1734C6E8-3154-4DDA-BA5F-A874CC483422
+    Notes: Secure boot template name (e.g., 'MicrosoftWindows', 'MicrosoftUEFICertificateAuthority')
+
+  ✓ trusted_platform_module_enabled
+    Class: Msvm_SecuritySettingData
+    Property: TpmEnabled
+    Sample: False
+    Notes: TPM enabled/disabled flag. May be inverted (OptOut)
+
+Boot:
+  ✓ primary_boot_device
+    Class: Msvm_VirtualSystemSettingData
+    Property: BootOrder
+    Sample: Array reference
+    Notes: Boot order array. First element is primary boot device. May need to resolve references to get device names.
+
+  ✓ primary_boot_device
+    Class: Msvm_VirtualSystemSettingData
+    Property: BootSourceOrder
+    Sample: Array reference
+    Notes: Boot order array. First element is primary boot device. May need to resolve references to get device names.
+
+Host Actions:
+  ✓ host_recovery_action
+    Class: Msvm_VirtualSystemSettingData
+    Property: AutomaticRecoveryAction
+    Sample: 2
+    Notes: Action to take when host recovers. Enum: 2=None, 3=Restart, 4=AlwaysStartup
+
+  ✓ host_stop_action
+    Class: Msvm_VirtualSystemSettingData
+    Property: AutomaticShutdownAction
+    Sample: 3
+    Notes: Action to take when host stops. Enum: 2=TurnOff, 3=Save, 4=ShutDown
+
+Integration Services:
+  ✓ integration_services_shutdown
+    Class: Msvm_ShutdownComponent
+    Property: EnabledState
+    Sample: 2
+    Notes: Guest shutdown integration service. EnabledState: 2=Enabled, 3=Disabled, 6=Enabled but Offline
+
+  ✓ integration_services_time
+    Class: Msvm_TimeSyncComponent
+    Property: EnabledState
+    Sample: 2
+    Notes: Time synchronization integration service. EnabledState: 2=Enabled, 3=Disabled, 6=Enabled but Offline
+
+  ✓ integration_services_data_exchange
+    Class: Msvm_KvpExchangeComponent
+    Property: EnabledState
+    Sample: 2
+    Notes: Data exchange (KVP) integration service. EnabledState: 2=Enabled, 3=Disabled, 6=Enabled but Offline
+
+  ✓ integration_services_heartbeat
+    Class: Msvm_HeartbeatComponent
+    Property: EnabledState
+    Sample: 2
+    Notes: Heartbeat integration service. EnabledState: 2=Enabled, 3=Disabled, 6=Enabled but Offline
+
+  ✓ integration_services_guest_services
+    Class: Msvm_GuestServiceInterfaceComponent
+    Property: EnabledState
+    Sample: 3
+    Notes: Guest service interface. EnabledState: 2=Enabled, 3=Disabled, 6=Enabled but Offline
+
+Discovery complete!
