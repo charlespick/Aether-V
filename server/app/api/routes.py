@@ -810,7 +810,7 @@ async def get_virtual_machine(
 @router.post(
     "/api/v1/virtualmachines/{vm_id}/start",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Actions"],
 )
 async def start_vm_action(
     vm_id: str,
@@ -824,7 +824,7 @@ async def start_vm_action(
 @router.post(
     "/api/v1/virtualmachines/{vm_id}/shutdown",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Actions"],
 )
 async def shutdown_vm_action(
     vm_id: str,
@@ -838,7 +838,7 @@ async def shutdown_vm_action(
 @router.post(
     "/api/v1/virtualmachines/{vm_id}/stop",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Actions"],
 )
 async def stop_vm_action(
     vm_id: str,
@@ -852,7 +852,7 @@ async def stop_vm_action(
 @router.post(
     "/api/v1/virtualmachines/{vm_id}/reset",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Actions"],
 )
 async def reset_vm_action(
     vm_id: str,
@@ -1065,7 +1065,7 @@ async def delete_vm_resource(
 @router.post(
     "/api/v1/virtualmachines/{vm_id}/disks",
     response_model=JobResult,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Disks"],
 )
 async def create_disk_resource(
     vm_id: str,
@@ -1122,7 +1122,7 @@ async def create_disk_resource(
 @router.get(
     "/api/v1/virtualmachines/{vm_id}/disks",
     response_model=List[VMDisk],
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Disks"],
 )
 async def list_vm_disks(
     vm_id: str, user: dict = Depends(require_permission(Permission.READER))
@@ -1136,7 +1136,7 @@ async def list_vm_disks(
 @router.get(
     "/api/v1/virtualmachines/{vm_id}/disks/{disk_id}",
     response_model=DiskDetail,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Disks"],
 )
 async def get_vm_disk(
     vm_id: str,
@@ -1158,7 +1158,7 @@ async def get_vm_disk(
 @router.put(
     "/api/v1/virtualmachines/{vm_id}/disks/{disk_id}",
     response_model=JobResult,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Disks"],
 )
 async def update_disk_resource(
     vm_id: str,
@@ -1225,7 +1225,7 @@ async def update_disk_resource(
 @router.delete(
     "/api/v1/virtualmachines/{vm_id}/disks/{disk_id}",
     response_model=JobResult,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Disks"],
 )
 async def delete_disk_resource(
     vm_id: str,
@@ -1276,7 +1276,7 @@ async def delete_disk_resource(
 @router.post(
     "/api/v1/virtualmachines/{vm_id}/networkadapters",
     response_model=JobResult,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Network Adapters"],
 )
 async def create_nic_resource(
     vm_id: str,
@@ -1330,7 +1330,7 @@ async def create_nic_resource(
 @router.get(
     "/api/v1/virtualmachines/{vm_id}/networkadapters",
     response_model=List[VMNetworkAdapter],
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Network Adapters"],
 )
 async def list_vm_nics(
     vm_id: str, user: dict = Depends(require_permission(Permission.READER))
@@ -1344,7 +1344,7 @@ async def list_vm_nics(
 @router.get(
     "/api/v1/virtualmachines/{vm_id}/networkadapters/{nic_id}",
     response_model=NetworkAdapterDetail,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Network Adapters"],
 )
 async def get_vm_nic(
     vm_id: str,
@@ -1366,7 +1366,7 @@ async def get_vm_nic(
 @router.put(
     "/api/v1/virtualmachines/{vm_id}/networkadapters/{nic_id}",
     response_model=JobResult,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Network Adapters"],
 )
 async def update_nic_resource(
     vm_id: str,
@@ -1430,7 +1430,7 @@ async def update_nic_resource(
 @router.delete(
     "/api/v1/virtualmachines/{vm_id}/networkadapters/{nic_id}",
     response_model=JobResult,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Network Adapters"],
 )
 async def delete_nic_resource(
     vm_id: str,
@@ -1481,7 +1481,7 @@ async def delete_nic_resource(
 @router.post(
     "/api/v1/virtualmachines/{vm_id}/initialize",
     response_model=JobResult,
-    tags=["Virtual Machines"],
+    tags=["Virtual Machine Actions"],
 )
 async def initialize_vm_resource(
     vm_id: str,
