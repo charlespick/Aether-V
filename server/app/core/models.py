@@ -49,6 +49,55 @@ class VMState(str, Enum):
     DELETING = "Deleting"
 
 
+class NetworkModel(str, Enum):
+    """Network model type."""
+    VLAN = "vlan"
+
+
+class StorageClass(BaseModel):
+    """Storage class configuration for a host.
+    
+    Represents a named storage location where VM disks can be stored.
+    Maps storage class names to filesystem paths.
+    """
+    name: str = Field(..., description="Unique identifier for the storage class")
+    path: str = Field(..., description="Filesystem path where VM disks will be stored")
+
+
+class VlanConfiguration(BaseModel):
+    """VLAN network configuration.
+    
+    Configuration specific to VLAN-based networks.
+    """
+    virtual_switch: str = Field(..., description="Name of the Hyper-V virtual switch")
+    vlan_id: int = Field(..., ge=1, le=4094, description="VLAN identifier")
+
+
+class Network(BaseModel):
+    """Network configuration for a host.
+    
+    Represents a named network that VMs can connect to.
+    Maps network names to VLAN IDs and virtual switches.
+    """
+    name: str = Field(..., description="Unique identifier for the network")
+    model: NetworkModel = Field(..., description="Network model type")
+    configuration: VlanConfiguration = Field(..., description="Network configuration data")
+
+
+class HostResources(BaseModel):
+    """Host resources configuration.
+    
+    Complete resource configuration for a host including storage classes,
+    networks, and default paths. This model matches the hostresources.json
+    schema that can be deployed to hosts.
+    """
+    version: int = Field(..., description="Schema version number")
+    schema_name: str = Field(..., description="Name of the schema")
+    storage_classes: List[StorageClass] = Field(default_factory=list, description="Available storage classes")
+    networks: List[Network] = Field(default_factory=list, description="Available networks")
+    virtual_machines_path: str = Field(..., description="Default path for VM configuration files")
+
+
 class Cluster(BaseModel):
     """Hyper-V cluster information."""
     name: str
@@ -66,6 +115,7 @@ class Host(BaseModel):
     error: Optional[str] = None
     total_cpu_cores: int = 0
     total_memory_gb: float = 0.0
+    resources: Optional[HostResources] = None  # Host resource configuration
     
 
 class HostSummary(BaseModel):
@@ -137,6 +187,7 @@ class VMDisk(BaseModel):
     type: Optional[str] = None
     size_gb: Optional[float] = None
     file_size_gb: Optional[float] = None
+    storage_class: Optional[str] = None  # Storage class name from host resources
 
 
 class VMNetworkAdapter(BaseModel):
@@ -145,9 +196,10 @@ class VMNetworkAdapter(BaseModel):
     id: Optional[str] = None
     name: Optional[str] = None
     adapter_name: Optional[str] = None
-    network: Optional[str] = None
+    network: Optional[str] = None  # Network name from host resources
     virtual_switch: Optional[str] = None
-    vlan: Optional[str] = None
+    vlan_id: Optional[int] = None  # VLAN ID from network configuration
+    vlan: Optional[str] = None  # Legacy field, kept for backward compatibility
     network_name: Optional[str] = None
     ip_addresses: List[str] = Field(default_factory=list)
     mac_address: Optional[str] = None
