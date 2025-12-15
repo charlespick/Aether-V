@@ -5,6 +5,7 @@
 	import FormActions from '$lib/components/forms/FormActions.svelte';
 	import Button from '$lib/components/common/Button.svelte';
 	import { toastStore } from '$lib/stores/toastStore';
+	import { inventoryStore } from '$lib/stores/inventoryStore';
 	import {
 		validateRequired,
 		validateRange,
@@ -345,11 +346,20 @@
 		}
 	});
 
-	// TODO: Fetch available hosts and images from API
+	// Fetch available hosts from inventory
 	$effect(() => {
 		if (isOpen) {
-			// Mock data - replace with actual API calls
-			availableHosts = ['hyperv01.example.com', 'hyperv02.example.com'];
+			const inventory = inventoryStore.getData();
+			if (inventory && inventory.hosts) {
+				availableHosts = inventory.hosts
+					.filter((h: any) => h.connected)
+					.map((h: any) => h.hostname);
+			} else {
+				// Fallback if inventory not loaded
+				availableHosts = [];
+			}
+
+			// Mock data for images - API endpoint for images is not yet available
 			availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
 		}
 	});
