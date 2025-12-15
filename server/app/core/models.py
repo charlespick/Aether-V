@@ -297,26 +297,66 @@ class VMCreateRequest(BaseModel):
 
 
 class VMUpdateRequest(BaseModel):
-    """Request to update VM hardware properties."""
+    """Request to update VM hardware properties via PATCH.
+    
+    All fields are optional - only provided fields will be updated.
+    Based on Terraform schema mutable properties.
+    """
 
-    vm_name: str = Field(
-        ..., min_length=1, max_length=64, description="Existing name of the virtual machine",
+    # Core hardware - mutable
+    cpu_cores: Optional[int] = Field(
+        None, ge=1, le=64, description="Number of virtual CPU cores",
     )
-    gb_ram: int = Field(
-        ..., ge=1, le=512, description="Amount of memory to assign to the VM in gigabytes",
+    startup_memory_gb: Optional[float] = Field(
+        None, ge=1.0, le=512.0, description="Startup memory in gigabytes",
     )
-    cpu_cores: int = Field(
-        ..., ge=1, le=64, description="Number of virtual CPU cores",
+    
+    # Dynamic memory - mutable
+    memory_gb_min: Optional[float] = Field(
+        None, ge=0.5, le=512.0, description="Minimum memory for dynamic memory (GB)",
     )
-    storage_class: Optional[str] = Field(
-        None, description="Name of the storage class where VM configuration files will be stored",
+    memory_gb_max: Optional[float] = Field(
+        None, ge=1.0, le=1024.0, description="Maximum memory for dynamic memory (GB)",
     )
-    vm_clustered: bool = Field(
-        False, description="Request that the VM be registered with the Failover Cluster",
+    memory_prcnt_buffer: Optional[int] = Field(
+        None, ge=5, le=100, description="Memory buffer percentage for dynamic memory",
     )
-    os_family: Optional[OSFamily] = Field(
-        None,
-        description="Operating system family (windows or linux) used to configure secure boot settings",
+    
+    # Security settings - mutable
+    secure_boot: Optional[str] = Field(
+        None, 
+        description="Secure boot template: 'Microsoft Windows', 'Microsoft UEFI Certificate Authority', 'Open Source Shielded VM', or 'Disabled'",
+    )
+    tpm_enabled: Optional[bool] = Field(
+        None, description="Enable or disable Trusted Platform Module",
+    )
+    
+    # Host action settings - mutable
+    host_recovery_action: Optional[HostRecoveryAction] = Field(
+        None, description="VM automatic start action after host recovery",
+    )
+    host_stop_action: Optional[HostStopAction] = Field(
+        None, description="VM action when host stops",
+    )
+    
+    # Integration services - mutable
+    integration_services_shutdown: Optional[bool] = Field(
+        None, description="Enable/disable shutdown integration service",
+    )
+    integration_services_time: Optional[bool] = Field(
+        None, description="Enable/disable time synchronization integration service",
+    )
+    integration_services_data_exchange: Optional[bool] = Field(
+        None, description="Enable/disable data exchange (KVP) integration service",
+    )
+    integration_services_heartbeat: Optional[bool] = Field(
+        None, description="Enable/disable heartbeat integration service",
+    )
+    integration_services_vss_backup: Optional[bool] = Field(
+        None, description="Enable/disable VSS backup integration service",
+    )
+    integration_services_guest_services: Optional[bool] = Field(
+        None, description="Enable/disable guest services integration service",
     )
 
 
@@ -342,9 +382,15 @@ class DiskCreateRequest(BaseModel):
     )
 
 
-class DiskUpdateRequest(DiskCreateRequest):
-    """Request to update an existing disk attached to a VM."""
-    pass
+class DiskUpdateRequest(BaseModel):
+    """Request to update an existing disk via PATCH.
+    
+    Only mutable fields are supported. Disk size can only be expanded.
+    """
+
+    disk_size_gb: Optional[int] = Field(
+        None, ge=1, le=65536, description="New size of the virtual disk in gigabytes (expand only)",
+    )
 
 
 class NicCreateRequest(BaseModel):
@@ -358,9 +404,34 @@ class NicCreateRequest(BaseModel):
     )
 
 
-class NicUpdateRequest(NicCreateRequest):
-    """Request to update an existing network adapter on a VM."""
-    pass
+class NicUpdateRequest(BaseModel):
+    """Request to update an existing network adapter via PATCH.
+    
+    All fields are optional - only provided fields will be updated.
+    Based on Terraform schema mutable properties.
+    """
+
+    network: Optional[str] = Field(
+        None, description="Name of the network to connect the adapter to",
+    )
+    dhcp_guard: Optional[bool] = Field(
+        None, description="Enable/disable DHCP guard",
+    )
+    router_guard: Optional[bool] = Field(
+        None, description="Enable/disable router guard",
+    )
+    mac_spoof_guard: Optional[bool] = Field(
+        None, description="Enable/disable MAC spoofing guard (True = guard enabled = spoofing blocked)",
+    )
+    mac_address: Optional[str] = Field(
+        None, description="MAC address ('Dynamic' for auto-assignment or specific MAC address)",
+    )
+    min_bandwidth_mbps: Optional[int] = Field(
+        None, ge=0, description="Minimum bandwidth in Mbps",
+    )
+    max_bandwidth_mbps: Optional[int] = Field(
+        None, ge=0, description="Maximum bandwidth in Mbps",
+    )
 
 
 class VMInitializationRequest(BaseModel):

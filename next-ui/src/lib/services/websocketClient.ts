@@ -288,7 +288,7 @@ class WebSocketClient {
                     try {
                         handler(message);
                     } catch (error) {
-                        console.error(`WebSocket: Error in message handler for type "${message.type}"`, error);
+                        console.error('WebSocket: Error in message handler for type "%s"', message.type, error);
                     }
                 });
             } else {

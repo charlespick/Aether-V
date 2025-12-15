@@ -5,6 +5,7 @@
 	import FormActions from '$lib/components/forms/FormActions.svelte';
 	import Button from '$lib/components/common/Button.svelte';
 	import { toastStore } from '$lib/stores/toastStore';
+	import { inventoryStore } from '$lib/stores/inventoryStore';
 	import {
 		validateRequired,
 		validateRange,
@@ -85,9 +86,14 @@
 	let targetHost = $state('');
 	let imageName = $state('');
 
-	// Available hosts and images (would be fetched from API in production)
-	let availableHosts = $state<string[]>([]);
-	let availableImages = $state<string[]>([]);
+	// Available hosts and images
+	let availableHosts = $derived($inventoryStore?.hosts?.filter(h => h.connected).map(h => h.hostname) || []);
+	let selectedHost = $derived($inventoryStore?.hosts?.find(h => h.hostname === targetHost));
+	let availableStorageClasses = $derived(selectedHost?.resources?.storage_classes.map(sc => sc.name) || []);
+	let availableNetworks = $derived(selectedHost?.resources?.networks.map(n => n.name) || []);
+
+	// Mock data for images - API endpoint for images is not yet available
+	let availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
 
 	let errors = $state<Record<string, string>>({});
 	let isSubmitting = $state(false);
@@ -345,13 +351,10 @@
 		}
 	});
 
-	// TODO: Fetch available hosts and images from API
+	// Fetch available hosts from inventory
 	$effect(() => {
-		if (isOpen) {
-			// Mock data - replace with actual API calls
-			availableHosts = ['hyperv01.example.com', 'hyperv02.example.com'];
-			availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
-		}
+		// Mock data for images - API endpoint for images is not yet available
+		// availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
 	});
 </script>
 
@@ -440,15 +443,15 @@
 
 				<FormField
 					label="Storage Class"
-					description="Optional: storage tier or class identifier (deprecated in v0.5.0)"
+					description="Optional: storage tier or class identifier"
 					error={errors.storage_class}
 				>
-					<input
-						type="text"
-						bind:value={vmData.storage_class}
-						placeholder="e.g., SSD-Tier1"
-						disabled={isSubmitting}
-					/>
+					<select bind:value={vmData.storage_class} disabled={isSubmitting}>
+						<option value="">Select a storage class...</option>
+						{#each availableStorageClasses as sc}
+							<option value={sc}>{sc}</option>
+						{/each}
+					</select>
 				</FormField>
 
 				<FormField description="Enable high availability clustering for this VM">
@@ -499,12 +502,12 @@
 					required
 					error={errors.network}
 				>
-					<input
-						type="text"
-						bind:value={nicData.network}
-						placeholder="e.g., Production"
-						disabled={isSubmitting}
-					/>
+					<select bind:value={nicData.network} disabled={isSubmitting}>
+						<option value="">Select a network...</option>
+						{#each availableNetworks as net}
+							<option value={net}>{net}</option>
+						{/each}
+					</select>
 				</FormField>
 
 				<FormField

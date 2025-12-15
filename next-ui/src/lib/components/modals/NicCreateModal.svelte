@@ -10,6 +10,7 @@
 		hasErrors,
 		patterns
 	} from '$lib/utils/validation';
+	import { inventoryStore } from '$lib/stores/inventoryStore';
 
 	interface Props {
 		isOpen: boolean;
@@ -20,6 +21,11 @@
 	}
 
 	let { isOpen = $bindable(false), vmId, vmName, onClose, onSuccess }: Props = $props();
+
+	// Get VM and Host to populate networks
+	let vm = $derived($inventoryStore?.vms?.find(v => v.id === vmId));
+	let host = $derived(vm ? $inventoryStore?.hosts?.find(h => h.hostname === vm.host) : undefined);
+	let availableNetworks = $derived(host?.resources?.networks.map(n => n.name) || []);
 
 	// Form state
 	let formData = $state({
@@ -109,12 +115,12 @@
 				required
 				error={errors.network}
 			>
-				<input
-					type="text"
-					bind:value={formData.network}
-					placeholder="e.g., Production"
-					disabled={isSubmitting}
-				/>
+				<select bind:value={formData.network} disabled={isSubmitting}>
+					<option value="">Select a network...</option>
+					{#each availableNetworks as net}
+						<option value={net}>{net}</option>
+					{/each}
+				</select>
 			</FormField>
 
 			<FormField

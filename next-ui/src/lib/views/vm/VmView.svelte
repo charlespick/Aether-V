@@ -5,6 +5,11 @@
 	import Icon from "$lib/components/common/Icon.svelte";
 	import VmActionButtons from "$lib/components/vm/VmActionButtons.svelte";
 	import VmActionConfirmation from "$lib/components/vm/VmActionConfirmation.svelte";
+	import VmEditModal from "$lib/components/modals/VmEditModal.svelte";
+	import DiskCreateModal from "$lib/components/modals/DiskCreateModal.svelte";
+	import DiskEditModal from "$lib/components/modals/DiskEditModal.svelte";
+	import NicCreateModal from "$lib/components/modals/NicCreateModal.svelte";
+	import NicEditModal from "$lib/components/modals/NicEditModal.svelte";
 	import { useAsyncData } from "$lib/composables/useAsyncData";
 	import { inventoryStore } from "$lib/stores/inventoryStore";
 	import { toastStore } from "$lib/stores/toastStore";
@@ -87,6 +92,15 @@
 		buttonRef: HTMLElement;
 	} | null>(null);
 	let currentVmState = $state<string | undefined>(undefined);
+
+	// Modal state
+	let showVmEditModal = $state(false);
+	let showDiskCreateModal = $state(false);
+	let showDiskEditModal = $state(false);
+	let showNicCreateModal = $state(false);
+	let showNicEditModal = $state(false);
+	let selectedDisk = $state<any>(null);
+	let selectedNic = $state<any>(null);
 
 	// Update local state when VM data changes
 	$effect(() => {
@@ -185,8 +199,7 @@
 	// Handle action button clicks
 	function handleAction(action: string) {
 		if (action === "edit") {
-			// TODO: Open edit overlay when implemented
-			toastStore.info("Edit VM functionality coming soon");
+			showVmEditModal = true;
 			return;
 		}
 
@@ -550,23 +563,28 @@
 																				<div>{formatValue(disk.storage_class)}</div>
 																				<div>{disk.path || "—"}</div>
 																				<div class="vm-resource-actions">
-																						<button
-																								type="button"
-												class="resource-menu-btn"
-												aria-label="Disk actions"
-												title="Actions"
-												onclick={() => {
-													toastStore.info(
-														"Disk actions coming soon",
-													);
-												}}
-											>
-												<Icon
-													name="more_vert"
-													size={20}
-												/>
-											</button>
-										</div>
+																					<button
+																						type="button"
+																						class="resource-menu-btn"
+																						aria-label="Edit disk"
+																						title="Edit"
+																						onclick={() => {
+																							selectedDisk = disk;
+																							showDiskEditModal = true;
+																						}}
+																					>
+																						<Icon name="edit" size={18} />
+																					</button>
+																					<button
+																						type="button"
+																						class="resource-menu-btn text-danger"
+																						aria-label="Delete disk"
+																						title="Delete"
+																						onclick={() => handleResourceDelete("disk", disk.id)}
+																					>
+																						<Icon name="delete" size={18} />
+																					</button>
+																				</div>
 									</div>
 								{/each}
 							{/if}
@@ -575,9 +593,7 @@
 							<button
 								class="action-btn"
 								onclick={() => {
-									toastStore.info(
-										"Add disk functionality coming soon",
-									);
+									showDiskCreateModal = true;
 								}}
 							>
 								<Icon
@@ -671,23 +687,28 @@
 																						)}
 																				</div>
 																				<div class="vm-resource-actions">
-																						<button
-																								type="button"
-																								class="resource-menu-btn"
-																								aria-label="Network adapter actions"
-												title="Actions"
-												onclick={() => {
-													toastStore.info(
-														"Network adapter actions coming soon",
-													);
-												}}
-											>
-												<Icon
-													name="more_vert"
-													size={20}
-												/>
-											</button>
-										</div>
+																					<button
+																						type="button"
+																						class="resource-menu-btn"
+																						aria-label="Edit network adapter"
+																						title="Edit"
+																						onclick={() => {
+																							selectedNic = adapter;
+																							showNicEditModal = true;
+																						}}
+																					>
+																						<Icon name="edit" size={18} />
+																					</button>
+																					<button
+																						type="button"
+																						class="resource-menu-btn text-danger"
+																						aria-label="Delete network adapter"
+																						title="Delete"
+																						onclick={() => handleResourceDelete("nic", adapter.id)}
+																					>
+																						<Icon name="delete" size={18} />
+																					</button>
+																				</div>
 									</div>
 								{/each}
 							{/if}
@@ -696,9 +717,7 @@
 							<button
 								class="action-btn"
 								onclick={() => {
-									toastStore.info(
-										"Add network adapter functionality coming soon",
-									);
+									showNicCreateModal = true;
 								}}
 							>
 								<Icon
@@ -808,6 +827,59 @@
 		</section>
 	{/if}
 </ViewLoader>
+
+{#if vm}
+	<VmEditModal
+		bind:isOpen={showVmEditModal}
+		{vm}
+		onSuccess={() => vmData.execute()}
+		onClose={() => (showVmEditModal = false)}
+	/>
+
+	<DiskCreateModal
+		bind:isOpen={showDiskCreateModal}
+		vmId={vm.id}
+		vmName={vm.name}
+		onSuccess={() => vmData.execute()}
+		onClose={() => (showDiskCreateModal = false)}
+	/>
+
+	{#if selectedDisk}
+		<DiskEditModal
+			bind:isOpen={showDiskEditModal}
+			vmId={vm.id}
+			vmName={vm.name}
+			disk={selectedDisk}
+			onSuccess={() => vmData.execute()}
+			onClose={() => {
+				showDiskEditModal = false;
+				selectedDisk = null;
+			}}
+		/>
+	{/if}
+
+	<NicCreateModal
+		bind:isOpen={showNicCreateModal}
+		vmId={vm.id}
+		vmName={vm.name}
+		onSuccess={() => vmData.execute()}
+		onClose={() => (showNicCreateModal = false)}
+	/>
+
+	{#if selectedNic}
+		<NicEditModal
+			bind:isOpen={showNicEditModal}
+			vmId={vm.id}
+			vmName={vm.name}
+			nic={selectedNic}
+			onSuccess={() => vmData.execute()}
+			onClose={() => {
+				showNicEditModal = false;
+				selectedNic = null;
+			}}
+		/>
+	{/if}
+{/if}
 
 <style>
 	/* VM Header */

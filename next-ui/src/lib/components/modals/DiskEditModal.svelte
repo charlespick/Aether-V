@@ -10,6 +10,7 @@
 		combineValidationErrors,
 		hasErrors
 	} from '$lib/utils/validation';
+	import { inventoryStore } from '$lib/stores/inventoryStore';
 
 	interface DiskData {
 		id: string;
@@ -30,6 +31,11 @@
 
 	let { isOpen = $bindable(false), vmId, vmName, disk, onClose, onSuccess }: Props = $props();
 
+	// Get VM and Host to populate storage classes
+	let vm = $derived($inventoryStore?.vms?.find(v => v.id === vmId));
+	let host = $derived(vm ? $inventoryStore?.hosts?.find(h => h.hostname === vm.host) : undefined);
+	let availableStorageClasses = $derived(host?.resources?.storage_classes.map(sc => sc.name) || []);
+
 	// Form state
 	let formData = $state({
 		disk_size_gb: disk.disk_size_gb,
@@ -39,7 +45,14 @@
 	});
 
 	let errors = $state<Record<string, string>>({});
+
 	let isSubmitting = $state(false);
+	let isDirty = $derived(
+		formData.disk_size_gb !== disk.disk_size_gb ||
+		formData.disk_type !== (disk.disk_type as 'Dynamic' | 'Fixed') ||
+		formData.controller_type !== (disk.controller_type as 'SCSI' | 'IDE') ||
+		formData.storage_class !== (disk.storage_class || '')
+	);
 
 	// Original disk size (cannot be reduced below this)
 	const originalDiskSize = disk.disk_size_gb;
@@ -64,16 +77,25 @@
 			return;
 		}
 
+		// For PATCH, only send changed fields
+		const patchBody: Record<string, unknown> = {};
+		if (formData.disk_size_gb !== disk.disk_size_gb) patchBody.disk_size_gb = formData.disk_size_gb;
+		if (formData.disk_type !== (disk.disk_type as 'Dynamic' | 'Fixed')) patchBody.disk_type = formData.disk_type;
+		if (formData.controller_type !== (disk.controller_type as 'SCSI' | 'IDE')) patchBody.controller_type = formData.controller_type;
+		if (formData.storage_class !== (disk.storage_class || '')) patchBody.storage_class = formData.storage_class;
+
+		if (Object.keys(patchBody).length === 0) {
+			toastStore.info('No changes to update');
+			return;
+		}
+
 		isSubmitting = true;
 
 		try {
 			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}/disks/${encodeURIComponent(disk.id || '')}`, {
-				method: 'PUT',
+				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					vm_id: vmId,
-					...formData
-				})
+				body: JSON.stringify(patchBody)
 			});
 
 			if (!response.ok) {
@@ -159,21 +181,21 @@
 
 			<FormField
 				label="Storage Class"
-				description="Optional: storage tier or class identifier (deprecated in v0.5.0)"
+				description="Optional: storage tier or class identifier"
 				error={errors.storage_class}
 			>
-				<input
-					type="text"
-					bind:value={formData.storage_class}
-					placeholder="e.g., SSD-Tier1"
-					disabled={isSubmitting}
-				/>
+				<select bind:value={formData.storage_class} disabled={isSubmitting}>
+					<option value="">Select a storage class...</option>
+					{#each availableStorageClasses as sc}
+						<option value={sc}>{sc}</option>
+					{/each}
+				</select>
 			</FormField>
 		</div>
 
 		<FormActions>
 			<Button variant="secondary" onclick={onClose} disabled={isSubmitting}>Cancel</Button>
-			<Button type="submit" variant="primary" disabled={isSubmitting}>
+			<Button type="submit" variant="primary" disabled={isSubmitting || !isDirty}>
 				{isSubmitting ? 'Updating...' : 'Update Disk'}
 			</Button>
 		</FormActions>

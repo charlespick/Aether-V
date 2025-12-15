@@ -953,7 +953,7 @@ async def create_vm_resource(
     )
 
 
-@router.put(
+@router.patch(
     "/api/v1/virtualmachines/{vm_id}", response_model=JobResult, tags=["Virtual Machines"]
 )
 async def update_vm_resource(
@@ -961,24 +961,12 @@ async def update_vm_resource(
     request: VMUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Update an existing virtual machine."""
+    """Update an existing virtual machine via PATCH.
+    
+    Only provided fields will be updated. All fields are optional.
+    """
 
     vm = _get_vm_or_404(vm_id)
-
-    vm_spec = VmSpec(
-        vm_name=request.vm_name,
-        gb_ram=request.gb_ram,
-        cpu_cores=request.cpu_cores,
-        storage_class=request.storage_class,
-        vm_clustered=request.vm_clustered,
-        os_family=request.os_family,
-    )
-
-    if vm_spec.vm_name != vm.name:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="VM name in payload does not match existing VM",
-        )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -992,20 +980,34 @@ async def update_vm_resource(
 
     _ensure_connected_host(vm.host)
 
-    validated_values = vm_spec.model_dump()
-    validated_values["vm_id"] = vm_id
+    # Build updates dict with only provided (non-None) fields
+    updates = {}
+    request_dict = request.model_dump(exclude_unset=True)
+    for key, value in request_dict.items():
+        if value is not None:
+            updates[key] = value
+    
+    if not updates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields provided for update",
+        )
+
+    # Add VM ID to updates for PowerShell handler
+    updates["vm_id"] = vm_id
+    updates["vm_name"] = vm.name
 
     job_definition = {
         "schema": {
-            "id": "vm-create",
+            "id": "vm-update",
             "version": 1,
         },
-        "fields": validated_values,
+        "fields": updates,
     }
 
     job = await job_service.submit_resource_job(
         job_type="update_vm",
-        schema_id="vm-create",
+        schema_id="vm-update",
         payload=job_definition,
         target_host=vm.host,
     )
@@ -1156,7 +1158,7 @@ async def get_vm_disk(
     return DiskDetail(**disk.model_dump(), vm_id=vm_id)
 
 
-@router.put(
+@router.patch(
     "/api/v1/virtualmachines/{vm_id}/disks/{disk_id}",
     response_model=JobResult,
     tags=["Virtual Machine Disks"],
@@ -1167,7 +1169,10 @@ async def update_disk_resource(
     request: DiskUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Update an existing disk resource."""
+    """Update an existing disk resource via PATCH.
+    
+    Only provided fields will be updated. Currently supports expanding disk size only.
+    """
 
     vm = _get_vm_or_404(vm_id)
     disk = _find_vm_disk(vm, disk_id)
@@ -1176,15 +1181,6 @@ async def update_disk_resource(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Disk {disk_id} not found on VM {vm_id}",
         )
-
-    disk_spec = DiskSpec(
-        vm_id=vm_id,
-        image_name=request.image_name,
-        disk_size_gb=request.disk_size_gb,
-        storage_class=request.storage_class,
-        disk_type=request.disk_type,
-        controller_type=request.controller_type,
-    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -1198,20 +1194,34 @@ async def update_disk_resource(
 
     _ensure_connected_host(vm.host)
 
-    validated_values = disk_spec.model_dump()
-    validated_values["resource_id"] = disk_id
+    # Build updates dict with only provided (non-None) fields
+    updates = {}
+    request_dict = request.model_dump(exclude_unset=True)
+    for key, value in request_dict.items():
+        if value is not None:
+            updates[key] = value
+    
+    if not updates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields provided for update",
+        )
+
+    # Add identifiers for PowerShell handler
+    updates["vm_id"] = vm_id
+    updates["resource_id"] = disk_id
 
     job_definition = {
         "schema": {
-            "id": "disk-create",
+            "id": "disk-update",
             "version": 1,
         },
-        "fields": validated_values,
+        "fields": updates,
     }
 
     job = await job_service.submit_resource_job(
         job_type="update_disk",
-        schema_id="disk-create",
+        schema_id="disk-update",
         payload=job_definition,
         target_host=vm.host,
     )
@@ -1364,7 +1374,7 @@ async def get_vm_nic(
     return NetworkAdapterDetail(**nic.model_dump(), vm_id=vm_id)
 
 
-@router.put(
+@router.patch(
     "/api/v1/virtualmachines/{vm_id}/networkadapters/{nic_id}",
     response_model=JobResult,
     tags=["Virtual Machine Network Adapters"],
@@ -1375,7 +1385,10 @@ async def update_nic_resource(
     request: NicUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Update an existing NIC resource."""
+    """Update an existing NIC resource via PATCH.
+    
+    Only provided fields will be updated. All fields are optional.
+    """
 
     vm = _get_vm_or_404(vm_id)
     nic = _find_vm_nic(vm, nic_id)
@@ -1384,12 +1397,6 @@ async def update_nic_resource(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"NIC {nic_id} not found on VM {vm_id}",
         )
-
-    nic_spec = NicSpec(
-        vm_id=vm_id,
-        network=request.network,
-        adapter_name=request.adapter_name,
-    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -1403,20 +1410,34 @@ async def update_nic_resource(
 
     _ensure_connected_host(vm.host)
 
-    validated_values = nic_spec.model_dump()
-    validated_values["resource_id"] = nic_id
+    # Build updates dict with only provided (non-None) fields
+    updates = {}
+    request_dict = request.model_dump(exclude_unset=True)
+    for key, value in request_dict.items():
+        if value is not None:
+            updates[key] = value
+    
+    if not updates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields provided for update",
+        )
+
+    # Add identifiers for PowerShell handler
+    updates["vm_id"] = vm_id
+    updates["resource_id"] = nic_id
 
     job_definition = {
         "schema": {
-            "id": "nic-create",
+            "id": "nic-update",
             "version": 1,
         },
-        "fields": validated_values,
+        "fields": updates,
     }
 
     job = await job_service.submit_resource_job(
         job_type="update_nic",
-        schema_id="nic-create",
+        schema_id="nic-update",
         payload=job_definition,
         target_host=vm.host,
     )
@@ -1676,7 +1697,7 @@ async def get_notifications(
     )
 
 
-@router.put("/api/v1/notifications/{notification_id}/read", tags=["Notifications"])
+@router.patch("/api/v1/notifications/{notification_id}/read", tags=["Notifications"])
 async def mark_notification_read(
     notification_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
@@ -1691,7 +1712,7 @@ async def mark_notification_read(
     return {"message": "Notification marked as read"}
 
 
-@router.put("/api/v1/notifications/mark-all-read", tags=["Notifications"])
+@router.patch("/api/v1/notifications/mark-all-read", tags=["Notifications"])
 async def mark_all_notifications_read(
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):

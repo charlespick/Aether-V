@@ -10,6 +10,7 @@
 		hasErrors,
 		patterns
 	} from '$lib/utils/validation';
+	import { inventoryStore } from '$lib/stores/inventoryStore';
 
 	interface NicData {
 		id: string;
@@ -28,6 +29,11 @@
 
 	let { isOpen = $bindable(false), vmId, vmName, nic, onClose, onSuccess }: Props = $props();
 
+	// Get VM and Host to populate networks
+	let vm = $derived($inventoryStore?.vms?.find(v => v.id === vmId));
+	let host = $derived(vm ? $inventoryStore?.hosts?.find(h => h.hostname === vm.host) : undefined);
+	let availableNetworks = $derived(host?.resources?.networks.map(n => n.name) || []);
+
 	// Form state
 	let formData = $state({
 		network: nic.network,
@@ -35,7 +41,12 @@
 	});
 
 	let errors = $state<Record<string, string>>({});
+
 	let isSubmitting = $state(false);
+	let isDirty = $derived(
+		formData.network !== nic.network ||
+		formData.adapter_name !== (nic.adapter_name || '')
+	);
 
 	// Validation
 	function validate(): boolean {
@@ -61,16 +72,27 @@
 			return;
 		}
 
+		// For PATCH, only send changed fields
+		const patchBody: Record<string, unknown> = {};
+		if (formData.network !== nic.network) {
+			patchBody.network = formData.network;
+		}
+		if (formData.adapter_name !== nic.adapter_name) {
+			patchBody.adapter_name = formData.adapter_name;
+		}
+
+		if (Object.keys(patchBody).length === 0) {
+			toastStore.info('No changes to update');
+			return;
+		}
+
 		isSubmitting = true;
 
 		try {
 			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}/networkadapters/${encodeURIComponent(nic.id || '')}`, {
-				method: 'PUT',
+				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					vm_id: vmId,
-					...formData
-				})
+				body: JSON.stringify(patchBody)
 			});
 
 			if (!response.ok) {
@@ -116,12 +138,12 @@
 				required
 				error={errors.network}
 			>
-				<input
-					type="text"
-					bind:value={formData.network}
-					placeholder="e.g., Production"
-					disabled={isSubmitting}
-				/>
+				<select bind:value={formData.network} disabled={isSubmitting}>
+					<option value="">Select a network...</option>
+					{#each availableNetworks as net}
+						<option value={net}>{net}</option>
+					{/each}
+				</select>
 			</FormField>
 
 			<FormField
@@ -140,7 +162,7 @@
 
 		<FormActions>
 			<Button variant="secondary" onclick={onClose} disabled={isSubmitting}>Cancel</Button>
-			<Button type="submit" variant="primary" disabled={isSubmitting}>
+			<Button type="submit" variant="primary" disabled={isSubmitting || !isDirty}>
 				{isSubmitting ? 'Updating...' : 'Update Network Adapter'}
 			</Button>
 		</FormActions>

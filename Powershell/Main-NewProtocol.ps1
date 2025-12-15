@@ -43,6 +43,11 @@ begin {
     . (Join-Path $scriptRoot 'Provisioning.RegisterVM.ps1')
     . (Join-Path $scriptRoot 'Provisioning.WaitForProvisioningKey.ps1')
     
+    # Source update modules
+    . (Join-Path $scriptRoot 'Update.VM.ps1')
+    . (Join-Path $scriptRoot 'Update.Disk.ps1')
+    . (Join-Path $scriptRoot 'Update.NIC.ps1')
+    
     # Initialize provisioning scripts version from version file if available
     # This is required for KVP version exchange with guest agents during vm.initialize
     # but is optional for other operations (vm.create, disk.create, etc.)
@@ -354,30 +359,42 @@ end {
                 -Logs $logs
         }
         #
-        # vm.update operation (intentional stub for Phase 4)
+        # vm.update operation
         #
         elseif ($operation -eq 'vm.update') {
             $logs += 'Executing vm.update operation'
             $logs += "Correlation ID: $correlationId"
             
-            # Phase 4: vm.update is intentionally a stub
-            # Full implementation would update VM properties like RAM, CPU, etc.
-            # This will be implemented in a future phase when update semantics are fully defined
             $vmId = $resourceSpec['vm_id']
+            $vmName = $resourceSpec['vm_name']
             
-            $logs += "VM update operation for VM ID: $vmId"
+            $logs += "Updating VM: $vmName (ID: $vmId)"
             
-            $resultData = @{
-                vm_id  = $vmId
-                status = "updated"
+            try {
+                $updateResult = Invoke-ProvisioningUpdateVm -ResourceSpec $resourceSpec
+                
+                $logs += "Update result: $($updateResult['message'])"
+                if ($updateResult['updates_applied'] -and $updateResult['updates_applied'].Count -gt 0) {
+                    foreach ($update in $updateResult['updates_applied']) {
+                        $logs += "  - $update"
+                    }
+                }
+                if ($updateResult['warnings'] -and $updateResult['warnings'].Count -gt 0) {
+                    foreach ($warning in $updateResult['warnings']) {
+                        $logs += "  WARNING: $warning"
+                    }
+                }
+                
+                Write-JobResult `
+                    -Status 'success' `
+                    -Message $updateResult['message'] `
+                    -Data $updateResult `
+                    -CorrelationId $correlationId `
+                    -Logs $logs
             }
-
-            Write-JobResult `
-                -Status 'success' `
-                -Message "VM update completed (stub implementation)" `
-                -Data $resultData `
-                -CorrelationId $correlationId `
-                -Logs $logs
+            catch {
+                throw "VM update failed: $_"
+            }
         }
         #
         # vm.delete operation
@@ -635,24 +652,36 @@ end {
             $logs += 'Executing disk.update operation'
             $logs += "Correlation ID: $correlationId"
             
-            # Phase 4: disk.update is intentionally a stub
-            # Full implementation would resize disks or modify disk properties
-            # This will be implemented in a future phase when update semantics are fully defined
             $vmId = $resourceSpec['vm_id']
             $resourceId = $resourceSpec['resource_id']
             
-            $resultData = @{
-                disk_id = $resourceId
-                vm_id   = $vmId
-                status  = "updated"
+            $logs += "Updating disk: $resourceId on VM: $vmId"
+            
+            try {
+                $updateResult = Invoke-ProvisioningUpdateDisk -ResourceSpec $resourceSpec
+                
+                $logs += "Update result: $($updateResult['message'])"
+                if ($updateResult['updates_applied'] -and $updateResult['updates_applied'].Count -gt 0) {
+                    foreach ($update in $updateResult['updates_applied']) {
+                        $logs += "  - $update"
+                    }
+                }
+                if ($updateResult['warnings'] -and $updateResult['warnings'].Count -gt 0) {
+                    foreach ($warning in $updateResult['warnings']) {
+                        $logs += "  WARNING: $warning"
+                    }
+                }
+                
+                Write-JobResult `
+                    -Status 'success' `
+                    -Message $updateResult['message'] `
+                    -Data $updateResult `
+                    -CorrelationId $correlationId `
+                    -Logs $logs
             }
-
-            Write-JobResult `
-                -Status 'success' `
-                -Message "Disk update completed (stub implementation)" `
-                -Data $resultData `
-                -CorrelationId $correlationId `
-                -Logs $logs
+            catch {
+                throw "Disk update failed: $_"
+            }
         }
         elseif ($operation -eq 'disk.delete') {
             $logs += 'Executing disk.delete operation'
@@ -807,24 +836,36 @@ end {
             $logs += 'Executing nic.update operation'
             $logs += "Correlation ID: $correlationId"
             
-            # Phase 4: nic.update is intentionally a stub
-            # Full implementation would change NIC network or VLAN settings
-            # This will be implemented in a future phase when update semantics are fully defined
             $vmId = $resourceSpec['vm_id']
             $resourceId = $resourceSpec['resource_id']
             
-            $resultData = @{
-                nic_id = $resourceId
-                vm_id  = $vmId
-                status = "updated"
+            $logs += "Updating NIC: $resourceId on VM: $vmId"
+            
+            try {
+                $updateResult = Invoke-ProvisioningUpdateNic -ResourceSpec $resourceSpec
+                
+                $logs += "Update result: $($updateResult['message'])"
+                if ($updateResult['updates_applied'] -and $updateResult['updates_applied'].Count -gt 0) {
+                    foreach ($update in $updateResult['updates_applied']) {
+                        $logs += "  - $update"
+                    }
+                }
+                if ($updateResult['warnings'] -and $updateResult['warnings'].Count -gt 0) {
+                    foreach ($warning in $updateResult['warnings']) {
+                        $logs += "  WARNING: $warning"
+                    }
+                }
+                
+                Write-JobResult `
+                    -Status 'success' `
+                    -Message $updateResult['message'] `
+                    -Data $updateResult `
+                    -CorrelationId $correlationId `
+                    -Logs $logs
             }
-
-            Write-JobResult `
-                -Status 'success' `
-                -Message "NIC update completed (stub implementation)" `
-                -Data $resultData `
-                -CorrelationId $correlationId `
-                -Logs $logs
+            catch {
+                throw "NIC update failed: $_"
+            }
         }
         elseif ($operation -eq 'nic.delete') {
             $logs += 'Executing nic.delete operation'
