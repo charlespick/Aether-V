@@ -10,6 +10,7 @@
 		combineValidationErrors,
 		hasErrors
 	} from '$lib/utils/validation';
+	import { inventoryStore } from '$lib/stores/inventoryStore';
 
 	interface DiskData {
 		id: string;
@@ -29,6 +30,11 @@
 	}
 
 	let { isOpen = $bindable(false), vmId, vmName, disk, onClose, onSuccess }: Props = $props();
+
+	// Get VM and Host to populate storage classes
+	let vm = $derived($inventoryStore?.vms?.find(v => v.id === vmId));
+	let host = $derived(vm ? $inventoryStore?.hosts?.find(h => h.hostname === vm.host) : undefined);
+	let availableStorageClasses = $derived(host?.resources?.storage_classes.map(sc => sc.name) || []);
 
 	// Form state
 	let formData = $state({
@@ -159,15 +165,15 @@
 
 			<FormField
 				label="Storage Class"
-				description="Optional: storage tier or class identifier (deprecated in v0.5.0)"
+				description="Optional: storage tier or class identifier"
 				error={errors.storage_class}
 			>
-				<input
-					type="text"
-					bind:value={formData.storage_class}
-					placeholder="e.g., SSD-Tier1"
-					disabled={isSubmitting}
-				/>
+				<select bind:value={formData.storage_class} disabled={isSubmitting}>
+					<option value="">Select a storage class...</option>
+					{#each availableStorageClasses as sc}
+						<option value={sc}>{sc}</option>
+					{/each}
+				</select>
 			</FormField>
 		</div>
 

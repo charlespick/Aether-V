@@ -900,6 +900,25 @@ try {
                 $hostConfig = ConvertFrom-Yaml -Yaml $rawConfig -ErrorAction Stop
             }
 
+            if ($hostConfig) {
+                # Add host resources to result
+                if ($hostConfig.storage_classes) {
+                    $result.Host.StorageClasses = $hostConfig.storage_classes
+                }
+                if ($hostConfig.networks) {
+                    $result.Host.Networks = $hostConfig.networks
+                }
+                if ($hostConfig.virtual_machines_path) {
+                    $result.Host.VirtualMachinesPath = $hostConfig.virtual_machines_path
+                }
+                if ($hostConfig.version) {
+                    $result.Host.Version = $hostConfig.version
+                }
+                if ($hostConfig.schema_name) {
+                    $result.Host.SchemaName = $hostConfig.schema_name
+                }
+            }
+
             if ($hostConfig -and $hostConfig.networks) {
                 # Build mapping for network name resolution
                 # Match by both switch + vlan and vlan-only for flexibility

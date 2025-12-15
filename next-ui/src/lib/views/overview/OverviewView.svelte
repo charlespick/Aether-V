@@ -3,6 +3,7 @@
 	import Icon from '$lib/components/common/Icon.svelte';
 	import ViewLoader from '$lib/components/ViewLoader.svelte';
 	import { inventoryStore } from '$lib/stores/inventoryStore';
+	import VmProvisionModal from '$lib/components/modals/VmProvisionModal.svelte';
 
 	// Subscribe to inventory store derived values
 	const loading = inventoryStore.loading;
@@ -15,6 +16,8 @@
 	const connectedHosts = inventoryStore.connectedHosts;
 	const disconnectedCount = inventoryStore.disconnectedCount;
 	const environmentName = inventoryStore.environmentName;
+
+	let isCreateVmModalOpen = $state(false);
 
 	// Derived stat cards from inventory data
 	const stats = $derived([
@@ -51,11 +54,13 @@
 		<div class="section">
 			<h2>Quick Actions</h2>
 			<div class="actions">
-				<Button variant="primary">Create VM</Button>
+				<Button variant="primary" onclick={() => isCreateVmModalOpen = true}>Create VM</Button>
 			</div>
 		</div>
 	</div>
 </ViewLoader>
+
+<VmProvisionModal bind:isOpen={isCreateVmModalOpen} onClose={() => isCreateVmModalOpen = false} />
 
 <style>
 	.overview {

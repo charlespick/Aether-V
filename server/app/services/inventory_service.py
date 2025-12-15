@@ -16,9 +16,13 @@ from ..core.models import (
     Cluster,
     Host,
     HostRecoveryAction,
+    HostResources,
     HostStopAction,
+    Network,
+    NetworkModel,
     NotificationLevel,
     OSFamily,
+    StorageClass,
     VM,
     VMNetworkAdapter,
     VMState,
@@ -1107,6 +1111,7 @@ class InventoryService:
                     error=None,
                     total_cpu_cores=host_data.get("total_cpu_cores", 0),
                     total_memory_gb=host_data.get("total_memory_gb", 0.0),
+                    resources=host_data.get("resources"),
                 ),
                 vms=vms,
                 expected_vm_keys=expected_keys,
@@ -1509,6 +1514,24 @@ class InventoryService:
             host_section.get("TotalMemoryGB"), default=0.0
         )
 
+        # Parse host resources
+        resources = None
+        try:
+            if "StorageClasses" in host_section or "Networks" in host_section:
+                resources = HostResources(
+                    version=host_section.get("Version", 1),
+                    schema_name=host_section.get("SchemaName", "hostresources"),
+                    storage_classes=[
+                        StorageClass(**sc) for sc in host_section.get("StorageClasses", [])
+                    ],
+                    networks=[
+                        Network(**net) for net in host_section.get("Networks", [])
+                    ],
+                    virtual_machines_path=host_section.get("VirtualMachinesPath", "")
+                )
+        except Exception as exc:
+            logger.warning("Failed to parse host resources for %s: %s", hostname, exc)
+
         vm_payload = payload.get("VirtualMachines")
 
         vms = self._deserialize_vms(hostname, vm_payload)
@@ -1516,6 +1539,7 @@ class InventoryService:
             "cluster": cluster_name,
             "total_cpu_cores": total_cpu_cores or 0,
             "total_memory_gb": total_memory_gb or 0.0,
+            "resources": resources,
         }
         return host_data, vms
 

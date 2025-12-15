@@ -80,6 +80,30 @@ export interface VM {
     }>;
 }
 
+export interface StorageClass {
+    name: string;
+    path: string;
+}
+
+export interface VlanConfiguration {
+    virtual_switch: string;
+    vlan_id: number;
+}
+
+export interface Network {
+    name: string;
+    model: string;
+    configuration: VlanConfiguration;
+}
+
+export interface HostResources {
+    version: number;
+    schema_name: string;
+    storage_classes: StorageClass[];
+    networks: Network[];
+    virtual_machines_path: string;
+}
+
 export interface Host {
     hostname: string;
     cluster: string;
@@ -89,6 +113,7 @@ export interface Host {
     total_memory_gb?: number;
     version?: string;
     last_seen?: string;
+    resources?: HostResources;
 }
 
 export interface Cluster {
