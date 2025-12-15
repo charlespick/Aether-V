@@ -41,7 +41,12 @@
 	});
 
 	let errors = $state<Record<string, string>>({});
+
 	let isSubmitting = $state(false);
+	let isDirty = $derived(
+		formData.network !== nic.network ||
+		formData.adapter_name !== (nic.adapter_name || '')
+	);
 
 	// Validation
 	function validate(): boolean {
@@ -67,18 +72,23 @@
 			return;
 		}
 
+		// For PATCH, only send changed fields
+		const patchBody: Record<string, unknown> = {};
+		if (formData.network !== nic.network) {
+			patchBody.network = formData.network;
+		}
+		if (formData.adapter_name !== nic.adapter_name) {
+			patchBody.adapter_name = formData.adapter_name;
+		}
+
+		if (Object.keys(patchBody).length === 0) {
+			toastStore.info('No changes to update');
+			return;
+		}
+
 		isSubmitting = true;
 
 		try {
-			// For PATCH, only send changed fields
-			const patchBody: Record<string, unknown> = {};
-			if (formData.network !== nic.network) {
-				patchBody.network = formData.network;
-			}
-			if (formData.adapter_name !== nic.adapter_name) {
-				patchBody.adapter_name = formData.adapter_name;
-			}
-			
 			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}/networkadapters/${encodeURIComponent(nic.id || '')}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
@@ -152,7 +162,7 @@
 
 		<FormActions>
 			<Button variant="secondary" onclick={onClose} disabled={isSubmitting}>Cancel</Button>
-			<Button type="submit" variant="primary" disabled={isSubmitting}>
+			<Button type="submit" variant="primary" disabled={isSubmitting || !isDirty}>
 				{isSubmitting ? 'Updating...' : 'Update Network Adapter'}
 			</Button>
 		</FormActions>

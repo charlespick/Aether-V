@@ -45,7 +45,14 @@
 	});
 
 	let errors = $state<Record<string, string>>({});
+
 	let isSubmitting = $state(false);
+	let isDirty = $derived(
+		formData.disk_size_gb !== disk.disk_size_gb ||
+		formData.disk_type !== (disk.disk_type as 'Dynamic' | 'Fixed') ||
+		formData.controller_type !== (disk.controller_type as 'SCSI' | 'IDE') ||
+		formData.storage_class !== (disk.storage_class || '')
+	);
 
 	// Original disk size (cannot be reduced below this)
 	const originalDiskSize = disk.disk_size_gb;
@@ -70,16 +77,25 @@
 			return;
 		}
 
+		// For PATCH, only send changed fields
+		const patchBody: Record<string, unknown> = {};
+		if (formData.disk_size_gb !== disk.disk_size_gb) patchBody.disk_size_gb = formData.disk_size_gb;
+		if (formData.disk_type !== (disk.disk_type as 'Dynamic' | 'Fixed')) patchBody.disk_type = formData.disk_type;
+		if (formData.controller_type !== (disk.controller_type as 'SCSI' | 'IDE')) patchBody.controller_type = formData.controller_type;
+		if (formData.storage_class !== (disk.storage_class || '')) patchBody.storage_class = formData.storage_class;
+
+		if (Object.keys(patchBody).length === 0) {
+			toastStore.info('No changes to update');
+			return;
+		}
+
 		isSubmitting = true;
 
 		try {
-			// For PATCH, only send the mutable field (disk_size_gb)
 			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}/disks/${encodeURIComponent(disk.id || '')}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					disk_size_gb: formData.disk_size_gb
-				})
+				body: JSON.stringify(patchBody)
 			});
 
 			if (!response.ok) {
@@ -179,7 +195,7 @@
 
 		<FormActions>
 			<Button variant="secondary" onclick={onClose} disabled={isSubmitting}>Cancel</Button>
-			<Button type="submit" variant="primary" disabled={isSubmitting}>
+			<Button type="submit" variant="primary" disabled={isSubmitting || !isDirty}>
 				{isSubmitting ? 'Updating...' : 'Update Disk'}
 			</Button>
 		</FormActions>

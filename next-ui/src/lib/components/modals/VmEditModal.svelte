@@ -55,7 +55,26 @@
 	});
 
 	let errors = $state<Record<string, string>>({});
+
 	let isSubmitting = $state(false);
+	let isDirty = $derived(
+		formData.cpu_cores !== (vm.cpu_cores || 1) ||
+		formData.memory_startup_gb !== (vm.memory_startup_gb || vm.memory_gb || 1) ||
+		formData.memory_min_gb !== (vm.memory_min_gb || 0.5) ||
+		formData.memory_max_gb !== (vm.memory_max_gb || 2) ||
+		formData.dynamic_memory_enabled !== (vm.dynamic_memory_enabled || false) ||
+		formData.memory_prcnt_buffer !== (vm.dynamic_memory_buffer || 20) ||
+		formData.secure_boot !== (vm.secure_boot_template || 'Microsoft Windows') ||
+		formData.tpm_enabled !== (vm.trusted_platform_module_enabled || false) ||
+		formData.host_recovery_action !== (vm.host_recovery_action || 'none') ||
+		formData.host_stop_action !== (vm.host_stop_action || 'save') ||
+		formData.integration_services_shutdown !== (vm.integration_services_shutdown ?? true) ||
+		formData.integration_services_time !== (vm.integration_services_time ?? true) ||
+		formData.integration_services_data_exchange !== (vm.integration_services_data_exchange ?? true) ||
+		formData.integration_services_heartbeat !== (vm.integration_services_heartbeat ?? true) ||
+		formData.integration_services_vss_backup !== (vm.integration_services_vss_backup ?? true) ||
+		formData.integration_services_guest_services !== (vm.integration_services_guest_services ?? false)
+	);
 
 	// Update form data when VM changes or modal opens
 	$effect(() => {
@@ -115,17 +134,37 @@
 			return;
 		}
 
+		// Only send changed fields (PATCH semantics)
+		const patchBody: Record<string, unknown> = {};
+		if (formData.cpu_cores !== (vm.cpu_cores || 1)) patchBody.cpu_cores = formData.cpu_cores;
+		if (formData.memory_startup_gb !== (vm.memory_startup_gb || vm.memory_gb || 1)) patchBody.memory_startup_gb = formData.memory_startup_gb;
+		if (formData.memory_min_gb !== (vm.memory_min_gb || 0.5)) patchBody.memory_min_gb = formData.memory_min_gb;
+		if (formData.memory_max_gb !== (vm.memory_max_gb || 2)) patchBody.memory_max_gb = formData.memory_max_gb;
+		if (formData.dynamic_memory_enabled !== (vm.dynamic_memory_enabled || false)) patchBody.dynamic_memory_enabled = formData.dynamic_memory_enabled;
+		if (formData.memory_prcnt_buffer !== (vm.dynamic_memory_buffer || 20)) patchBody.memory_prcnt_buffer = formData.memory_prcnt_buffer;
+		if (formData.secure_boot !== (vm.secure_boot_template || 'Microsoft Windows')) patchBody.secure_boot = formData.secure_boot;
+		if (formData.tpm_enabled !== (vm.trusted_platform_module_enabled || false)) patchBody.tpm_enabled = formData.tpm_enabled;
+		if (formData.host_recovery_action !== (vm.host_recovery_action || 'none')) patchBody.host_recovery_action = formData.host_recovery_action;
+		if (formData.host_stop_action !== (vm.host_stop_action || 'save')) patchBody.host_stop_action = formData.host_stop_action;
+		if (formData.integration_services_shutdown !== (vm.integration_services_shutdown ?? true)) patchBody.integration_services_shutdown = formData.integration_services_shutdown;
+		if (formData.integration_services_time !== (vm.integration_services_time ?? true)) patchBody.integration_services_time = formData.integration_services_time;
+		if (formData.integration_services_data_exchange !== (vm.integration_services_data_exchange ?? true)) patchBody.integration_services_data_exchange = formData.integration_services_data_exchange;
+		if (formData.integration_services_heartbeat !== (vm.integration_services_heartbeat ?? true)) patchBody.integration_services_heartbeat = formData.integration_services_heartbeat;
+		if (formData.integration_services_vss_backup !== (vm.integration_services_vss_backup ?? true)) patchBody.integration_services_vss_backup = formData.integration_services_vss_backup;
+		if (formData.integration_services_guest_services !== (vm.integration_services_guest_services ?? false)) patchBody.integration_services_guest_services = formData.integration_services_guest_services;
+
+		if (Object.keys(patchBody).length === 0) {
+			toastStore.info('No changes to update');
+			return;
+		}
+
 		isSubmitting = true;
 
 		try {
 			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vm.id)}`, {
 				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					vm_id: vm.id,
-					vm_name: vm.name,
-					...formData
-				})
+				body: JSON.stringify(patchBody)
 			});
 
 			if (!response.ok) {
@@ -359,6 +398,7 @@
 				{isSubmitting}
 				submitLabel="Save Changes"
 				onCancel={onClose}
+				submitDisabled={!isDirty}
 			/>
 		</form>
 	</div>

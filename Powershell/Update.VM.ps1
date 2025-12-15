@@ -193,8 +193,8 @@ function Invoke-ProvisioningUpdateVm {
         $actionValue = $ResourceSpec['host_recovery_action']
         $hypervAction = switch ($actionValue) {
             'none' { 'Nothing' }
-            'resume' { 'Restart' }
-            'always-start' { 'StartIfPreviouslyRunning' }
+            'resume' { 'StartIfPreviouslyRunning' }
+            'always-start' { 'Start' }
             default { throw "Invalid host_recovery_action: $actionValue" }
         }
         
@@ -225,7 +225,7 @@ function Invoke-ProvisioningUpdateVm {
     $integrationServices = Get-VMIntegrationService -VM $vm
     
     $integrationServiceMap = @{
-        'integration_services_shutdown' = 'Guest Service Interface'
+        'integration_services_shutdown' = 'Shutdown'
         'integration_services_time' = 'Time Synchronization'
         'integration_services_data_exchange' = 'Key-Value Pair Exchange'
         'integration_services_heartbeat' = 'Heartbeat'

@@ -2492,6 +2492,12 @@ class VMEditOverlay extends BaseOverlay {
                 patchBody.startup_memory_gb = body.gb_ram;
             }
 
+            // Prevent sending empty PATCH body
+            if (Object.keys(patchBody).length === 0) {
+                this.messagesEl.innerHTML = `<div class="form-error">No changes detected. Please modify at least one field before updating.</div>`;
+                return;
+            }
+
             const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}`, {
                 method: 'PATCH',
                 credentials: 'same-origin',
