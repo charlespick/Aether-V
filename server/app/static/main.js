@@ -1231,7 +1231,7 @@ function formatJobStatus(status) {
 async function markNotificationAsRead(notificationId) {
     try {
         const response = await fetch(`/api/v1/notifications/${notificationId}/read`, {
-            method: 'PUT',
+            method: 'PATCH',
             credentials: 'same-origin'
         });
 
@@ -1248,7 +1248,7 @@ async function markNotificationAsRead(notificationId) {
 async function markAllNotificationsAsRead() {
     try {
         const response = await fetch('/api/v1/notifications/mark-all-read', {
-            method: 'PUT',
+            method: 'PATCH',
             credentials: 'same-origin'
         });
 

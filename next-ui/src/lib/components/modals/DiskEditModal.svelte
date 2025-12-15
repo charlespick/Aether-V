@@ -67,12 +67,12 @@
 		isSubmitting = true;
 
 		try {
+			// For PATCH, only send the mutable field (disk_size_gb)
 			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}/disks/${encodeURIComponent(disk.id || '')}`, {
-				method: 'PUT',
+				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					vm_id: vmId,
-					...formData
+					disk_size_gb: formData.disk_size_gb
 				})
 			});
 

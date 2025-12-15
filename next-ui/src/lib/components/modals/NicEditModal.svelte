@@ -64,13 +64,19 @@
 		isSubmitting = true;
 
 		try {
+			// For PATCH, only send changed fields
+			const patchBody: Record<string, unknown> = {};
+			if (formData.network !== nic.network) {
+				patchBody.network = formData.network;
+			}
+			if (formData.adapter_name !== nic.adapter_name) {
+				patchBody.adapter_name = formData.adapter_name;
+			}
+			
 			const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(vmId)}/networkadapters/${encodeURIComponent(nic.id || '')}`, {
-				method: 'PUT',
+				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					vm_id: vmId,
-					...formData
-				})
+				body: JSON.stringify(patchBody)
 			});
 
 			if (!response.ok) {
