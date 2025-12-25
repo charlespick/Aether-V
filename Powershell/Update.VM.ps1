@@ -322,6 +322,10 @@ function Invoke-ProvisioningUpdateVm {
     elseif ($updates.Count -gt 0) {
         $result['message'] = "Applied $($updates.Count) update(s)"
     }
+    else {
+        # Only warnings, no updates
+        $result['message'] = "Completed with $($warnings.Count) warning(s)"
+    }
 
     return $result
 }
