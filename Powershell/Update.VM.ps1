@@ -255,6 +255,49 @@ function Invoke-ProvisioningUpdateVm {
         }
     }
 
+    # Cluster registration (must be done after guest initialization is complete)
+    if ($ResourceSpec.ContainsKey('vm_clustered')) {
+        $desiredClustered = [bool]$ResourceSpec['vm_clustered']
+        
+        # Check if Failover Cluster module is available
+        $clusterModule = Get-Module -ListAvailable -Name FailoverClusters
+        if (-not $clusterModule) {
+            $warnings += "Failover Cluster module not available - skipping cluster registration"
+        }
+        else {
+            try {
+                Import-Module FailoverClusters -ErrorAction Stop
+                
+                # Check if this host is part of a cluster
+                $cluster = Get-Cluster -ErrorAction SilentlyContinue
+                if (-not $cluster) {
+                    $warnings += "Host is not part of a failover cluster - skipping cluster registration"
+                }
+                else {
+                    # Check current cluster registration status
+                    $clusterResource = Get-ClusterResource -ErrorAction SilentlyContinue | 
+                        Where-Object { $_.ResourceType -eq 'Virtual Machine' -and $_.OwnerGroup.Name -eq $vmName }
+                    
+                    $currentlyClustered = $null -ne $clusterResource
+                    
+                    if ($desiredClustered -and -not $currentlyClustered) {
+                        # Register VM with failover cluster
+                        Add-ClusterVirtualMachineRole -VMName $vmName -ErrorAction Stop
+                        $updates += "Registered VM with failover cluster: $($cluster.Name)"
+                    }
+                    elseif (-not $desiredClustered -and $currentlyClustered) {
+                        # Unregister VM from failover cluster
+                        Remove-ClusterGroup -Name $vmName -RemoveResources -Force -ErrorAction Stop
+                        $updates += "Unregistered VM from failover cluster: $($cluster.Name)"
+                    }
+                }
+            }
+            catch {
+                $warnings += "Cluster operation failed: $_"
+            }
+        }
+    }
+
     # Build result
     $result = @{
         vm_id = $vmId

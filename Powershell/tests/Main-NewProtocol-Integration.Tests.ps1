@@ -347,7 +347,6 @@ Describe 'Main-NewProtocol.ps1 - Resource Spec Field Extraction' {
             gb_ram        = 16
             cpu_cores     = 8
             storage_class = 'premium'
-            vm_clustered  = $true
         }
         
         $json = New-JobRequest -Operation 'vm.create' -ResourceSpec $resourceSpec
@@ -364,13 +363,12 @@ Describe 'Main-NewProtocol.ps1 - Complex Data Types' {
     
     It 'handles boolean fields correctly' {
         $resourceSpec = @{
+            vm_id         = 'e4b5c6d7-1234-5678-90ab-cdef12345678'
             vm_name       = 'test-vm'
-            gb_ram        = 4
-            cpu_cores     = 2
             vm_clustered  = $true
         }
         
-        $json = New-JobRequest -Operation 'vm.create' -ResourceSpec $resourceSpec
+        $json = New-JobRequest -Operation 'vm.update' -ResourceSpec $resourceSpec
         $output = Invoke-MainProtocolScript -JsonInput $json
         $result = ConvertFrom-JobResult -JsonOutput $output
         

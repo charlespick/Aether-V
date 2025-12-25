@@ -261,7 +261,6 @@ end {
             $gbRam = [int]$resourceSpec['gb_ram']
             $cpuCores = [int]$resourceSpec['cpu_cores']
             $storageClass = $resourceSpec['storage_class']
-            $vmClustered = if ($resourceSpec.ContainsKey('vm_clustered')) { [bool]$resourceSpec['vm_clustered'] } else { $false }
             
             $currentHost = $env:COMPUTERNAME
             $logs += "Creating VM: $vmName (RAM: ${gbRam}GB, CPUs: $cpuCores, Storage Class: $storageClass)"

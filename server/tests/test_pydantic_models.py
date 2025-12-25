@@ -31,14 +31,13 @@ class TestVmSpecModel:
             gb_ram=4,
             cpu_cores=2,
             storage_class="fast-ssd",
-            vm_clustered=False,
         )
         
         assert vm.vm_name == "web-01"
         assert vm.gb_ram == 4
         assert vm.cpu_cores == 2
         assert vm.storage_class == "fast-ssd"
-        assert vm.vm_clustered is False
+        assert vm.vm_clustered is None  # Not used during creation
     
     def test_vm_spec_with_defaults(self):
         """Test VM spec with default values."""
@@ -48,7 +47,7 @@ class TestVmSpecModel:
             cpu_cores=4,
         )
         
-        assert vm.vm_clustered is False  # Default value
+        assert vm.vm_clustered is None  # Optional, used only in updates
         assert vm.storage_class is None  # Optional field
     
     def test_vm_spec_name_too_long(self):
