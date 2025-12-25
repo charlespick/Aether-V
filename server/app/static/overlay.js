@@ -2382,6 +2382,7 @@ class VMEditOverlay extends BaseOverlay {
         // Store original values for PATCH diff
         this.originalCpuCores = currentCpuCores;
         this.originalMemoryGb = currentMemoryGb;
+        this.originalVmClustered = currentVmClustered;
 
         this.rootEl.innerHTML = `
             <form id="vm-edit-form" class="schema-form-body">
@@ -2490,6 +2491,9 @@ class VMEditOverlay extends BaseOverlay {
             }
             if (body.gb_ram !== this.originalMemoryGb) {
                 patchBody.startup_memory_gb = body.gb_ram;
+            }
+            if (body.vm_clustered !== this.originalVmClustered) {
+                patchBody.vm_clustered = body.vm_clustered;
             }
 
             // Prevent sending empty PATCH body

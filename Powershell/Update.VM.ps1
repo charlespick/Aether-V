@@ -262,7 +262,12 @@ function Invoke-ProvisioningUpdateVm {
         # Check if Failover Cluster module is available
         $clusterModule = Get-Module -ListAvailable -Name FailoverClusters
         if (-not $clusterModule) {
-            $warnings += "Failover Cluster module not available - skipping cluster registration"
+            if ($desiredClustered) {
+                throw "Failover Cluster module is not available. Cannot enable clustering."
+            }
+            else {
+                $warnings += "Failover Cluster module not available - cannot modify cluster state"
+            }
         }
         else {
             try {
@@ -271,7 +276,12 @@ function Invoke-ProvisioningUpdateVm {
                 # Check if this host is part of a cluster
                 $cluster = Get-Cluster -ErrorAction SilentlyContinue
                 if (-not $cluster) {
-                    $warnings += "Host is not part of a failover cluster - skipping cluster registration"
+                    if ($desiredClustered) {
+                        throw "Host is not part of a failover cluster. Cannot enable clustering for VM."
+                    }
+                    else {
+                        $warnings += "Host is not part of a failover cluster - cannot modify cluster state"
+                    }
                 }
                 else {
                     # Check current cluster registration status
