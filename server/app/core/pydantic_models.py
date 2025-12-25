@@ -70,7 +70,7 @@ class VmSpec(BaseModel):
         description="Operating system family (windows or linux). Used to configure secure boot settings. If not specified, defaults to windows.",
     )
     vm_clustered: Optional[bool] = Field(
-        None,
+        default=None,
         description="Register the VM with the Failover Cluster (used only in vm.update operation after initialization)",
     )
 
