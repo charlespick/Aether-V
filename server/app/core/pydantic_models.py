@@ -188,10 +188,14 @@ class ManagedDeploymentRequest(BaseModel):
     - POST /api/v1/resources/nics (NicSpec)
     - POST /api/v1/resources/vms/{vm_id}/initialize (guest config dict)
     """
-    # === Target Host (required) ===
-    target_host: str = Field(
-        ...,
+    # === Deployment Target (exactly one required) ===
+    target_host: Optional[str] = Field(
+        None,
         description="Hostname of the connected Hyper-V host that will execute the job",
+    )
+    target_cluster: Optional[str] = Field(
+        None,
+        description="Name of the failover cluster - the server will select the optimal host",
     )
     
     # === VM Hardware Configuration (required) ===
@@ -309,6 +313,17 @@ class ManagedDeploymentRequest(BaseModel):
     @model_validator(mode='after')
     def validate_parameter_sets(self) -> 'ManagedDeploymentRequest':
         """Validate all-or-none parameter sets for domain join, ansible, and static IP."""
+        # Deployment target: exactly one of target_host or target_cluster
+        if self.target_host and self.target_cluster:
+            raise ValueError(
+                "Cannot specify both target_host and target_cluster. "
+                "Please specify only one deployment destination."
+            )
+        if not self.target_host and not self.target_cluster:
+            raise ValueError(
+                "Must specify either target_host or target_cluster as the deployment destination."
+            )
+        
         # Domain join: all-or-none
         domain_fields = [
             self.guest_domain_join_target,

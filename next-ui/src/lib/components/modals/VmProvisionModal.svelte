@@ -83,14 +83,24 @@
 	});
 
 	// Host and image selection
+	let deploymentMode = $state<'host' | 'cluster'>('host');
 	let targetHost = $state('');
+	let targetCluster = $state('');
 	let imageName = $state('');
 
-	// Available hosts and images
+	// Available hosts, clusters, and images
 	let availableHosts = $derived($inventoryStore?.hosts?.filter(h => h.connected).map(h => h.hostname) || []);
+	let availableClusters = $state<Array<{name: string, connected_hosts: number}>>([]);
 	let selectedHost = $derived($inventoryStore?.hosts?.find(h => h.hostname === targetHost));
 	let availableStorageClasses = $derived(selectedHost?.resources?.storage_classes.map(sc => sc.name) || []);
 	let availableNetworks = $derived(selectedHost?.resources?.networks.map(n => n.name) || []);
+
+	// Auto-enable clustering when cluster mode is selected
+	$effect(() => {
+		if (deploymentMode === 'cluster') {
+			vmData.vm_clustered = true;
+		}
+	});
 
 	// Mock data for images - API endpoint for images is not yet available
 	let availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
@@ -131,14 +141,7 @@
 			...diskData,
 			...nicData,
 			...guestLocalAdmin,
-			target_host: targetHost,
-			image_name: imageName
-		};
-
-		// Add optional parameter sets if enabled
-		if (domainJoinEnabled) {
-			Object.assign(data, domainJoinData);
-		}
+                        ...(deploymentMode === 'host' ? { target_host: targetHost } : { target_cluster: targetCluster }),
 
 		if (ansibleEnabled) {
 			Object.assign(data, ansibleData);
@@ -156,19 +159,18 @@
 		const fullData = getFullFormData();
 
 		const validationErrors = combineValidationErrors([
-			// Required fields
-			...validateRequired(fullData, [
-				'vm_name',
-				'gb_ram',
-				'cpu_cores',
-				'disk_size_gb',
-				'disk_type',
-				'controller_type',
-				'network',
-				'guest_la_uid',
-				'guest_la_pw',
-				'target_host',
-				'image_name'
+                        // Required fields - conditional on deployment mode
+                        ...validateRequired(fullData, [
+                                'vm_name',
+                                'gb_ram',
+                                'cpu_cores',
+                                'disk_size_gb',
+                                'disk_type',
+                                'controller_type',
+                                'network',
+                                'guest_la_uid',
+                                'guest_la_pw',
+                                ...(deploymentMode === 'host' ? ['target_host'] : ['target_cluster']),
 			]),
 
 			// Range validations
@@ -243,7 +245,8 @@
 			// Build flat payload that mirrors form fields directly
 			// The server parses this flat structure into hardware specs internally
 			const payload: Record<string, any> = {
-				target_host: targetHost,
+				// Deployment target - either host or cluster
+				...(deploymentMode === 'host' ? { target_host: targetHost } : { target_cluster: targetCluster }),
 				// VM hardware
 				vm_name: vmData.vm_name,
 				gb_ram: vmData.gb_ram,
@@ -311,6 +314,9 @@
 				storage_class: '',
 				vm_clustered: false
 			};
+			deploymentMode = 'host';
+			targetHost = '';
+			targetCluster = '';
 			diskData = {
 				disk_size_gb: 100,
 				disk_type: 'Dynamic',
@@ -345,38 +351,100 @@
 				guest_v4_dns2: '',
 				guest_net_dns_suffix: ''
 			};
-			targetHost = '';
 			imageName = '';
 			errors = {};
 		}
 	});
 
-	// Fetch available hosts from inventory
+	// Fetch available clusters
 	$effect(() => {
-		// Mock data for images - API endpoint for images is not yet available
-		// availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
+		if (isOpen) {
+			fetch('/api/v1/clusters')
+				.then(res => res.json())
+				.then(clusters => {
+					// Filter clusters with at least one connected host
+					availableClusters = clusters.filter((c: any) => c.host_count > 0);
+				})
+				.catch(err => console.error('Failed to fetch clusters:', err));
+		}
 	});
 </script>
 
-<Modal {isOpen} {onClose} title="Create Virtual Machine" variant="slideOver" width="xl">
+<Modal
+	{isOpen}
+	{onClose}
+	title="Create Virtual Machine"
+	variant="slideOver"
+	width="xl"
+>
 	<form onsubmit={handleSubmit}>
 		<div class="form-content">
 			<!-- Primary Controls: Host & Image -->
-			<FormSection title="Deployment Target" description="Select the destination host and base image">
+			<FormSection
+				title="Deployment Target"
+				description="Select the destination and base image"
+			>
 				<FormField
-					label="Target Host"
-					description="Hyper-V host where the VM will be created"
+					label="Deployment Mode"
+					description="Deploy to a specific host or let the cluster select the optimal host"
 					required
-					error={errors.target_host}
 				>
-					<select bind:value={targetHost} disabled={isSubmitting}>
-						<option value="">Select a host...</option>
-						{#each availableHosts as host}
-							<option value={host}>{host}</option>
-						{/each}
-					</select>
+					<div class="radio-group">
+						<label class="radio-label">
+							<input
+								type="radio"
+								bind:group={deploymentMode}
+								value="host"
+								disabled={isSubmitting}
+							/>
+							<span>Specific Host</span>
+						</label>
+						<label class="radio-label">
+							<input
+								type="radio"
+								bind:group={deploymentMode}
+								value="cluster"
+								disabled={isSubmitting}
+							/>
+							<span>Cluster (Auto-select Host)</span>
+						</label>
+					</div>
 				</FormField>
 
+				{#if deploymentMode === "host"}
+					<FormField
+						label="Target Host"
+						description="Hyper-V host where the VM will be created"
+						required
+						error={errors.target_host}
+					>
+						<select bind:value={targetHost} disabled={isSubmitting}>
+							<option value="">Select a host...</option>
+							{#each availableHosts as host}
+								<option value={host}>{host}</option>
+							{/each}
+						</select>
+					</FormField>
+				{:else}
+					<FormField
+						label="Target Cluster"
+						description="Cluster where the VM will be created - host will be auto-selected based on available memory"
+						required
+						error={errors.target_cluster}
+					>
+						<select
+							bind:value={targetCluster}
+							disabled={isSubmitting}
+						>
+							<option value="">Select a cluster...</option>
+							{#each availableClusters as cluster}
+								<option value={cluster.name}
+									>{cluster.name} ({cluster.connected_hosts} hosts)</option
+								>
+							{/each}
+						</select>
+					</FormField>
+				{/if}
 				<FormField
 					label="Base Image"
 					description="Operating system image to clone"
@@ -446,7 +514,10 @@
 					description="Optional: storage tier or class identifier"
 					error={errors.storage_class}
 				>
-					<select bind:value={vmData.storage_class} disabled={isSubmitting}>
+					<select
+						bind:value={vmData.storage_class}
+						disabled={isSubmitting}
+					>
 						<option value="">Select a storage class...</option>
 						{#each availableStorageClasses as sc}
 							<option value={sc}>{sc}</option>
@@ -454,16 +525,30 @@
 					</select>
 				</FormField>
 
-				<FormField description="Enable high availability clustering for this VM">
+				<FormField
+					description="Enable high availability clustering for this VM"
+				>
 					<label class="checkbox-label">
-						<input type="checkbox" bind:checked={vmData.vm_clustered} disabled={isSubmitting} />
-						<span>Enable VM Clustering</span>
+						<input
+							type="checkbox"
+							bind:checked={vmData.vm_clustered}
+							disabled={isSubmitting ||
+								deploymentMode === "cluster"}
+						/>
+						<span
+							>Enable VM Clustering{deploymentMode === "cluster"
+								? " (Auto-enabled)"
+								: ""}</span
+						>
 					</label>
 				</FormField>
 			</FormSection>
 
 			<!-- Disk Configuration -->
-			<FormSection title="Disk Configuration" description="Configure the primary virtual disk">
+			<FormSection
+				title="Disk Configuration"
+				description="Configure the primary virtual disk"
+			>
 				<FormField
 					label="Disk Size (GB)"
 					description="Size of the virtual disk"
@@ -480,14 +565,28 @@
 				</FormField>
 
 				<FormField label="Disk Type" required error={errors.disk_type}>
-					<select bind:value={diskData.disk_type} disabled={isSubmitting}>
-						<option value="Dynamic">Dynamic (grows as needed)</option>
-						<option value="Fixed">Fixed (allocates full size)</option>
+					<select
+						bind:value={diskData.disk_type}
+						disabled={isSubmitting}
+					>
+						<option value="Dynamic"
+							>Dynamic (grows as needed)</option
+						>
+						<option value="Fixed"
+							>Fixed (allocates full size)</option
+						>
 					</select>
 				</FormField>
 
-				<FormField label="Controller Type" required error={errors.controller_type}>
-					<select bind:value={diskData.controller_type} disabled={isSubmitting}>
+				<FormField
+					label="Controller Type"
+					required
+					error={errors.controller_type}
+				>
+					<select
+						bind:value={diskData.controller_type}
+						disabled={isSubmitting}
+					>
 						<option value="SCSI">SCSI (recommended)</option>
 						<option value="IDE">IDE</option>
 					</select>
@@ -495,14 +594,20 @@
 			</FormSection>
 
 			<!-- Network Configuration -->
-			<FormSection title="Network Configuration" description="Configure the primary network adapter">
+			<FormSection
+				title="Network Configuration"
+				description="Configure the primary network adapter"
+			>
 				<FormField
 					label="Network"
 					description="Hyper-V virtual switch to connect to"
 					required
 					error={errors.network}
 				>
-					<select bind:value={nicData.network} disabled={isSubmitting}>
+					<select
+						bind:value={nicData.network}
+						disabled={isSubmitting}
+					>
 						<option value="">Select a network...</option>
 						{#each availableNetworks as net}
 							<option value={net}>{net}</option>
@@ -566,7 +671,11 @@
 			>
 				<FormField>
 					<label class="checkbox-label">
-						<input type="checkbox" bind:checked={domainJoinEnabled} disabled={isSubmitting} />
+						<input
+							type="checkbox"
+							bind:checked={domainJoinEnabled}
+							disabled={isSubmitting}
+						/>
 						<span>Enable Domain Join</span>
 					</label>
 				</FormField>
@@ -640,13 +749,19 @@
 			>
 				<FormField>
 					<label class="checkbox-label">
-						<input type="checkbox" bind:checked={ansibleEnabled} disabled={isSubmitting} />
+						<input
+							type="checkbox"
+							bind:checked={ansibleEnabled}
+							disabled={isSubmitting}
+						/>
 						<span>Enable Ansible Configuration</span>
 					</label>
 				</FormField>
 
 				{#if ansibleEnabled}
-					<div class="parameter-set-note">All Ansible fields must be provided together.</div>
+					<div class="parameter-set-note">
+						All Ansible fields must be provided together.
+					</div>
 
 					<FormField
 						label="SSH Username"
@@ -686,14 +801,19 @@
 			>
 				<FormField>
 					<label class="checkbox-label">
-						<input type="checkbox" bind:checked={staticIpEnabled} disabled={isSubmitting} />
+						<input
+							type="checkbox"
+							bind:checked={staticIpEnabled}
+							disabled={isSubmitting}
+						/>
 						<span>Configure Static IP</span>
 					</label>
 				</FormField>
 
 				{#if staticIpEnabled}
 					<div class="parameter-set-note">
-						IP address, CIDR prefix, gateway, and primary DNS must be provided together.
+						IP address, CIDR prefix, gateway, and primary DNS must
+						be provided together.
 					</div>
 
 					<FormField
@@ -783,9 +903,13 @@
 		</div>
 
 		<FormActions>
-			<Button variant="secondary" onclick={onClose} disabled={isSubmitting}>Cancel</Button>
+			<Button
+				variant="secondary"
+				onclick={onClose}
+				disabled={isSubmitting}>Cancel</Button
+			>
 			<Button type="submit" variant="primary" disabled={isSubmitting}>
-				{isSubmitting ? 'Creating VM...' : 'Create Virtual Machine'}
+				{isSubmitting ? "Creating VM..." : "Create Virtual Machine"}
 			</Button>
 		</FormActions>
 	</form>
@@ -798,13 +922,25 @@
 		gap: 1.5rem;
 	}
 
-	.checkbox-label {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		cursor: pointer;
-		font-size: 0.875rem;
-		color: var(--text-primary);
+        .radio-group {
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
+        }
+
+        .radio-label {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                cursor: pointer;
+                font-size: 0.875rem;
+                color: var(--text-primary);
+        }
+
+        .radio-label input[type='radio'] {
+                margin: 0;
+        }
+
 	}
 
 	.checkbox-label input[type='checkbox'] {
