@@ -1,11 +1,11 @@
 <script lang="ts">
-	import Modal from '$lib/components/Modal.svelte';
-	import FormField from '$lib/components/forms/FormField.svelte';
-	import FormSection from '$lib/components/forms/FormSection.svelte';
-	import FormActions from '$lib/components/forms/FormActions.svelte';
-	import Button from '$lib/components/common/Button.svelte';
-	import { toastStore } from '$lib/stores/toastStore';
-	import { inventoryStore } from '$lib/stores/inventoryStore';
+	import Modal from "$lib/components/Modal.svelte";
+	import FormField from "$lib/components/forms/FormField.svelte";
+	import FormSection from "$lib/components/forms/FormSection.svelte";
+	import FormActions from "$lib/components/forms/FormActions.svelte";
+	import Button from "$lib/components/common/Button.svelte";
+	import { toastStore } from "$lib/stores/toastStore";
+	import { inventoryStore } from "$lib/stores/inventoryStore";
 	import {
 		validateRequired,
 		validateRange,
@@ -16,8 +16,8 @@
 		combineValidationErrors,
 		hasErrors,
 		patterns,
-		type ParameterSet
-	} from '$lib/utils/validation';
+		type ParameterSet,
+	} from "$lib/utils/validation";
 
 	interface Props {
 		isOpen: boolean;
@@ -29,81 +29,93 @@
 
 	// Form state - VM Hardware
 	let vmData = $state({
-		vm_name: '',
+		vm_name: "",
 		gb_ram: 4,
 		cpu_cores: 2,
-		storage_class: '',
-		vm_clustered: false
+		storage_class: "",
+		vm_clustered: false,
 	});
 
 	// Disk configuration
 	let diskData = $state({
 		disk_size_gb: 100,
-		disk_type: 'Dynamic' as 'Dynamic' | 'Fixed',
-		controller_type: 'SCSI' as 'SCSI' | 'IDE'
+		disk_type: "Dynamic" as "Dynamic" | "Fixed",
+		controller_type: "SCSI" as "SCSI" | "IDE",
 	});
 
 	// NIC configuration
 	let nicData = $state({
-		network: '',
-		adapter_name: ''
+		network: "",
+		adapter_name: "",
 	});
 
 	// Guest configuration - Local Admin
 	let guestLocalAdmin = $state({
-		guest_la_uid: '',
-		guest_la_pw: ''
+		guest_la_uid: "",
+		guest_la_pw: "",
 	});
 
 	// Guest configuration - Domain Join (all-or-none)
 	let domainJoinEnabled = $state(false);
 	let domainJoinData = $state({
-		guest_domain_join_target: '',
-		guest_domain_join_uid: '',
-		guest_domain_join_pw: '',
-		guest_domain_join_ou: ''
+		guest_domain_join_target: "",
+		guest_domain_join_uid: "",
+		guest_domain_join_pw: "",
+		guest_domain_join_ou: "",
 	});
 
 	// Guest configuration - Ansible (all-or-none)
 	let ansibleEnabled = $state(false);
 	let ansibleData = $state({
-		cnf_ansible_ssh_user: '',
-		cnf_ansible_ssh_key: ''
+		cnf_ansible_ssh_user: "",
+		cnf_ansible_ssh_key: "",
 	});
 
 	// Guest configuration - Static IP (all-or-none)
 	let staticIpEnabled = $state(false);
 	let staticIpData = $state({
-		guest_v4_ip_addr: '',
+		guest_v4_ip_addr: "",
 		guest_v4_cidr_prefix: 24,
-		guest_v4_default_gw: '',
-		guest_v4_dns1: '',
-		guest_v4_dns2: '',
-		guest_net_dns_suffix: ''
+		guest_v4_default_gw: "",
+		guest_v4_dns1: "",
+		guest_v4_dns2: "",
+		guest_net_dns_suffix: "",
 	});
 
 	// Host and image selection
-	let deploymentMode = $state<'host' | 'cluster'>('host');
-	let targetHost = $state('');
-	let targetCluster = $state('');
-	let imageName = $state('');
+	let deploymentMode = $state<"host" | "cluster">("host");
+	let targetHost = $state("");
+	let targetCluster = $state("");
+	let imageName = $state("");
 
 	// Available hosts, clusters, and images
-	let availableHosts = $derived($inventoryStore?.hosts?.filter(h => h.connected).map(h => h.hostname) || []);
-	let availableClusters = $state<Array<{name: string, connected_hosts: number}>>([]);
-	let selectedHost = $derived($inventoryStore?.hosts?.find(h => h.hostname === targetHost));
-	let availableStorageClasses = $derived(selectedHost?.resources?.storage_classes.map(sc => sc.name) || []);
-	let availableNetworks = $derived(selectedHost?.resources?.networks.map(n => n.name) || []);
+	let availableHosts = $derived(
+		$inventoryStore?.hosts
+			?.filter((h) => h.connected)
+			.map((h) => h.hostname) || [],
+	);
+	let availableClusters = $state<
+		Array<{ name: string; connected_hosts: number }>
+	>([]);
+	let selectedHost = $derived(
+		$inventoryStore?.hosts?.find((h) => h.hostname === targetHost),
+	);
+	let availableStorageClasses = $derived(
+		selectedHost?.resources?.storage_classes.map((sc) => sc.name) || [],
+	);
+	let availableNetworks = $derived(
+		selectedHost?.resources?.networks.map((n) => n.name) || [],
+	);
 
 	// Auto-enable clustering when cluster mode is selected
 	$effect(() => {
-		if (deploymentMode === 'cluster') {
+		if (deploymentMode === "cluster") {
 			vmData.vm_clustered = true;
 		}
 	});
 
 	// Mock data for images - API endpoint for images is not yet available
-	let availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
+	let availableImages = ["Windows Server 2022", "Ubuntu 22.04 LTS"];
 
 	let errors = $state<Record<string, string>>({});
 	let isSubmitting = $state(false);
@@ -111,27 +123,27 @@
 	// Parameter sets for all-or-none validation
 	const parameterSets: ParameterSet[] = [
 		{
-			name: 'Domain Join',
+			name: "Domain Join",
 			fields: [
-				'guest_domain_join_target',
-				'guest_domain_join_uid',
-				'guest_domain_join_pw',
-				'guest_domain_join_ou'
-			]
+				"guest_domain_join_target",
+				"guest_domain_join_uid",
+				"guest_domain_join_pw",
+				"guest_domain_join_ou",
+			],
 		},
 		{
-			name: 'Ansible Configuration',
-			fields: ['cnf_ansible_ssh_user', 'cnf_ansible_ssh_key']
+			name: "Ansible Configuration",
+			fields: ["cnf_ansible_ssh_user", "cnf_ansible_ssh_key"],
 		},
 		{
-			name: 'Static IP Configuration',
+			name: "Static IP Configuration",
 			fields: [
-				'guest_v4_ip_addr',
-				'guest_v4_cidr_prefix',
-				'guest_v4_default_gw',
-				'guest_v4_dns1'
-			]
-		}
+				"guest_v4_ip_addr",
+				"guest_v4_cidr_prefix",
+				"guest_v4_default_gw",
+				"guest_v4_dns1",
+			],
+		},
 	];
 
 	// Combine all form data
@@ -141,7 +153,16 @@
 			...diskData,
 			...nicData,
 			...guestLocalAdmin,
-                        ...(deploymentMode === 'host' ? { target_host: targetHost } : { target_cluster: targetCluster }),
+			...(deploymentMode === "host"
+				? { target_host: targetHost }
+				: { target_cluster: targetCluster }),
+			image_name: imageName,
+		};
+
+		// Add optional parameter sets if enabled
+		if (domainJoinEnabled) {
+			Object.assign(data, domainJoinData);
+		}
 
 		if (ansibleEnabled) {
 			Object.assign(data, ansibleData);
@@ -159,38 +180,45 @@
 		const fullData = getFullFormData();
 
 		const validationErrors = combineValidationErrors([
-                        // Required fields - conditional on deployment mode
-                        ...validateRequired(fullData, [
-                                'vm_name',
-                                'gb_ram',
-                                'cpu_cores',
-                                'disk_size_gb',
-                                'disk_type',
-                                'controller_type',
-                                'network',
-                                'guest_la_uid',
-                                'guest_la_pw',
-                                ...(deploymentMode === 'host' ? ['target_host'] : ['target_cluster']),
+			// Required fields - conditional on deployment mode
+			...validateRequired(fullData, [
+				"vm_name",
+				"gb_ram",
+				"cpu_cores",
+				"disk_size_gb",
+				"disk_type",
+				"controller_type",
+				"network",
+				"guest_la_uid",
+				"guest_la_pw",
+				...(deploymentMode === "host"
+					? ["target_host"]
+					: ["target_cluster"]),
 			]),
 
 			// Range validations
-			validateRange(fullData, 'gb_ram', 1, 512),
-			validateRange(fullData, 'cpu_cores', 1, 64),
-			validateRange(fullData, 'disk_size_gb', 1, 65536),
+			validateRange(fullData, "gb_ram", 1, 512),
+			validateRange(fullData, "cpu_cores", 1, 64),
+			validateRange(fullData, "disk_size_gb", 1, 65536),
 
 			// VM name validation (hostname pattern)
 			validatePattern(
 				fullData,
-				'vm_name',
+				"vm_name",
 				patterns.hostname,
-				'Must be a valid hostname (alphanumeric and hyphens only)'
+				"Must be a valid hostname (alphanumeric and hyphens only)",
 			),
 
 			// Network name validation
-			validatePattern(fullData, 'network', patterns.networkName, 'Invalid network name format'),
+			validatePattern(
+				fullData,
+				"network",
+				patterns.networkName,
+				"Invalid network name format",
+			),
 
 			// Parameter set validations (all-or-none)
-			...validateParameterSets(fullData, parameterSets)
+			...validateParameterSets(fullData, parameterSets),
 		]);
 
 		// Static IP specific validations if enabled
@@ -199,30 +227,34 @@
 				staticIpData.guest_v4_ip_addr &&
 				!validateIPv4(staticIpData.guest_v4_ip_addr)
 			) {
-				validationErrors.guest_v4_ip_addr = 'Invalid IPv4 address';
+				validationErrors.guest_v4_ip_addr = "Invalid IPv4 address";
 			}
 
 			if (
 				staticIpData.guest_v4_default_gw &&
 				!validateIPv4(staticIpData.guest_v4_default_gw)
 			) {
-				validationErrors.guest_v4_default_gw = 'Invalid IPv4 address';
+				validationErrors.guest_v4_default_gw = "Invalid IPv4 address";
 			}
 
-			if (staticIpData.guest_v4_dns1 && !validateIPv4(staticIpData.guest_v4_dns1)) {
-				validationErrors.guest_v4_dns1 = 'Invalid IPv4 address';
+			if (
+				staticIpData.guest_v4_dns1 &&
+				!validateIPv4(staticIpData.guest_v4_dns1)
+			) {
+				validationErrors.guest_v4_dns1 = "Invalid IPv4 address";
 			}
 
 			if (
 				staticIpData.guest_v4_dns2 &&
-				staticIpData.guest_v4_dns2 !== '' &&
+				staticIpData.guest_v4_dns2 !== "" &&
 				!validateIPv4(staticIpData.guest_v4_dns2)
 			) {
-				validationErrors.guest_v4_dns2 = 'Invalid IPv4 address';
+				validationErrors.guest_v4_dns2 = "Invalid IPv4 address";
 			}
 
 			if (!validateCIDRPrefix(staticIpData.guest_v4_cidr_prefix)) {
-				validationErrors.guest_v4_cidr_prefix = 'Must be between 0 and 32';
+				validationErrors.guest_v4_cidr_prefix =
+					"Must be between 0 and 32";
 			}
 		}
 
@@ -235,7 +267,7 @@
 		e.preventDefault();
 
 		if (!validate()) {
-			toastStore.error('Please fix the validation errors');
+			toastStore.error("Please fix the validation errors");
 			return;
 		}
 
@@ -246,7 +278,9 @@
 			// The server parses this flat structure into hardware specs internally
 			const payload: Record<string, any> = {
 				// Deployment target - either host or cluster
-				...(deploymentMode === 'host' ? { target_host: targetHost } : { target_cluster: targetCluster }),
+				...(deploymentMode === "host"
+					? { target_host: targetHost }
+					: { target_cluster: targetCluster }),
 				// VM hardware
 				vm_name: vmData.vm_name,
 				gb_ram: vmData.gb_ram,
@@ -259,7 +293,7 @@
 				// Network
 				network: nicData.network,
 				// Guest config - local admin (required)
-				...guestLocalAdmin
+				...guestLocalAdmin,
 			};
 
 			// Add domain join config if enabled
@@ -277,15 +311,15 @@
 				Object.assign(payload, staticIpData);
 			}
 
-			const response = await fetch('/api/v1/managed-deployments', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload)
+			const response = await fetch("/api/v1/managed-deployments", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload),
 			});
 
 			if (!response.ok) {
 				const error = await response.json();
-				throw new Error(error.detail || 'Failed to create VM');
+				throw new Error(error.detail || "Failed to create VM");
 			}
 
 			const result = await response.json();
@@ -297,8 +331,10 @@
 				onSuccess?.(result.job_id);
 			}
 		} catch (error) {
-			console.error('Failed to create VM:', error);
-			toastStore.error(error instanceof Error ? error.message : 'Failed to create VM');
+			console.error("Failed to create VM:", error);
+			toastStore.error(
+				error instanceof Error ? error.message : "Failed to create VM",
+			);
 		} finally {
 			isSubmitting = false;
 		}
@@ -308,50 +344,50 @@
 	$effect(() => {
 		if (!isOpen) {
 			vmData = {
-				vm_name: '',
+				vm_name: "",
 				gb_ram: 4,
 				cpu_cores: 2,
-				storage_class: '',
-				vm_clustered: false
+				storage_class: "",
+				vm_clustered: false,
 			};
-			deploymentMode = 'host';
-			targetHost = '';
-			targetCluster = '';
+			deploymentMode = "host";
+			targetHost = "";
+			targetCluster = "";
 			diskData = {
 				disk_size_gb: 100,
-				disk_type: 'Dynamic',
-				controller_type: 'SCSI'
+				disk_type: "Dynamic",
+				controller_type: "SCSI",
 			};
 			nicData = {
-				network: '',
-				adapter_name: ''
+				network: "",
+				adapter_name: "",
 			};
 			guestLocalAdmin = {
-				guest_la_uid: '',
-				guest_la_pw: ''
+				guest_la_uid: "",
+				guest_la_pw: "",
 			};
 			domainJoinEnabled = false;
 			domainJoinData = {
-				guest_domain_join_target: '',
-				guest_domain_join_uid: '',
-				guest_domain_join_pw: '',
-				guest_domain_join_ou: ''
+				guest_domain_join_target: "",
+				guest_domain_join_uid: "",
+				guest_domain_join_pw: "",
+				guest_domain_join_ou: "",
 			};
 			ansibleEnabled = false;
 			ansibleData = {
-				cnf_ansible_ssh_user: '',
-				cnf_ansible_ssh_key: ''
+				cnf_ansible_ssh_user: "",
+				cnf_ansible_ssh_key: "",
 			};
 			staticIpEnabled = false;
 			staticIpData = {
-				guest_v4_ip_addr: '',
+				guest_v4_ip_addr: "",
 				guest_v4_cidr_prefix: 24,
-				guest_v4_default_gw: '',
-				guest_v4_dns1: '',
-				guest_v4_dns2: '',
-				guest_net_dns_suffix: ''
+				guest_v4_default_gw: "",
+				guest_v4_dns1: "",
+				guest_v4_dns2: "",
+				guest_net_dns_suffix: "",
 			};
-			imageName = '';
+			imageName = "";
 			errors = {};
 		}
 	});
@@ -359,13 +395,17 @@
 	// Fetch available clusters
 	$effect(() => {
 		if (isOpen) {
-			fetch('/api/v1/clusters')
-				.then(res => res.json())
-				.then(clusters => {
+			fetch("/api/v1/clusters")
+				.then((res) => res.json())
+				.then((clusters) => {
 					// Filter clusters with at least one connected host
-					availableClusters = clusters.filter((c: any) => c.host_count > 0);
+					availableClusters = clusters.filter(
+						(c: any) => c.host_count > 0,
+					);
 				})
-				.catch(err => console.error('Failed to fetch clusters:', err));
+				.catch((err) =>
+					console.error("Failed to fetch clusters:", err),
+				);
 		}
 	});
 </script>
@@ -922,28 +962,35 @@
 		gap: 1.5rem;
 	}
 
-        .radio-group {
-                display: flex;
-                flex-direction: column;
-                gap: 0.5rem;
-        }
-
-        .radio-label {
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
-                cursor: pointer;
-                font-size: 0.875rem;
-                color: var(--text-primary);
-        }
-
-        .radio-label input[type='radio'] {
-                margin: 0;
-        }
-
+	.radio-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
 	}
 
-	.checkbox-label input[type='checkbox'] {
+	.radio-label {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		cursor: pointer;
+		font-size: 0.875rem;
+		color: var(--text-primary);
+	}
+
+	.radio-label input[type="radio"] {
+		margin: 0;
+	}
+
+	.checkbox-label {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		cursor: pointer;
+		font-size: 0.875rem;
+		color: var(--text-primary);
+	}
+
+	.checkbox-label input[type="checkbox"] {
 		margin: 0;
 	}
 
