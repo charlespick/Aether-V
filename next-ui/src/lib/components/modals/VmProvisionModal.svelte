@@ -179,10 +179,12 @@
 				"network",
 				"guest_la_uid",
 				"guest_la_pw",
-				...(deploymentMode === "host"
-					? ["target_host"]
-					: ["target_cluster"]),
 			]),
+
+			// Deployment target validation with clear error messages
+			...(deploymentMode === "host"
+				? validateRequired(fullData, ["target_host"])
+				: validateRequired(fullData, ["target_cluster"])),
 
 			// Range validations
 			validateRange(fullData, "gb_ram", 1, 512),
@@ -467,7 +469,7 @@
 							<option value="">Select a cluster...</option>
 							{#each availableClusters as cluster}
 								<option value={cluster.name}
-									>{cluster.name} ({cluster.connected_hosts} hosts)</option
+									>{cluster.name} ({cluster.host_count} hosts)</option
 								>
 							{/each}
 						</select>

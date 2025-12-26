@@ -1633,8 +1633,9 @@ async def create_managed_deployment(
             host_vms = [vm for vm in all_vms if vm.host == host.hostname]
             
             # Sum memory allocated to VMs (use memory_startup_gb for dynamic memory VMs)
+            # Handle None values by defaulting to 0 for accurate memory accounting
             used_memory = sum(
-                vm.memory_startup_gb if vm.memory_startup_gb else vm.memory_gb
+                (vm.memory_startup_gb or vm.memory_gb or 0)
                 for vm in host_vms
             )
             
@@ -1646,8 +1647,8 @@ async def create_managed_deployment(
         # Select host with most available memory
         target_host = max(host_memory_usage, key=lambda h: host_memory_usage[h])
         
-        # Auto-enable clustering if targeting a cluster
-        request.vm_clustered = True
+        # Auto-enable clustering when targeting a cluster
+        enable_clustering = True
         
     else:
         # Direct host targeting
@@ -1679,9 +1680,11 @@ async def create_managed_deployment(
         )
 
     # Submit the managed deployment job
+    # Use the target_host from the request (legacy endpoint only supports direct host targeting)
     job = await job_service.submit_managed_deployment_job(
         request=request,
-        resolved_target_host=target_host,
+        effective_target_host=target_host,
+        enable_clustering=False,  # Legacy path doesn't auto-enable clustering
     )
 
     return JobResult(

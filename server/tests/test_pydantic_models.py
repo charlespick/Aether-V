@@ -298,6 +298,92 @@ class TestManagedDeploymentRequestModel:
         assert request.vm_name == "test-vm"
         assert request.image_name is None
         assert request.guest_domain_join_target is None
+    
+    def test_cluster_targeting_valid(self):
+        """Test valid cluster targeting - target_cluster specified without target_host."""
+        request = ManagedDeploymentRequest(
+            target_cluster="prod-cluster",
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            disk_size_gb=50,
+            disk_type="Dynamic",
+            controller_type="SCSI",
+            storage_class="fast-ssd",
+            image_name="Windows Server 2022",
+            network="Production",
+            guest_la_uid="admin",
+            guest_la_pw="P@ssw0rd123",
+        )
+        
+        assert request.target_cluster == "prod-cluster"
+        assert request.target_host is None
+    
+    def test_host_targeting_valid(self):
+        """Test valid host targeting - target_host specified without target_cluster."""
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01",
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            disk_size_gb=50,
+            disk_type="Dynamic",
+            controller_type="SCSI",
+            storage_class="fast-ssd",
+            image_name="Windows Server 2022",
+            network="Production",
+            guest_la_uid="admin",
+            guest_la_pw="P@ssw0rd123",
+        )
+        
+        assert request.target_host == "hyperv-01"
+        assert request.target_cluster is None
+    
+    def test_both_target_host_and_cluster_fails(self):
+        """Test validation fails when both target_host and target_cluster are provided."""
+        with pytest.raises(ValidationError) as exc_info:
+            ManagedDeploymentRequest(
+                target_host="hyperv-01",
+                target_cluster="prod-cluster",
+                vm_name="test-vm",
+                gb_ram=4,
+                cpu_cores=2,
+                disk_size_gb=50,
+                disk_type="Dynamic",
+                controller_type="SCSI",
+                storage_class="fast-ssd",
+                image_name="Windows Server 2022",
+                network="Production",
+                guest_la_uid="admin",
+                guest_la_pw="P@ssw0rd123",
+            )
+        
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        error_msg = str(errors[0]["ctx"]["error"])
+        assert "Cannot specify both target_host and target_cluster" in error_msg
+    
+    def test_neither_target_host_nor_cluster_fails(self):
+        """Test validation fails when neither target_host nor target_cluster is provided."""
+        with pytest.raises(ValidationError) as exc_info:
+            ManagedDeploymentRequest(
+                vm_name="test-vm",
+                gb_ram=4,
+                cpu_cores=2,
+                disk_size_gb=50,
+                disk_type="Dynamic",
+                controller_type="SCSI",
+                storage_class="fast-ssd",
+                image_name="Windows Server 2022",
+                network="Production",
+                guest_la_uid="admin",
+                guest_la_pw="P@ssw0rd123",
+            )
+        
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        error_msg = str(errors[0]["ctx"]["error"])
+        assert "Must specify either target_host or target_cluster" in error_msg
 
 
 class TestJobEnvelopeModels:

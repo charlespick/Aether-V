@@ -386,7 +386,8 @@ class JobService:
     async def submit_managed_deployment_job(
         self,
         request: ManagedDeploymentRequest,
-        resolved_target_host: Optional[str] = None,
+        effective_target_host: Optional[str] = None,
+        enable_clustering: bool = False,
     ) -> Job:
         """Submit a managed deployment job using the Pydantic-based protocol.
 
@@ -401,13 +402,19 @@ class JobService:
         
         Args:
             request: The managed deployment request from the API
-            resolved_target_host: The resolved target host (used when cluster is specified)
+            effective_target_host: The host to deploy to. When cluster targeting is used,
+                this contains the cluster-selected host. When direct host targeting is used,
+                this contains the user-specified target_host. If None, falls back to
+                request.target_host (for backward compatibility).
+            enable_clustering: Whether to enable VM clustering. Automatically set to True
+                when using cluster-based targeting. When True, the vm_clustered flag will
+                be applied during VM creation.
         """
         if not self._started or self._queue is None:
             raise RuntimeError("Job service is not running")
 
-        # Use resolved target host if provided (cluster selection), otherwise use request's target_host
-        target_host = resolved_target_host if resolved_target_host else (
+        # Determine the target host: use effective_target_host if provided, otherwise fall back to request's target_host
+        target_host = effective_target_host if effective_target_host else (
             request.target_host.strip() if request.target_host else None
         )
         if not target_host:
@@ -415,6 +422,12 @@ class JobService:
                 "Managed deployment job requires a target host")
 
         job_id = str(uuid.uuid4())
+        
+        # Apply clustering configuration if cluster targeting was used
+        request_data = request.model_dump()
+        if enable_clustering:
+            request_data["vm_clustered"] = True
+        
         job = Job(
             job_id=job_id,
             job_type="managed_deployment",
@@ -422,7 +435,7 @@ class JobService:
             created_at=datetime.now(timezone.utc),
             target_host=target_host,
             parameters={
-                "request": request.model_dump(),
+                "request": request_data,
             },
         )
 
