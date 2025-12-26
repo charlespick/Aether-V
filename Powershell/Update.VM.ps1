@@ -35,15 +35,11 @@ function Add-ClusteredVmViaCim {
     
     # Add the VM to the cluster
     # This creates: Resource Group, Virtual Machine resource, and VM Configuration resource
-    $result = Invoke-CimMethod `
+    Invoke-CimMethod `
         -InputObject $cluster `
         -MethodName AddVirtualMachine `
         -Arguments @{ VirtualMachine = $VmName } `
-        -ErrorAction Stop
-    
-    if ($result.ReturnValue -ne 0) {
-        throw "AddVirtualMachine failed with return code: $($result.ReturnValue)"
-    }
+        -ErrorAction Stop | Out-Null
 }
 
 function Remove-ClusteredVmViaCim {
