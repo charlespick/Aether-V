@@ -65,13 +65,13 @@ class VmSpec(BaseModel):
         None,
         description="Name of the storage class where VM configuration files and disks will be stored",
     )
-    vm_clustered: bool = Field(
-        False,
-        description="Request that the new VM be registered with the Failover Cluster",
-    )
     os_family: Optional[OSFamily] = Field(
         None,
         description="Operating system family (windows or linux). Used to configure secure boot settings. If not specified, defaults to windows.",
+    )
+    vm_clustered: Optional[bool] = Field(
+        default=None,
+        description="Register the VM with the Failover Cluster (used only in vm.update operation after initialization)",
     )
 
     model_config = ConfigDict(
@@ -81,7 +81,6 @@ class VmSpec(BaseModel):
                 "gb_ram": 4,
                 "cpu_cores": 2,
                 "storage_class": "fast-ssd",
-                "vm_clustered": False,
                 "os_family": "windows",
             }
         }

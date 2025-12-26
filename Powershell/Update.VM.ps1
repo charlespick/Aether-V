@@ -1,3 +1,169 @@
+function Add-ClusteredVmViaCim {
+    <#
+    .SYNOPSIS
+        Register a VM with the failover cluster using CIM/WMI.
+    
+    .DESCRIPTION
+        Uses root\mscluster WMI namespace to register a VM with the cluster.
+        This method works remotely via WinRM, unlike PowerShell clustering cmdlets.
+    
+    .PARAMETER ClusterName
+        Name of the failover cluster
+    
+    .PARAMETER VmName
+        Name of the VM to register
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ClusterName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$VmName
+    )
+    
+    # Locate the cluster object
+    $cluster = Get-CimInstance `
+        -Namespace root/mscluster `
+        -ClassName MSCluster_Cluster `
+        -ErrorAction Stop |
+        Where-Object { $_.Name -eq $ClusterName }
+    
+    if (-not $cluster) {
+        throw "Cluster '$ClusterName' not found in root/mscluster namespace."
+    }
+    
+    # Add the VM to the cluster
+    # This creates: Resource Group, Virtual Machine resource, and VM Configuration resource
+    Invoke-CimMethod `
+        -InputObject $cluster `
+        -MethodName AddVirtualMachine `
+        -Arguments @{ VirtualMachine = $VmName } `
+        -ErrorAction Stop | Out-Null
+}
+
+function Remove-ClusteredVmViaCim {
+    <#
+    .SYNOPSIS
+        Unregister a VM from the failover cluster using CIM/WMI.
+    
+    .DESCRIPTION
+        Uses root\mscluster WMI namespace to remove a VM from the cluster.
+        This method works remotely via WinRM, unlike PowerShell clustering cmdlets.
+    
+    .PARAMETER VmId
+        Hyper-V VMID (GUID) of the VM to unregister
+    
+    .PARAMETER VmName
+        Name of the VM (used for error messages)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$VmId,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$VmName
+    )
+    
+    $vmIdUpper = $VmId.ToUpper()
+    
+    # Locate the clustered VM Configuration resource by VmID
+    $vmCfgRes = Get-CimInstance `
+        -Namespace root/mscluster `
+        -ClassName MSCluster_Resource `
+        -ErrorAction Stop |
+        Where-Object { $_.Type -eq "Virtual Machine Configuration" } |
+        Where-Object {
+            $_.PrivateProperties -and
+            $_.PrivateProperties.VmID -and
+            ($_.PrivateProperties.VmID.ToString().ToUpper() -eq $vmIdUpper)
+        }
+    
+    if (-not $vmCfgRes) {
+        throw "No clustered VM Configuration resource found for VM '$VmName' (VMID: $VmId)."
+    }
+    
+    if (@($vmCfgRes).Count -gt 1) {
+        throw "Multiple VM Configuration resources matched VMID $VmId for VM '$VmName'. Aborting."
+    }
+    
+    # OwnerGroup is the authoritative cluster group name
+    $groupName = $vmCfgRes.OwnerGroup
+    
+    if (-not $groupName) {
+        throw "Failed to determine OwnerGroup for VM Configuration resource."
+    }
+    
+    # Enumerate resources in the group
+    $groupResources = Get-CimInstance `
+        -Namespace root/mscluster `
+        -ClassName MSCluster_Resource `
+        -ErrorAction Stop |
+        Where-Object { $_.OwnerGroup -eq $groupName }
+    
+    $vmRes = $groupResources | Where-Object { $_.Type -eq "Virtual Machine" }
+    $vmCfgRes2 = $groupResources | Where-Object { $_.Type -eq "Virtual Machine Configuration" }
+    
+    if (-not $vmRes) {
+        throw "Virtual Machine resource not found in group '$groupName'."
+    }
+    
+    if (-not $vmCfgRes2) {
+        throw "VM Configuration resource not found in group '$groupName'."
+    }
+    
+    # Safety check: ensure GUID-matched resource is the one in the group
+    if ($vmCfgRes2.Name -ne $vmCfgRes.Name) {
+        throw "Safety check failed: GUID-matched config '$($vmCfgRes.Name)' does not match group config '$($vmCfgRes2.Name)'."
+    }
+    
+    # Delete resources in order: VM resource first, then configuration
+    Invoke-CimMethod `
+        -InputObject $vmRes `
+        -MethodName DeleteResource `
+        -Arguments @{
+            Options = 0
+            Reason  = "Aether-V uncluster (delete VM resource)"
+        } `
+        -ErrorAction Stop | Out-Null
+    
+    Invoke-CimMethod `
+        -InputObject $vmCfgRes2 `
+        -MethodName DeleteResource `
+        -Arguments @{
+            Options = 0
+            Reason  = "Aether-V uncluster (delete VM configuration)"
+        } `
+        -ErrorAction Stop | Out-Null
+    
+    # Delete the now-empty resource group
+    $groupObj = Get-CimInstance `
+        -Namespace root/mscluster `
+        -ClassName MSCluster_ResourceGroup `
+        -ErrorAction Stop |
+        Where-Object { $_.Name -eq $groupName }
+    
+    if (-not $groupObj) {
+        throw "Failed to locate ResourceGroup object '$groupName'."
+    }
+    
+    try {
+        Invoke-CimMethod `
+            -InputObject $groupObj `
+            -MethodName DeleteGroup `
+            -Arguments @{ Reason = "Aether-V uncluster" } `
+            -ErrorAction Stop | Out-Null
+    }
+    catch {
+        # Fallback without Reason parameter if it fails
+        Invoke-CimMethod `
+            -InputObject $groupObj `
+            -MethodName DeleteGroup `
+            -ErrorAction Stop | Out-Null
+    }
+}
+
 function Invoke-ProvisioningUpdateVm {
     <#
     .SYNOPSIS
@@ -18,6 +184,7 @@ function Invoke-ProvisioningUpdateVm {
         - host_recovery_action: string ("none", "resume", "always-start")
         - host_stop_action: string ("save", "stop", "shut-down")
         - integration_services_*: bool flags
+        - vm_clustered: bool (register or unregister from failover cluster)
     
     .OUTPUTS
         Hashtable with update results
@@ -255,6 +422,80 @@ function Invoke-ProvisioningUpdateVm {
         }
     }
 
+    # Cluster registration (must be done after guest initialization is complete)
+    # Uses CIM/WMI instead of PowerShell cmdlets because clustering cmdlets don't work remotely
+    if ($ResourceSpec.ContainsKey('vm_clustered')) {
+        $desiredClustered = [bool]$ResourceSpec['vm_clustered']
+        
+        # Determine cluster name using CIM
+        # Query MSCluster_Cluster directly - if it exists, we're on a cluster node
+        $clusterName = $null
+        try {
+            $cluster = Get-CimInstance `
+                -Namespace root/mscluster `
+                -ClassName MSCluster_Cluster `
+                -ErrorAction Stop
+            
+            if ($cluster) {
+                # Typically only one cluster per namespace
+                if ($cluster -is [array]) {
+                    $clusterName = $cluster[0].Name
+                }
+                else {
+                    $clusterName = $cluster.Name
+                }
+            }
+        }
+        catch {
+            # Not a cluster node or WMI query failed
+        }
+        
+        if (-not $clusterName) {
+            if ($desiredClustered) {
+                throw "Host is not part of a failover cluster. Cannot enable clustering for VM."
+            }
+            else {
+                $warnings += "Host is not part of a failover cluster - cannot modify cluster state"
+            }
+        }
+        else {
+            # Check current cluster registration status using CIM
+            $vmCfgRes = Get-CimInstance `
+                -Namespace root/mscluster `
+                -ClassName MSCluster_Resource `
+                -ErrorAction SilentlyContinue |
+                Where-Object { $_.Type -eq "Virtual Machine Configuration" } |
+                Where-Object {
+                    $_.PrivateProperties -and
+                    $_.PrivateProperties.VmID -and
+                    ($_.PrivateProperties.VmID.ToString().ToUpper() -eq $vmId.ToUpper())
+                }
+            
+            $currentlyClustered = $null -ne $vmCfgRes
+            
+            if ($desiredClustered -and -not $currentlyClustered) {
+                # Register VM with failover cluster using CIM
+                try {
+                    Add-ClusteredVmViaCim -ClusterName $clusterName -VmName $vmName
+                    $updates += "Registered VM with failover cluster: $clusterName"
+                }
+                catch {
+                    throw "Failed to register VM '$vmName' with failover cluster '$clusterName': $_"
+                }
+            }
+            elseif (-not $desiredClustered -and $currentlyClustered) {
+                # Unregister VM from failover cluster using CIM
+                try {
+                    Remove-ClusteredVmViaCim -VmId $vmId -VmName $vmName
+                    $updates += "Unregistered VM from failover cluster: $clusterName"
+                }
+                catch {
+                    throw "Failed to unregister VM '$vmName' from failover cluster '$clusterName': $_"
+                }
+            }
+        }
+    }
+
     # Build result
     $result = @{
         vm_id = $vmId
@@ -268,6 +509,10 @@ function Invoke-ProvisioningUpdateVm {
     }
     elseif ($updates.Count -gt 0) {
         $result['message'] = "Applied $($updates.Count) update(s)"
+    }
+    else {
+        # Only warnings, no updates
+        $result['message'] = "Completed with $($warnings.Count) warning(s)"
     }
 
     return $result

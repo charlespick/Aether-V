@@ -287,9 +287,6 @@ class VMCreateRequest(BaseModel):
     storage_class: Optional[str] = Field(
         None, description="Name of the storage class where VM configuration files will be stored",
     )
-    vm_clustered: bool = Field(
-        False, description="Request that the new VM be registered with the Failover Cluster",
-    )
     os_family: Optional[OSFamily] = Field(
         None,
         description="Operating system family (windows or linux) used to configure secure boot settings",
@@ -302,6 +299,10 @@ class VMUpdateRequest(BaseModel):
     All fields are optional - only provided fields will be updated.
     Based on Terraform schema mutable properties.
     """
+    
+    vm_clustered: Optional[bool] = Field(
+        None, description="Register or unregister the VM with the Failover Cluster",
+    )
 
     # Core hardware - mutable
     cpu_cores: Optional[int] = Field(

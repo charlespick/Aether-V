@@ -2377,11 +2377,12 @@ class VMEditOverlay extends BaseOverlay {
         const currentCpuCores = this.vmData.cpu_cores ?? 2;
         const currentMemoryGb = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? 4;
         const currentStorageClass = this.vmData.storage_class ?? '';
-        const currentVmClustered = this.vmData.vm_clustered ?? false;
+        const currentVmClustered = this.vmData.clustered ?? false;
 
         // Store original values for PATCH diff
         this.originalCpuCores = currentCpuCores;
         this.originalMemoryGb = currentMemoryGb;
+        this.originalVmClustered = currentVmClustered;
 
         this.rootEl.innerHTML = `
             <form id="vm-edit-form" class="schema-form-body">
@@ -2490,6 +2491,9 @@ class VMEditOverlay extends BaseOverlay {
             }
             if (body.gb_ram !== this.originalMemoryGb) {
                 patchBody.startup_memory_gb = body.gb_ram;
+            }
+            if (body.vm_clustered !== this.originalVmClustered) {
+                patchBody.vm_clustered = body.vm_clustered;
             }
 
             // Prevent sending empty PATCH body

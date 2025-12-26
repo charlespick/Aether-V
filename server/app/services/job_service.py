@@ -1111,7 +1111,6 @@ class JobService:
             "gb_ram": request.gb_ram,
             "cpu_cores": request.cpu_cores,
             "storage_class": request.storage_class,
-            "vm_clustered": request.vm_clustered,
             "os_family": detected_os_family.value,
         }
 
@@ -1283,6 +1282,49 @@ class JobService:
             job.job_id,
             "Guest configuration sent successfully",
         )
+
+        # Step 5: Register VM with failover cluster if requested
+        # This must happen AFTER guest initialization to avoid VM migration during KVP exchange
+        if request.vm_clustered:
+            await self._append_job_output(
+                job.job_id,
+                "Registering VM with failover cluster...",
+            )
+
+            # Build update spec to enable clustering
+            update_spec_dict = {
+                "vm_id": vm_id,
+                "vm_name": request.vm_name,
+                "vm_clustered": True,
+            }
+
+            update_job_definition = {
+                "schema": {"id": "vm.update", "version": 1},
+                "fields": update_spec_dict,
+            }
+
+            update_job = await self._queue_child_job(
+                job,
+                job_type="update_vm",
+                schema_id="vm.update",
+                payload=update_job_definition,
+            )
+
+            update_job_result = await self._wait_for_child_job_completion(
+                job.job_id, update_job.job_id
+            )
+
+            if update_job_result.status != JobStatus.COMPLETED:
+                # Log warning but don't fail the entire deployment
+                await self._append_job_output(
+                    job.job_id,
+                    f"Warning: Cluster registration failed: {update_job_result.error or 'unknown error'}",
+                )
+            else:
+                await self._append_job_output(
+                    job.job_id,
+                    "VM successfully registered with failover cluster",
+                )
 
         await self._append_job_output(
             job.job_id,

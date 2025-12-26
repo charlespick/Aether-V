@@ -901,7 +901,6 @@ async def create_vm_resource(
         gb_ram=request.gb_ram,
         cpu_cores=request.cpu_cores,
         storage_class=request.storage_class,
-        vm_clustered=request.vm_clustered,
         os_family=request.os_family,
     )
 
