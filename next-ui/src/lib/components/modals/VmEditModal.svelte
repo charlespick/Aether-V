@@ -402,6 +402,30 @@
 							</div>
 						{/if}
 					</div>
+
+					<div class="border-t border-border pt-4 mt-4">
+						<h3 class="text-sm font-semibold text-text-primary mb-2">
+							High Availability
+						</h3>
+						<div class="flex items-center gap-2">
+							<input
+								type="checkbox"
+								id="vm_clustered"
+								bind:checked={formData.vm_clustered}
+								class="rounded border-border text-primary focus:ring-primary"
+							/>
+							<label
+								for="vm_clustered"
+								class="text-sm font-medium text-text-primary"
+							>
+								Enable Failover Clustering
+							</label>
+						</div>
+						<p class="text-xs text-text-secondary mt-1 ml-6">
+							Register this VM with the failover cluster for high
+							availability
+						</p>
+					</div>
 				</div>
 			{:else if activeTab === "security"}
 				<FormField
@@ -439,30 +463,6 @@
 					>
 						Enable Trusted Platform Module (TPM)
 					</label>
-				</div>
-
-				<div class="mt-4 border-t border-border pt-4">
-					<h3 class="text-sm font-semibold text-text-primary mb-2">
-						High Availability
-					</h3>
-					<div class="flex items-center gap-2">
-						<input
-							type="checkbox"
-							id="vm_clustered"
-							bind:checked={formData.vm_clustered}
-							class="rounded border-border text-primary focus:ring-primary"
-						/>
-						<label
-							for="vm_clustered"
-							class="text-sm font-medium text-text-primary"
-						>
-							Enable Failover Clustering
-						</label>
-					</div>
-					<p class="text-xs text-text-secondary mt-1 ml-6">
-						Register this VM with the failover cluster for high
-						availability
-					</p>
 				</div>
 			{:else if activeTab === "host"}
 				<div class="grid grid-cols-2 gap-4">
