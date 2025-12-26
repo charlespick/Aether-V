@@ -36,10 +36,9 @@
 		vm_clustered: false,
 	});
 
-	// Disk configuration
+	// Disk configuration (disk_type is inherited from the source image when cloning)
 	let diskData = $state({
 		disk_size_gb: 100,
-		disk_type: "Dynamic" as "Dynamic" | "Fixed",
 		controller_type: "SCSI" as "SCSI" | "IDE",
 	});
 
@@ -174,7 +173,6 @@
 				"gb_ram",
 				"cpu_cores",
 				"disk_size_gb",
-				"disk_type",
 				"controller_type",
 				"network",
 				"guest_la_uid",
@@ -277,9 +275,10 @@
 				cpu_cores: vmData.cpu_cores,
 				storage_class: vmData.storage_class || undefined,
 				vm_clustered: vmData.vm_clustered,
-				// Disk - if image_name provided, disk will be created
+				// Disk configuration (disk_type is inherited from the source image when cloning)
 				image_name: imageName || undefined,
 				disk_size_gb: diskData.disk_size_gb,
+				controller_type: diskData.controller_type,
 				// Network
 				network: nicData.network,
 				// Guest config - local admin (required)
@@ -345,7 +344,6 @@
 			targetCluster = "";
 			diskData = {
 				disk_size_gb: 100,
-				disk_type: "Dynamic",
 				controller_type: "SCSI",
 			};
 			nicData = {
@@ -590,19 +588,7 @@
 					/>
 				</FormField>
 
-				<FormField label="Disk Type" required error={errors.disk_type}>
-					<select
-						bind:value={diskData.disk_type}
-						disabled={isSubmitting}
-					>
-						<option value="Dynamic"
-							>Dynamic (grows as needed)</option
-						>
-						<option value="Fixed"
-							>Fixed (allocates full size)</option
-						>
-					</select>
-				</FormField>
+				<!-- Note: Disk type (Dynamic/Fixed) is inherited from the source image when cloning -->
 
 				<FormField
 					label="Controller Type"

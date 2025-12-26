@@ -1601,7 +1601,10 @@ async def create_managed_deployment(
         )
 
     # Resolve target host from cluster if cluster is specified
-    target_host = None
+    # Initialize deployment configuration that may be modified based on targeting mode
+    target_host: Optional[str] = None
+    enable_clustering = False  # Will be set True if cluster targeting is used
+    
     if request.target_cluster:
         # Get cluster and validate it exists
         cluster_name = request.target_cluster.strip()
@@ -1680,11 +1683,12 @@ async def create_managed_deployment(
         )
 
     # Submit the managed deployment job
-    # Use the target_host from the request (legacy endpoint only supports direct host targeting)
+    # Pass the resolved target host and clustering configuration
+    # enable_clustering is True when cluster targeting is used (auto-registers VM with failover cluster)
     job = await job_service.submit_managed_deployment_job(
         request=request,
         effective_target_host=target_host,
-        enable_clustering=False,  # Legacy path doesn't auto-enable clustering
+        enable_clustering=enable_clustering,
     )
 
     return JobResult(

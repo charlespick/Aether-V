@@ -1177,16 +1177,16 @@ class JobService:
         if request.image_name:
             await self._append_job_output(
                 job.job_id,
-                "Creating disk...",
+                "Creating disk by cloning image...",
             )
 
             # Build disk spec dict from flat request fields
+            # Note: disk_type is not specified because it's inherited from the source image when cloning
             disk_dict = {
                 "vm_id": vm_id,
                 "image_name": request.image_name,
                 "disk_size_gb": request.disk_size_gb,
-                "disk_type": "Dynamic",
-                "controller_type": "SCSI",
+                "controller_type": request.controller_type,
             }
 
             disk_job_definition = {
