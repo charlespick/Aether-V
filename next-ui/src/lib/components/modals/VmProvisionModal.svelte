@@ -97,15 +97,6 @@
 	let availableClusters = $state<
 		Array<{ name: string; connected_hosts: number }>
 	>([]);
-	let selectedHost = $derived(
-		$inventoryStore?.hosts?.find((h) => h.hostname === targetHost),
-	);
-	let availableStorageClasses = $derived(
-		selectedHost?.resources?.storage_classes.map((sc) => sc.name) || [],
-	);
-	let availableNetworks = $derived(
-		selectedHost?.resources?.networks.map((n) => n.name) || [],
-	);
 
 	// Auto-enable clustering when cluster mode is selected
 	$effect(() => {
@@ -113,9 +104,6 @@
 			vmData.vm_clustered = true;
 		}
 	});
-
-	// Mock data for images - API endpoint for images is not yet available
-	let availableImages = ["Windows Server 2022", "Ubuntu 22.04 LTS"];
 
 	let errors = $state<Record<string, string>>({});
 	let isSubmitting = $state(false);
@@ -487,16 +475,15 @@
 				{/if}
 				<FormField
 					label="Base Image"
-					description="Operating system image to clone"
-					required
+					description="Name of the golden image to clone"
 					error={errors.image_name}
 				>
-					<select bind:value={imageName} disabled={isSubmitting}>
-						<option value="">Select an image...</option>
-						{#each availableImages as image}
-							<option value={image}>{image}</option>
-						{/each}
-					</select>
+					<input
+						type="text"
+						bind:value={imageName}
+						placeholder="e.g., Windows Server 2022"
+						disabled={isSubmitting}
+					/>
 				</FormField>
 			</FormSection>
 
@@ -554,15 +541,12 @@
 					description="Optional: storage tier or class identifier"
 					error={errors.storage_class}
 				>
-					<select
+					<input
+						type="text"
 						bind:value={vmData.storage_class}
+						placeholder="e.g., fast-ssd"
 						disabled={isSubmitting}
-					>
-						<option value="">Select a storage class...</option>
-						{#each availableStorageClasses as sc}
-							<option value={sc}>{sc}</option>
-						{/each}
-					</select>
+					/>
 				</FormField>
 
 				<FormField
@@ -640,19 +624,16 @@
 			>
 				<FormField
 					label="Network"
-					description="Hyper-V virtual switch to connect to"
+					description="Name of Hyper-V virtual switch to connect to"
 					required
 					error={errors.network}
 				>
-					<select
+					<input
+						type="text"
 						bind:value={nicData.network}
+						placeholder="e.g., External-Network"
 						disabled={isSubmitting}
-					>
-						<option value="">Select a network...</option>
-						{#each availableNetworks as net}
-							<option value={net}>{net}</option>
-						{/each}
-					</select>
+					/>
 				</FormField>
 
 				<FormField
@@ -667,6 +648,108 @@
 						disabled={isSubmitting}
 					/>
 				</FormField>
+
+				<!-- Static IP Configuration -->
+				<FormField>
+					<label class="checkbox-label">
+						<input
+							type="checkbox"
+							bind:checked={staticIpEnabled}
+							disabled={isSubmitting}
+						/>
+						<span>Configure Static IP</span>
+					</label>
+				</FormField>
+
+				{#if staticIpEnabled}
+					<div class="parameter-set-note">
+						IP address, CIDR prefix, gateway, and primary DNS must
+						be provided together.
+					</div>
+
+					<FormField
+						label="IP Address"
+						description="Static IPv4 address"
+						required={staticIpEnabled}
+						error={errors.guest_v4_ip_addr}
+					>
+						<input
+							type="text"
+							bind:value={staticIpData.guest_v4_ip_addr}
+							placeholder="e.g., 192.168.1.100"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="CIDR Prefix"
+						description="Subnet mask in CIDR notation"
+						required={staticIpEnabled}
+						error={errors.guest_v4_cidr_prefix}
+					>
+						<input
+							type="number"
+							bind:value={staticIpData.guest_v4_cidr_prefix}
+							min="0"
+							max="32"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="Default Gateway"
+						description="IPv4 gateway address"
+						required={staticIpEnabled}
+						error={errors.guest_v4_default_gw}
+					>
+						<input
+							type="text"
+							bind:value={staticIpData.guest_v4_default_gw}
+							placeholder="e.g., 192.168.1.1"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="Primary DNS"
+						description="Primary DNS server"
+						required={staticIpEnabled}
+						error={errors.guest_v4_dns1}
+					>
+						<input
+							type="text"
+							bind:value={staticIpData.guest_v4_dns1}
+							placeholder="e.g., 192.168.1.10"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="Secondary DNS"
+						description="Optional: secondary DNS server"
+						error={errors.guest_v4_dns2}
+					>
+						<input
+							type="text"
+							bind:value={staticIpData.guest_v4_dns2}
+							placeholder="e.g., 192.168.1.11"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="DNS Suffix"
+						description="Optional: DNS search suffix"
+						error={errors.guest_net_dns_suffix}
+					>
+						<input
+							type="text"
+							bind:value={staticIpData.guest_net_dns_suffix}
+							placeholder="e.g., example.com"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+				{/if}
 			</FormSection>
 
 			<!-- Guest Configuration: Local Admin -->
@@ -828,115 +911,6 @@
 							placeholder="ssh-rsa AAAAB3..."
 							disabled={isSubmitting}
 						></textarea>
-					</FormField>
-				{/if}
-			</FormSection>
-
-			<!-- Guest Configuration: Static IP -->
-			<FormSection
-				title="Guest Configuration: Static IP"
-				description="Optional: configure static IPv4 address (otherwise DHCP)"
-				collapsible
-				defaultExpanded={false}
-			>
-				<FormField>
-					<label class="checkbox-label">
-						<input
-							type="checkbox"
-							bind:checked={staticIpEnabled}
-							disabled={isSubmitting}
-						/>
-						<span>Configure Static IP</span>
-					</label>
-				</FormField>
-
-				{#if staticIpEnabled}
-					<div class="parameter-set-note">
-						IP address, CIDR prefix, gateway, and primary DNS must
-						be provided together.
-					</div>
-
-					<FormField
-						label="IP Address"
-						description="Static IPv4 address"
-						required={staticIpEnabled}
-						error={errors.guest_v4_ip_addr}
-					>
-						<input
-							type="text"
-							bind:value={staticIpData.guest_v4_ip_addr}
-							placeholder="e.g., 192.168.1.100"
-							disabled={isSubmitting}
-						/>
-					</FormField>
-
-					<FormField
-						label="CIDR Prefix"
-						description="Subnet mask in CIDR notation"
-						required={staticIpEnabled}
-						error={errors.guest_v4_cidr_prefix}
-					>
-						<input
-							type="number"
-							bind:value={staticIpData.guest_v4_cidr_prefix}
-							min="0"
-							max="32"
-							disabled={isSubmitting}
-						/>
-					</FormField>
-
-					<FormField
-						label="Default Gateway"
-						description="IPv4 gateway address"
-						required={staticIpEnabled}
-						error={errors.guest_v4_default_gw}
-					>
-						<input
-							type="text"
-							bind:value={staticIpData.guest_v4_default_gw}
-							placeholder="e.g., 192.168.1.1"
-							disabled={isSubmitting}
-						/>
-					</FormField>
-
-					<FormField
-						label="Primary DNS"
-						description="Primary DNS server"
-						required={staticIpEnabled}
-						error={errors.guest_v4_dns1}
-					>
-						<input
-							type="text"
-							bind:value={staticIpData.guest_v4_dns1}
-							placeholder="e.g., 192.168.1.10"
-							disabled={isSubmitting}
-						/>
-					</FormField>
-
-					<FormField
-						label="Secondary DNS"
-						description="Optional: secondary DNS server"
-						error={errors.guest_v4_dns2}
-					>
-						<input
-							type="text"
-							bind:value={staticIpData.guest_v4_dns2}
-							placeholder="e.g., 192.168.1.11"
-							disabled={isSubmitting}
-						/>
-					</FormField>
-
-					<FormField
-						label="DNS Suffix"
-						description="Optional: DNS search suffix"
-						error={errors.guest_net_dns_suffix}
-					>
-						<input
-							type="text"
-							bind:value={staticIpData.guest_net_dns_suffix}
-							placeholder="e.g., example.com"
-							disabled={isSubmitting}
-						/>
 					</FormField>
 				{/if}
 			</FormSection>
