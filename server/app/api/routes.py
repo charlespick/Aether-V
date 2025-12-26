@@ -1644,14 +1644,14 @@ async def create_managed_deployment(
             host_memory_usage[host.hostname] = available_memory
         
         # Select host with most available memory
-        target_host = max(host_memory_usage, key=host_memory_usage.get)
+        target_host = max(host_memory_usage, key=lambda h: host_memory_usage[h])
         
         # Auto-enable clustering if targeting a cluster
         request.vm_clustered = True
         
     else:
         # Direct host targeting
-        target_host = request.target_host.strip()
+        target_host = request.target_host.strip() if request.target_host else None
     
     # Ensure the target host is specified and connected
     if not target_host:
