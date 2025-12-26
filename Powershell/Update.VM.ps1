@@ -431,17 +431,23 @@ function Invoke-ProvisioningUpdateVm {
     if ($ResourceSpec.ContainsKey('vm_clustered')) {
         $desiredClustered = [bool]$ResourceSpec['vm_clustered']
         
-        # Determine cluster name using CIM (same method as Inventory.Collect.ps1)
+        # Determine cluster name using CIM
+        # Query MSCluster_Cluster directly - if it exists, we're on a cluster node
         $clusterName = $null
         try {
-            $clusterNode = Get-CimInstance `
+            $cluster = Get-CimInstance `
                 -Namespace root/mscluster `
-                -ClassName MSCluster_Node `
-                -ErrorAction Stop |
-                Where-Object { $_.Name -eq $env:COMPUTERNAME }
+                -ClassName MSCluster_Cluster `
+                -ErrorAction Stop
             
-            if ($clusterNode -and $clusterNode.Cluster) {
-                $clusterName = $clusterNode.Cluster
+            if ($cluster) {
+                # Typically only one cluster per namespace
+                if ($cluster -is [array]) {
+                    $clusterName = $cluster[0].Name
+                }
+                else {
+                    $clusterName = $cluster.Name
+                }
             }
         }
         catch {
