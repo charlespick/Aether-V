@@ -126,3 +126,28 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/server
         run: |
           .venv/bin/pytest tests/test_noop_operations.py -v
+
+  svelte:
+    name: Svelte build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: next-ui/package-lock.json
+
+      - name: Build Svelte UI
+        run: make build-next-ui
+
+      - name: Check build output
+        run: |
+          if [ ! -d "next-ui/build" ]; then
+            echo "Build directory not found!"
+            exit 1
+          fi
+          echo "✅ Svelte build successful"

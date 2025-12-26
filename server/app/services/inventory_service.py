@@ -15,8 +15,14 @@ from ..core.config import settings
 from ..core.models import (
     Cluster,
     Host,
+    HostRecoveryAction,
+    HostResources,
+    HostStopAction,
+    Network,
+    NetworkModel,
     NotificationLevel,
     OSFamily,
+    StorageClass,
     VM,
     VMNetworkAdapter,
     VMState,
@@ -339,6 +345,7 @@ class InventoryService:
         dummy_vms = [
             # VMs on hyperv01
             VM(
+                id="vm-web-01",
                 name="web-server-01",
                 host="hyperv01.lab.local",
                 state=VMState.RUNNING,
@@ -349,8 +356,38 @@ class InventoryService:
                 ip_addresses=["10.0.0.21"],
                 notes="Primary web node",
                 created_at=now - timedelta(days=5),
+                disks=[
+                    VMDisk(
+                        id="disk-web-01-os",
+                        name="web-server-01-os.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\web-server-01\\web-server-01-os.vhdx",
+                        type="VHDX",
+                        size_gb=80.0,
+                        file_size_gb=42.3
+                    ),
+                    VMDisk(
+                        id="disk-web-01-data",
+                        name="web-server-01-data.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\web-server-01\\web-server-01-data.vhdx",
+                        type="VHDX",
+                        size_gb=200.0,
+                        file_size_gb=87.5
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-web-01-eth0",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Production-vSwitch",
+                        vlan_id=100,
+                        network="Production",
+                        ip_addresses=["10.0.0.21"],
+                        mac_address="00:15:5D:01:02:03"
+                    ),
+                ],
             ),
             VM(
+                id="vm-db-01",
                 name="db-server-01",
                 host="hyperv01.lab.local",
                 state=VMState.RUNNING,
@@ -361,8 +398,55 @@ class InventoryService:
                 ip_addresses=["10.0.0.22"],
                 notes="Database cluster member",
                 created_at=now - timedelta(days=10),
+                disks=[
+                    VMDisk(
+                        id="disk-db-01-os",
+                        name="db-server-01-os.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\db-server-01\\db-server-01-os.vhdx",
+                        type="VHDX",
+                        size_gb=100.0,
+                        file_size_gb=55.2
+                    ),
+                    VMDisk(
+                        id="disk-db-01-data",
+                        name="db-server-01-data.vhdx",
+                        path="C:\\ClusterStorage\\Volume2\\db-server-01\\db-server-01-data.vhdx",
+                        type="VHDX",
+                        size_gb=500.0,
+                        file_size_gb=312.8
+                    ),
+                    VMDisk(
+                        id="disk-db-01-logs",
+                        name="db-server-01-logs.vhdx",
+                        path="C:\\ClusterStorage\\Volume2\\db-server-01\\db-server-01-logs.vhdx",
+                        type="VHDX",
+                        size_gb=250.0,
+                        file_size_gb=145.6
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-db-01-eth0",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Production-vSwitch",
+                        vlan_id=100,
+                        network="Production",
+                        ip_addresses=["10.0.0.22"],
+                        mac_address="00:15:5D:01:02:04"
+                    ),
+                    VMNetworkAdapter(
+                        id="nic-db-01-eth1",
+                        adapter_name="Network Adapter 2",
+                        virtual_switch="Storage-vSwitch",
+                        vlan_id=200,
+                        network="Storage",
+                        ip_addresses=["192.168.100.22"],
+                        mac_address="00:15:5D:01:03:04"
+                    ),
+                ],
             ),
             VM(
+                id="vm-win-app-01",
                 name="win-app-01",
                 host="hyperv01.lab.local",
                 state=VMState.OFF,
@@ -373,9 +457,31 @@ class InventoryService:
                 ip_addresses=["10.0.0.23"],
                 notes="Legacy application host",
                 created_at=now - timedelta(days=2),
+                disks=[
+                    VMDisk(
+                        id="disk-win-app-01-c",
+                        name="win-app-01-c.vhdx",
+                        path="C:\\VMs\\win-app-01\\win-app-01-c.vhdx",
+                        type="VHDX",
+                        size_gb=127.0,
+                        file_size_gb=68.4
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-win-app-01-eth0",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Production-vSwitch",
+                        vlan_id=100,
+                        network="Production",
+                        ip_addresses=["10.0.0.23"],
+                        mac_address="00:15:5D:01:02:05"
+                    ),
+                ],
             ),
             # VMs on hyperv02
             VM(
+                id="vm-lb-01",
                 name="load-balancer-01",
                 host="hyperv02.lab.local",
                 state=VMState.RUNNING,
@@ -385,8 +491,38 @@ class InventoryService:
                 os_name="Alpine Linux",
                 ip_addresses=["10.0.1.10"],
                 created_at=now - timedelta(days=7),
+                disks=[
+                    VMDisk(
+                        id="disk-lb-01-os",
+                        name="load-balancer-01.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\load-balancer-01\\load-balancer-01.vhdx",
+                        type="VHDX",
+                        size_gb=40.0,
+                        file_size_gb=12.1
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-lb-01-wan",
+                        adapter_name="WAN",
+                        virtual_switch="External-vSwitch",
+                        network="External",
+                        ip_addresses=["203.0.113.10"],
+                        mac_address="00:15:5D:02:01:01"
+                    ),
+                    VMNetworkAdapter(
+                        id="nic-lb-01-lan",
+                        adapter_name="LAN",
+                        virtual_switch="Production-vSwitch",
+                        vlan_id=100,
+                        network="Production",
+                        ip_addresses=["10.0.1.10"],
+                        mac_address="00:15:5D:02:01:02"
+                    ),
+                ],
             ),
             VM(
+                id="vm-mon-01",
                 name="monitoring-01",
                 host="hyperv02.lab.local",
                 state=VMState.RUNNING,
@@ -396,8 +532,38 @@ class InventoryService:
                 os_name="Debian 12",
                 ip_addresses=["10.0.1.11"],
                 created_at=now - timedelta(days=3),
+                disks=[
+                    VMDisk(
+                        id="disk-mon-01-os",
+                        name="monitoring-01-os.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\monitoring-01\\monitoring-01-os.vhdx",
+                        type="VHDX",
+                        size_gb=60.0,
+                        file_size_gb=28.7
+                    ),
+                    VMDisk(
+                        id="disk-mon-01-metrics",
+                        name="monitoring-01-metrics.vhdx",
+                        path="C:\\ClusterStorage\\Volume1\\monitoring-01\\monitoring-01-metrics.vhdx",
+                        type="VHDX",
+                        size_gb=300.0,
+                        file_size_gb=156.3
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-mon-01-mgmt",
+                        adapter_name="Management",
+                        virtual_switch="Production-vSwitch",
+                        vlan_id=100,
+                        network="Production",
+                        ip_addresses=["10.0.1.11"],
+                        mac_address="00:15:5D:02:02:01"
+                    ),
+                ],
             ),
             VM(
+                id="vm-backup",
                 name="backup-vm",
                 host="hyperv02.lab.local",
                 state=VMState.SAVED,
@@ -407,9 +573,31 @@ class InventoryService:
                 os_name="Windows Server 2019",
                 ip_addresses=["10.0.1.12"],
                 created_at=now - timedelta(days=15),
+                disks=[
+                    VMDisk(
+                        id="disk-backup-c",
+                        name="backup-vm-c.vhd",
+                        path="D:\\VMs\\backup-vm\\backup-vm-c.vhd",
+                        type="VHD",
+                        size_gb=80.0,
+                        file_size_gb=45.2
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-backup-eth0",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Production-vSwitch",
+                        vlan_id=100,
+                        network="Production",
+                        ip_addresses=["10.0.1.12"],
+                        mac_address="00:15:5D:02:03:01"
+                    ),
+                ],
             ),
             # VMs on dev host
             VM(
+                id="vm-test-01",
                 name="test-vm-01",
                 host="hyperv-dev01.lab.local",
                 state=VMState.RUNNING,
@@ -419,8 +607,29 @@ class InventoryService:
                 os_name="Ubuntu Desktop 22.04",
                 ip_addresses=["10.0.2.50"],
                 created_at=now - timedelta(days=1),
+                disks=[
+                    VMDisk(
+                        id="disk-test-01",
+                        name="test-vm-01.vhdx",
+                        path="C:\\VMs\\test-vm-01\\test-vm-01.vhdx",
+                        type="VHDX",
+                        size_gb=100.0,
+                        file_size_gb=52.8
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-test-01",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Dev-vSwitch",
+                        network="Development",
+                        ip_addresses=["10.0.2.50"],
+                        mac_address="00:15:5D:03:01:01"
+                    ),
+                ],
             ),
             VM(
+                id="vm-dev-ws",
                 name="dev-workstation",
                 host="hyperv-dev01.lab.local",
                 state=VMState.PAUSED,
@@ -430,6 +639,34 @@ class InventoryService:
                 os_name="Windows 11",
                 notes="Suspended while not in use",
                 created_at=now - timedelta(hours=8),
+                disks=[
+                    VMDisk(
+                        id="disk-dev-ws-c",
+                        name="dev-workstation-c.vhdx",
+                        path="C:\\VMs\\dev-workstation\\dev-workstation-c.vhdx",
+                        type="VHDX",
+                        size_gb=200.0,
+                        file_size_gb=125.4
+                    ),
+                    VMDisk(
+                        id="disk-dev-ws-d",
+                        name="dev-workstation-d.vhdx",
+                        path="C:\\VMs\\dev-workstation\\dev-workstation-d.vhdx",
+                        type="VHDX",
+                        size_gb=500.0,
+                        file_size_gb=278.9
+                    ),
+                ],
+                networks=[
+                    VMNetworkAdapter(
+                        id="nic-dev-ws",
+                        adapter_name="Network Adapter",
+                        virtual_switch="Dev-vSwitch",
+                        network="Development",
+                        ip_addresses=["10.0.2.51"],
+                        mac_address="00:15:5D:03:02:01"
+                    ),
+                ],
             ),
         ]
 
@@ -874,6 +1111,7 @@ class InventoryService:
                     error=None,
                     total_cpu_cores=host_data.get("total_cpu_cores", 0),
                     total_memory_gb=host_data.get("total_memory_gb", 0.0),
+                    resources=host_data.get("resources"),
                 ),
                 vms=vms,
                 expected_vm_keys=expected_keys,
@@ -1276,6 +1514,24 @@ class InventoryService:
             host_section.get("TotalMemoryGB"), default=0.0
         )
 
+        # Parse host resources
+        resources = None
+        try:
+            if "StorageClasses" in host_section or "Networks" in host_section:
+                resources = HostResources(
+                    version=host_section.get("Version", 1),
+                    schema_name=host_section.get("SchemaName", "hostresources"),
+                    storage_classes=[
+                        StorageClass(**sc) for sc in host_section.get("StorageClasses", [])
+                    ],
+                    networks=[
+                        Network(**net) for net in host_section.get("Networks", [])
+                    ],
+                    virtual_machines_path=host_section.get("VirtualMachinesPath", "")
+                )
+        except Exception as exc:
+            logger.warning("Failed to parse host resources for %s: %s", hostname, exc)
+
         vm_payload = payload.get("VirtualMachines")
 
         vms = self._deserialize_vms(hostname, vm_payload)
@@ -1283,6 +1539,7 @@ class InventoryService:
             "cluster": cluster_name,
             "total_cpu_cores": total_cpu_cores or 0,
             "total_memory_gb": total_memory_gb or 0.0,
+            "resources": resources,
         }
         return host_data, vms
 
@@ -1331,6 +1588,9 @@ class InventoryService:
             dynamic_memory_enabled = self._coerce_bool(
                 vm_data.get("DynamicMemoryEnabled")
             )
+            dynamic_memory_buffer = self._coerce_int(
+                vm_data.get("DynamicMemoryBuffer"), default=None
+            )
 
             if (memory_gb is None or memory_gb == 0) and memory_startup_gb:
                 memory_gb = memory_startup_gb
@@ -1348,6 +1608,8 @@ class InventoryService:
             generation = self._coerce_int(vm_data.get("Generation"), default=None)
             version = self._coerce_str(vm_data.get("Version"))
             notes = self._coerce_str(vm_data.get("Notes"))
+            clustered = self._coerce_bool(vm_data.get("Clustered"))
+            cluster_name = self._coerce_str(vm_data.get("ClusterName"))
             networks = self._deserialize_networks(vm_data.get("Networks"))
             disks = self._deserialize_disks(vm_data.get("Disks"))
             ip_addresses = self._normalise_ip_list(vm_data.get("IPAddresses"))
@@ -1357,10 +1619,50 @@ class InventoryService:
             if not primary_ip and ip_addresses:
                 primary_ip = ip_addresses[0]
 
+            secure_boot_enabled = self._coerce_bool(
+                vm_data.get("SecureBootEnabled")
+            )
+            secure_boot_template = self._coerce_str(
+                vm_data.get("SecureBootTemplate")
+            )
+            tpm_enabled = self._coerce_bool(
+                vm_data.get("TrustedPlatformModuleEnabled")
+            )
+            key_protector_kind = self._coerce_str(vm_data.get("KeyProtectorKind"))
+            primary_boot_device = self._coerce_str(
+                vm_data.get("PrimaryBootDevice")
+            )
+            host_recovery_action = self._coerce_host_recovery_action(
+                vm_data.get("HostRecoveryAction")
+            )
+            host_stop_action = self._coerce_host_stop_action(
+                vm_data.get("HostStopAction")
+            )
+            integration_services_shutdown = self._coerce_bool(
+                vm_data.get("IntegrationServicesShutdown")
+            )
+            integration_services_time = self._coerce_bool(
+                vm_data.get("IntegrationServicesTime")
+            )
+            integration_services_data_exchange = self._coerce_bool(
+                vm_data.get("IntegrationServicesDataExchange")
+            )
+            integration_services_heartbeat = self._coerce_bool(
+                vm_data.get("IntegrationServicesHeartbeat")
+            )
+            integration_services_vss_backup = self._coerce_bool(
+                vm_data.get("IntegrationServicesVssBackup")
+            )
+            integration_services_guest_services = self._coerce_bool(
+                vm_data.get("IntegrationServicesGuestServices")
+            )
+
             vm = VM(
                 id=vm_id,
                 name=vm_data.get("Name", ""),
                 host=hostname,
+                clustered=clustered,
+                cluster_name=cluster_name,
                 state=state,
                 cpu_cores=cpu_cores,
                 memory_gb=memory_gb,
@@ -1368,7 +1670,7 @@ class InventoryService:
                 memory_min_gb=memory_min_gb,
                 memory_max_gb=memory_max_gb,
                 dynamic_memory_enabled=dynamic_memory_enabled,
-                ip_address=primary_ip,
+                dynamic_memory_buffer=dynamic_memory_buffer,
                 ip_addresses=ip_addresses,
                 notes=notes,
                 os_family=os_family,
@@ -1376,6 +1678,19 @@ class InventoryService:
                 generation=generation,
                 version=version,
                 created_at=vm_data.get("CreationTime"),
+                secure_boot_enabled=secure_boot_enabled,
+                secure_boot_template=secure_boot_template,
+                trusted_platform_module_enabled=tpm_enabled,
+                key_protector_kind=key_protector_kind,
+                primary_boot_device=primary_boot_device,
+                host_recovery_action=host_recovery_action,
+                host_stop_action=host_stop_action,
+                integration_services_shutdown=integration_services_shutdown,
+                integration_services_time=integration_services_time,
+                integration_services_data_exchange=integration_services_data_exchange,
+                integration_services_heartbeat=integration_services_heartbeat,
+                integration_services_vss_backup=integration_services_vss_backup,
+                integration_services_guest_services=integration_services_guest_services,
                 disks=disks,
                 networks=networks,
             )
@@ -1513,6 +1828,48 @@ class InventoryService:
 
         return None
 
+    def _coerce_host_recovery_action(
+        self, value: Any
+    ) -> Optional[HostRecoveryAction]:
+        if not value:
+            return None
+
+        mapping = {
+            "none": HostRecoveryAction.NONE,
+            "resume": HostRecoveryAction.RESUME,
+            "always-start": HostRecoveryAction.ALWAYS_START,
+        }
+
+        if isinstance(value, HostRecoveryAction):
+            return value
+
+        try:
+            lowered = str(value).strip().lower()
+        except Exception:
+            return None
+
+        return mapping.get(lowered)
+
+    def _coerce_host_stop_action(self, value: Any) -> Optional[HostStopAction]:
+        if not value:
+            return None
+
+        mapping = {
+            "save": HostStopAction.SAVE,
+            "stop": HostStopAction.STOP,
+            "shut-down": HostStopAction.SHUT_DOWN,
+        }
+
+        if isinstance(value, HostStopAction):
+            return value
+
+        try:
+            lowered = str(value).strip().lower()
+        except Exception:
+            return None
+
+        return mapping.get(lowered)
+
     def _infer_os_family(self, os_name: Any) -> Optional[OSFamily]:
         if not os_name or not isinstance(os_name, str):
             return None
@@ -1567,14 +1924,26 @@ class InventoryService:
             adapters.append(
                 VMNetworkAdapter(
                     id=self._coerce_str(adapter_data.get("Id")),
-                    name=adapter_data.get("Name"),
                     adapter_name=adapter_data.get("AdapterName"),
                     network=adapter_data.get("Network"),
                     virtual_switch=adapter_data.get("VirtualSwitch"),
-                    vlan=self._coerce_str(adapter_data.get("Vlan")),
-                    network_name=self._coerce_str(adapter_data.get("NetworkName")),
+                    vlan_id=adapter_data.get("VlanId"),
                     ip_addresses=ip_addresses,
                     mac_address=self._coerce_str(adapter_data.get("MacAddress")),
+                    mac_address_config=self._coerce_str(
+                        adapter_data.get("MacAddressConfig")
+                    ),
+                    dhcp_guard=self._coerce_bool(adapter_data.get("DhcpGuard")),
+                    router_guard=self._coerce_bool(adapter_data.get("RouterGuard")),
+                    mac_spoof_guard=self._coerce_bool(
+                        adapter_data.get("MacSpoofGuard")
+                    ),
+                    min_bandwidth_mbps=self._coerce_int(
+                        adapter_data.get("MinBandwidthMbps"), default=None
+                    ),
+                    max_bandwidth_mbps=self._coerce_int(
+                        adapter_data.get("MaxBandwidthMbps"), default=None
+                    ),
                 )
             )
 
@@ -1594,7 +1963,6 @@ class InventoryService:
                     id=self._coerce_str(disk_data.get("Id")),
                     name=disk_data.get("Name"),
                     path=disk_data.get("Path"),
-                    location=disk_data.get("Location"),
                     type=disk_data.get("DiskType"),
                     size_gb=self._coerce_float(disk_data.get("CapacityGB"), default=None),
                     file_size_gb=self._coerce_float(

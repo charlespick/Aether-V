@@ -1,0 +1,130 @@
+# ============================================================================
+# .dockerignore for Aether-V monorepo
+# Build context: repository root
+# Used by: docker build -t aetherv:latest .
+# ============================================================================
+
+# Version Control
+# ============================================================================
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Development Environment
+# ============================================================================
+.devcontainer/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Python Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# Node.js & npm
+# ============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+package-lock.json
+
+# Svelte / SvelteKit
+# ============================================================================
+.svelte-kit/
+next-ui/.svelte-kit/
+next-ui/node_modules/
+
+# Logs
+# ============================================================================
+*.log
+logs/
+
+# Operating System
+# ============================================================================
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+*.bak
+*.old
+
+# Documentation (not needed in runtime container)
+# ============================================================================
+Docs/
+*.md
+!server/app/templates/*.md
+LICENSE
+
+# Build Tools (not needed in runtime container)
+# ============================================================================
+Makefile
+build-tools/
+Scripts/
+
+# Testing (not needed in runtime container)
+# ============================================================================
+tests/
+server/tests/
+Powershell/tests/
+
+# Development Scripts
+# ============================================================================
+server/dev.sh
+server/setup-dev.sh
+validate-setup.sh
+vulture_whitelist.py
+
+# Build Artifacts (copied explicitly via Dockerfile COPY)
+# ============================================================================
+# These are built by `make build-assets` and explicitly copied:
+# - ISOs/ (WindowsProvisioning.iso, LinuxProvisioning.iso)
+# - next-ui/build/ (built Svelte app)
+# - server/app/static/icons/ (extracted Material Symbols)
+# - server/app/static/swagger-ui/ (extracted Swagger UI)
+
+# Cache directories
+# ============================================================================
+.cache/
+*.cache
+

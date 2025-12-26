@@ -1,0 +1,113 @@
+:root {
+	/* Design tokens (theme-agnostic) */
+	--spacing-xs: 0.25rem;
+	--spacing-sm: 0.5rem;
+	--spacing-md: 1rem;
+	--spacing-lg: 1.5rem;
+	--spacing-xl: 2rem;
+
+	--radius-sm: 0.25rem;
+	--radius-md: 0.5rem;
+	--radius-lg: 0.75rem;
+
+	--transition-fast: 150ms ease;
+	--transition-normal: 250ms ease;
+}
+
+/* Dark theme (default) */
+:root,
+[data-theme="dark"] {
+	/* Backgrounds */
+	--bg-primary: #0f0f0f;
+	--bg-secondary: #1a1a1a;
+	--bg-tertiary: #242424;
+	--bg-hover: #2a2a2a;
+
+	/* Text */
+	--text-primary: #ffffff;
+	--text-secondary: #b0b0b0;
+	--text-tertiary: #808080;
+
+	/* Accent colors */
+	--accent-primary: #4a9eff;
+	--accent-hover: #3a8eef;
+
+	/* Borders */
+	--border-color: #333333;
+	--border-subtle: #252525;
+
+	/* Status colors */
+	--success: #4ade80;
+	--warning: #fbbf24;
+	--error: #f87171;
+	--error-hover: #dc2626;
+	--info: #60a5fa;
+
+	/* Shadows */
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+	--shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+	--shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+}
+
+/* Light theme - Professional neutral palette inspired by AWS, vSphere, Jamf Pro */
+[data-theme="light"] {
+	/* Backgrounds - Clean whites and neutral grays */
+	--bg-primary: #ffffff;
+	--bg-secondary: #f8f9fa;
+	--bg-tertiary: #e9ecef;
+	--bg-hover: #dee2e6;
+
+	/* Text - Strong contrast for readability */
+	--text-primary: #212529;
+	--text-secondary: #495057;
+	--text-tertiary: #6c757d;
+
+	/* Accent colors - Slightly deeper blue for professionalism */
+	--accent-primary: #0d6efd;
+	--accent-hover: #0b5ed7;
+
+	/* Borders - Subtle separation */
+	--border-color: #ced4da;
+	--border-subtle: #e9ecef;
+
+	/* Status colors - Accessible and vibrant */
+	--success: #198754;
+	--warning: #fd7e14;
+	--error: #dc3545;
+	--error-hover: #bb2d3b;
+	--info: #0dcaf0;
+
+	/* Shadows - Subtle depth for light backgrounds */
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.075);
+	--shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+	--shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.15);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	padding: 0;
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	overflow: hidden;
+}
+
+button {
+	cursor: pointer;
+	border: none;
+	background: none;
+	font-family: inherit;
+}
+
+a {
+	color: var(--accent-primary);
+	text-decoration: none;
+}
+
+a:hover {
+	color: var(--accent-hover);
+}
