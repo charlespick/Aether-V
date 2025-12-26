@@ -429,6 +429,34 @@ end {
                 Stop-VM -VM $vm -Force -ErrorAction Stop
             }
             
+            # Check if VM is clustered and remove from cluster first
+            # Must be done before Remove-VM to avoid Update-ClusterVirtualMachineConfiguration errors
+            try {
+                $vmIdUpper = $vm.Id.ToString().ToUpper()
+                $vmCfgRes = Get-CimInstance `
+                    -Namespace root/mscluster `
+                    -ClassName MSCluster_Resource `
+                    -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Type -eq "Virtual Machine Configuration" } |
+                    Where-Object {
+                        $_.PrivateProperties -and
+                        $_.PrivateProperties.VmID -and
+                        ($_.PrivateProperties.VmID.ToString().ToUpper() -eq $vmIdUpper)
+                    }
+                
+                if ($vmCfgRes) {
+                    $logs += "VM is clustered. Removing from failover cluster first..."
+                    Remove-ClusteredVmViaCim -VmId $vm.Id.ToString() -VmName $vmName
+                    $logs += "VM successfully removed from failover cluster"
+                }
+            }
+            catch {
+                # If cluster removal fails, log warning but continue with VM deletion
+                # This handles cases where cluster may be partially configured
+                $logs += "WARNING: Failed to remove VM from cluster: $_"
+                $logs += "Continuing with VM deletion..."
+            }
+            
             # Handle disk cleanup if requested
             $diskPaths = @()
             if ($deleteDisks) {
