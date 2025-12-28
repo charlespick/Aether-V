@@ -1007,7 +1007,7 @@ async def create_vm_resource(
             required_memory_gb=request.gb_ram,
         )
     else:
-        target_host = request.target_host.strip()
+        target_host = request.target_host.strip() if request.target_host else ""
     
     # Validate the resolved host is connected
     connected_hosts = inventory_service.get_connected_hosts()
@@ -1696,6 +1696,8 @@ async def create_managed_deployment(
         )
 
     # Resolve target host from cluster if cluster targeting is used
+    target_host: Optional[str] = None
+    
     if request.target_cluster:
         # Validate: cluster targeting requires vm_clustered=True
         if not request.vm_clustered:
