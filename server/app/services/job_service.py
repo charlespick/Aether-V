@@ -387,7 +387,6 @@ class JobService:
         self,
         request: ManagedDeploymentRequest,
         effective_target_host: Optional[str] = None,
-        enable_clustering: bool = False,
     ) -> Job:
         """Submit a managed deployment job using the Pydantic-based protocol.
 
@@ -401,14 +400,12 @@ class JobService:
         4. Guest configuration via generate_guest_config() and KVP
         
         Args:
-            request: The managed deployment request from the API
+            request: The managed deployment request from the API. The vm_clustered
+                field is pre-validated by the route handler.
             effective_target_host: The host to deploy to. When cluster targeting is used,
                 this contains the cluster-selected host. When direct host targeting is used,
                 this contains the user-specified target_host. If None, falls back to
                 request.target_host (for backward compatibility).
-            enable_clustering: Whether to enable VM clustering. Automatically set to True
-                when using cluster-based targeting. When True, the vm_clustered flag will
-                be applied during VM creation.
         """
         if not self._started or self._queue is None:
             raise RuntimeError("Job service is not running")
@@ -423,10 +420,8 @@ class JobService:
 
         job_id = str(uuid.uuid4())
         
-        # Apply clustering configuration if cluster targeting was used
+        # Use the request data directly - vm_clustered is already validated
         request_data = request.model_dump()
-        if enable_clustering:
-            request_data["vm_clustered"] = True
         
         job = Job(
             job_id=job_id,

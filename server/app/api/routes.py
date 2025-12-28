@@ -1601,11 +1601,17 @@ async def create_managed_deployment(
         )
 
     # Resolve target host from cluster if cluster is specified
-    # Initialize deployment configuration that may be modified based on targeting mode
     target_host: Optional[str] = None
-    enable_clustering = False  # Will be set True if cluster targeting is used
     
     if request.target_cluster:
+        # Validate: cluster targeting requires vm_clustered=True
+        if not request.vm_clustered:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot disable clustering when targeting a cluster. "
+                       "Set vm_clustered=True or use direct host targeting.",
+            )
+        
         # Get cluster and validate it exists
         cluster_name = request.target_cluster.strip()
         clusters = inventory_service.get_all_clusters()
@@ -1658,10 +1664,6 @@ async def create_managed_deployment(
                 detail=f"Insufficient memory in cluster {cluster_name}. "
                        f"VM requires {request.gb_ram}GB but maximum available is {available_memory:.2f}GB on host {target_host}",
             )
-        
-        # Auto-enable clustering when targeting a cluster
-        enable_clustering = True
-        
     else:
         # Direct host targeting
         target_host = request.target_host.strip() if request.target_host else None
@@ -1692,12 +1694,10 @@ async def create_managed_deployment(
         )
 
     # Submit the managed deployment job
-    # Pass the resolved target host and clustering configuration
-    # enable_clustering is True when cluster targeting is used (auto-registers VM with failover cluster)
+    # Pass the resolved target host. The request.vm_clustered field is already validated.
     job = await job_service.submit_managed_deployment_job(
         request=request,
         effective_target_host=target_host,
-        enable_clustering=enable_clustering,
     )
 
     return JobResult(
