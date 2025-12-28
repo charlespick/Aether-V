@@ -1650,6 +1650,15 @@ async def create_managed_deployment(
         # Select host with most available memory
         target_host = max(host_memory_usage, key=lambda h: host_memory_usage[h])
         
+        # Verify selected host has sufficient memory for the new VM
+        available_memory = host_memory_usage[target_host]
+        if available_memory < request.gb_ram:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Insufficient memory in cluster {cluster_name}. "
+                       f"VM requires {request.gb_ram}GB but maximum available is {available_memory:.2f}GB on host {target_host}",
+            )
+        
         # Auto-enable clustering when targeting a cluster
         enable_clustering = True
         
