@@ -76,6 +76,76 @@ try {
         $result.Host.Warnings += "Memory inventory failed: $($_.Exception.Message)"
     }
 
+    # === COLLECT HOST RESOURCES FROM HOSTRESOURCES.JSON ===
+    try {
+        $hostResourcesPath = "C:\ProgramData\Aether-V\hostresources.json"
+        if (Test-Path $hostResourcesPath) {
+            $hostResourcesContent = Get-Content -Path $hostResourcesPath -Raw -ErrorAction Stop
+            $hostResources = $hostResourcesContent | ConvertFrom-Json -ErrorAction Stop
+            
+            # Add to Host section
+            $result.Host.Version = $hostResources.version
+            $result.Host.SchemaName = $hostResources.schema_name
+            $result.Host.VirtualMachinesPath = $hostResources.virtual_machines_path
+            
+            # Convert storage classes
+            if ($hostResources.storage_classes) {
+                $result.Host.StorageClasses = @($hostResources.storage_classes | ForEach-Object {
+                    @{
+                        Name = $_.name
+                        Path = $_.path
+                    }
+                })
+            }
+            
+            # Convert networks with optional IP settings
+            if ($hostResources.networks) {
+                $result.Host.Networks = @($hostResources.networks | ForEach-Object {
+                    $network = @{
+                        Name = $_.name
+                        Model = $_.model
+                        Configuration = @{
+                            VirtualSwitch = $_.configuration.virtual_switch
+                            VlanId = $_.configuration.vlan_id
+                        }
+                    }
+                    
+                    # Add IP settings if present
+                    if ($_.ip_settings) {
+                        $network.IpSettings = @{}
+                        if ($_.ip_settings.gateway) { $network.IpSettings.Gateway = $_.ip_settings.gateway }
+                        if ($_.ip_settings.dns) { $network.IpSettings.Dns = $_.ip_settings.dns }
+                        if ($_.ip_settings.dns_secondary) { $network.IpSettings.DnsSecondary = $_.ip_settings.dns_secondary }
+                        if ($_.ip_settings.subnet_mask) { $network.IpSettings.SubnetMask = $_.ip_settings.subnet_mask }
+                        if ($_.ip_settings.network_address) { $network.IpSettings.NetworkAddress = $_.ip_settings.network_address }
+                        if ($null -ne $_.ip_settings.dhcp_available) { $network.IpSettings.DhcpAvailable = $_.ip_settings.dhcp_available }
+                    }
+                    
+                    $network
+                })
+            }
+            
+            # Convert images
+            if ($hostResources.images) {
+                $result.Host.Images = @($hostResources.images | ForEach-Object {
+                    $image = @{
+                        Name = $_.name
+                        Path = $_.path
+                    }
+                    if ($_.os_family) { $image.OsFamily = $_.os_family }
+                    if ($_.description) { $image.Description = $_.description }
+                    $image
+                })
+            }
+        }
+        else {
+            $result.Host.Warnings += "Host resources file not found at $hostResourcesPath"
+        }
+    }
+    catch {
+        $result.Host.Warnings += "Failed to load host resources: $($_.Exception.Message)"
+    }
+
     # === BATCH FETCH ALL VM DATA VIA CIM (bypasses slow Get-VM cmdlet) ===
     
     # Get VM basic info (GUID, Name, State)
@@ -972,10 +1042,39 @@ try {
                     }
                 }
             }
+
+            # Match disk paths to storage classes
+            if ($hostConfig -and $hostConfig.storage_classes) {
+                foreach ($vm in $result.VirtualMachines) {
+                    if ($vm.Disks) {
+                        foreach ($disk in $vm.Disks) {
+                            if ($disk.Path) {
+                                $diskPath = $disk.Path
+                                $matchedStorageClass = $null
+                                
+                                # Find storage class whose path is a prefix of the disk path
+                                foreach ($sc in $hostConfig.storage_classes) {
+                                    $scPath = $sc.path.TrimEnd('\')
+                                    if ($diskPath.StartsWith($scPath, [StringComparison]::OrdinalIgnoreCase)) {
+                                        # If multiple matches, prefer the longest (most specific) path
+                                        if (-not $matchedStorageClass -or $sc.path.Length -gt $matchedStorageClass.path.Length) {
+                                            $matchedStorageClass = $sc
+                                        }
+                                    }
+                                }
+                                
+                                if ($matchedStorageClass) {
+                                    $disk.StorageClass = $matchedStorageClass.name
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     catch {
-        $result.Warnings += "Failed to load host resources configuration for network name resolution: $($_.Exception.Message)"
+        $result.Warnings += "Failed to load host resources configuration for network/storage name resolution: $($_.Exception.Message)"
     }
 }
 catch {

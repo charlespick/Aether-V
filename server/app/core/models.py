@@ -87,6 +87,39 @@ class VlanConfiguration(BaseModel):
     vlan_id: int = Field(..., ge=1, le=4094, description="VLAN identifier")
 
 
+class IPSettings(BaseModel):
+    """IP configuration settings for a network.
+    
+    Optional IP settings that can be used for prefilling or validation.
+    """
+    gateway: Optional[str] = Field(
+        None, 
+        description="Default gateway IP address",
+        pattern=r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    )
+    dns: Optional[str] = Field(
+        None, 
+        description="Primary DNS server IP address",
+        pattern=r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    )
+    dns_secondary: Optional[str] = Field(
+        None, 
+        description="Secondary DNS server IP address",
+        pattern=r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    )
+    subnet_mask: Optional[str] = Field(
+        None, 
+        description="Subnet mask (e.g., 255.255.255.0)",
+        pattern=r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    )
+    network_address: Optional[str] = Field(
+        None, 
+        description="Network address (e.g., 192.168.1.0)",
+        pattern=r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    )
+    dhcp_available: Optional[bool] = Field(None, description="Whether DHCP is available on this network")
+
+
 class Network(BaseModel):
     """Network configuration for a host.
     
@@ -96,6 +129,18 @@ class Network(BaseModel):
     name: str = Field(..., description="Unique identifier for the network")
     model: NetworkModel = Field(..., description="Network model type")
     configuration: VlanConfiguration = Field(..., description="Network configuration data")
+    ip_settings: Optional[IPSettings] = Field(None, description="Optional IP configuration settings")
+
+
+class Image(BaseModel):
+    """VM image configuration.
+    
+    Represents a named VM image available on a host.
+    """
+    name: str = Field(..., description="Unique identifier for the image")
+    path: str = Field(..., description="Filesystem path to the image file")
+    os_family: Optional[str] = Field(None, description="Operating system family (windows/linux)")
+    description: Optional[str] = Field(None, description="Human-readable description of the image")
 
 
 class HostResources(BaseModel):
@@ -110,6 +155,7 @@ class HostResources(BaseModel):
     storage_classes: List[StorageClass] = Field(default_factory=list, description="Available storage classes")
     networks: List[Network] = Field(default_factory=list, description="Available networks")
     virtual_machines_path: str = Field(..., description="Default path for VM configuration files")
+    images: List[Image] = Field(default_factory=list, description="Available VM images")
 
 
 class Cluster(BaseModel):
@@ -541,18 +587,22 @@ class ClusterSummary(BaseModel):
 
 
 class ClusterDetail(BaseModel):
-    """Cluster detail view with shallow child objects."""
+    """Cluster detail view with shallow child objects and aggregated resources."""
 
     id: str
     name: str
     hosts: List[HostSummary] = Field(default_factory=list)
     virtual_machines: List[VMListItem] = Field(default_factory=list)
+    storage_classes: List[StorageClass] = Field(default_factory=list, description="Aggregated storage classes from all cluster hosts")
+    networks: List[Network] = Field(default_factory=list, description="Aggregated networks from all cluster hosts")
+    images: List[Image] = Field(default_factory=list, description="Aggregated images from all cluster hosts")
 
 
 class HostDetail(HostSummary):
-    """Host detail with shallow VM list."""
+    """Host detail with shallow VM list and resource configuration."""
 
     virtual_machines: List[VMListItem] = Field(default_factory=list)
+    resources: Optional[HostResources] = Field(None, description="Host resource configuration including storage classes, networks, and images")
 
 
 class StatisticsResponse(BaseModel):

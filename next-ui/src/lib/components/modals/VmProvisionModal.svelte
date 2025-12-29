@@ -90,6 +90,12 @@
 	let targetCluster = $state("");
 	let imageName = $state("");
 
+	// Available resources from selected target
+	let availableImages = $state<Array<{ name: string; description?: string; os_family?: string }>>([]);
+	let availableStorageClasses = $state<Array<{ name: string; path: string }>>([]);
+	let availableNetworks = $state<Array<{ name: string; model: string; ip_settings?: any }>>([]);
+	let selectedNetworkIpSettings = $state<any>(null);
+
 	// Available hosts, clusters, and images
 	let availableHosts = $derived(
 		$inventoryStore?.hosts
@@ -404,6 +410,61 @@
 				);
 		}
 	});
+
+	// Fetch resources when target host or cluster changes
+	$effect(() => {
+		if (isOpen && (targetHost || targetCluster)) {
+			const endpoint = deploymentMode === "host"
+				? `/api/v1/hosts/${targetHost}`
+				: `/api/v1/clusters/${targetCluster}`;
+			
+			fetch(endpoint)
+				.then((res) => res.json())
+				.then((data) => {
+					if (data.resources) {
+						availableImages = data.resources.images || [];
+						availableStorageClasses = data.resources.storage_classes || [];
+						availableNetworks = data.resources.networks || [];
+					} else if (data.storage_classes) {
+						// Cluster response structure
+						availableImages = data.images || [];
+						availableStorageClasses = data.storage_classes || [];
+						availableNetworks = data.networks || [];
+					}
+				})
+				.catch((err) =>
+					console.error("Failed to fetch resources:", err),
+				);
+		} else {
+			// Clear resources when no target selected
+			availableImages = [];
+			availableStorageClasses = [];
+			availableNetworks = [];
+		}
+	});
+
+	// Update IP settings when network selection changes
+	$effect(() => {
+		if (nicData.network) {
+			const selectedNetwork = availableNetworks.find(n => n.name === nicData.network);
+			selectedNetworkIpSettings = selectedNetwork?.ip_settings || null;
+			
+			// Prefill IP settings if available
+			if (selectedNetworkIpSettings) {
+				if (selectedNetworkIpSettings.gateway && !staticIpData.guest_v4_default_gw) {
+					staticIpData.guest_v4_default_gw = selectedNetworkIpSettings.gateway;
+				}
+				if (selectedNetworkIpSettings.dns && !staticIpData.guest_v4_dns1) {
+					staticIpData.guest_v4_dns1 = selectedNetworkIpSettings.dns;
+				}
+				if (selectedNetworkIpSettings.dns_secondary && !staticIpData.guest_v4_dns2) {
+					staticIpData.guest_v4_dns2 = selectedNetworkIpSettings.dns_secondary;
+				}
+			}
+		} else {
+			selectedNetworkIpSettings = null;
+		}
+	});
 </script>
 
 <Modal
@@ -484,16 +545,27 @@
 				{/if}
 				<FormField
 					label="Base Image"
-					description="Name of the golden image to clone"
+					description="Golden image to clone for this VM"
 					required
 					error={errors.image_name}
 				>
-					<input
-						type="text"
-						bind:value={imageName}
-						placeholder="e.g., Windows Server 2022"
-						disabled={isSubmitting}
-					/>
+					{#if availableImages.length > 0}
+						<select bind:value={imageName} disabled={isSubmitting}>
+							<option value="">Select an image...</option>
+							{#each availableImages as image}
+								<option value={image.name}>
+									{image.name}{image.description ? ` - ${image.description}` : ''}
+								</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							type="text"
+							bind:value={imageName}
+							placeholder="e.g., Windows Server 2022"
+							disabled={isSubmitting}
+						/>
+					{/if}
 				</FormField>
 			</FormSection>
 
@@ -548,15 +620,24 @@
 
 				<FormField
 					label="Storage Class"
-					description="Optional: storage tier or class identifier"
+					description="Storage location for VM configuration and disks"
 					error={errors.storage_class}
 				>
-					<input
-						type="text"
-						bind:value={vmData.storage_class}
-						placeholder="e.g., fast-ssd"
-						disabled={isSubmitting}
-					/>
+					{#if availableStorageClasses.length > 0}
+						<select bind:value={vmData.storage_class} disabled={isSubmitting}>
+							<option value="">Default storage location</option>
+							{#each availableStorageClasses as sc}
+								<option value={sc.name}>{sc.name}</option>
+							{/each}
+						</select>
+					{:else}
+						<input
+							type="text"
+							bind:value={vmData.storage_class}
+							placeholder="e.g., fast-ssd"
+							disabled={isSubmitting}
+						/>
+					{/if}
 				</FormField>
 
 				<FormField
@@ -622,16 +703,28 @@
 			>
 				<FormField
 					label="Network"
-					description="Name of Hyper-V virtual switch to connect to"
+					description="Network to connect the VM to"
 					required
 					error={errors.network}
 				>
-					<input
-						type="text"
-						bind:value={nicData.network}
-						placeholder="e.g., External-Network"
-						disabled={isSubmitting}
-					/>
+					{#if availableNetworks.length > 0}
+						<select bind:value={nicData.network} disabled={isSubmitting}>
+							<option value="">Select a network...</option>
+							{#each availableNetworks as network}
+								<option value={network.name}>{network.name}</option>
+							{/each}
+						</select>
+						{#if selectedNetworkIpSettings}
+							<p class="hint-text">IP settings available for prefill</p>
+						{/if}
+					{:else}
+						<input
+							type="text"
+							bind:value={nicData.network}
+							placeholder="e.g., External-Network"
+							disabled={isSubmitting}
+						/>
+					{/if}
 				</FormField>
 
 				<FormField

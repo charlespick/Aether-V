@@ -25,7 +25,9 @@
 	// Get VM and Host to populate networks
 	let vm = $derived($inventoryStore?.vms?.find(v => v.id === vmId));
 	let host = $derived(vm ? $inventoryStore?.hosts?.find(h => h.hostname === vm.host) : undefined);
-	let availableNetworks = $derived(host?.resources?.networks.map(n => n.name) || []);
+	let availableNetworks = $derived(host?.resources?.networks || []);
+	let selectedNetwork = $derived(availableNetworks.find(n => n.name === formData.network));
+	let hasIpSettings = $derived(selectedNetwork?.ip_settings != null);
 
 	// Form state
 	let formData = $state({
@@ -111,16 +113,30 @@
 		<div class="form-content">
 			<FormField
 				label="Network"
-				description="Name of the Hyper-V virtual switch to connect to"
+				description="Network to connect this adapter to"
 				required
 				error={errors.network}
 			>
 				<select bind:value={formData.network} disabled={isSubmitting}>
 					<option value="">Select a network...</option>
 					{#each availableNetworks as net}
-						<option value={net}>{net}</option>
+						<option value={net.name}>{net.name}</option>
 					{/each}
 				</select>
+				{#if hasIpSettings && selectedNetwork?.ip_settings}
+					<div class="ip-settings-hint">
+						<strong>IP Settings available:</strong>
+						{#if selectedNetwork.ip_settings.gateway}
+							Gateway: {selectedNetwork.ip_settings.gateway}
+						{/if}
+						{#if selectedNetwork.ip_settings.dns}
+							DNS: {selectedNetwork.ip_settings.dns}
+						{/if}
+						{#if selectedNetwork.ip_settings.dhcp_available}
+							<span class="dhcp-badge">DHCP Available</span>
+						{/if}
+					</div>
+				{/if}
 			</FormField>
 
 			<FormField
@@ -169,5 +185,33 @@
 
 	.field-note strong {
 		color: var(--accent-primary);
+	}
+
+	.ip-settings-hint {
+		margin-top: 0.5rem;
+		padding: 0.5rem;
+		background: rgba(34, 197, 94, 0.1);
+		border: 1px solid rgba(34, 197, 94, 0.3);
+		border-radius: var(--radius-sm);
+		font-size: 0.8125rem;
+		color: var(--text-secondary);
+		line-height: 1.4;
+	}
+
+	.ip-settings-hint strong {
+		color: rgb(34, 197, 94);
+		display: block;
+		margin-bottom: 0.25rem;
+	}
+
+	.dhcp-badge {
+		display: inline-block;
+		margin-left: 0.5rem;
+		padding: 0.125rem 0.5rem;
+		background: rgba(34, 197, 94, 0.2);
+		border-radius: var(--radius-sm);
+		font-size: 0.75rem;
+		font-weight: 500;
+		color: rgb(34, 197, 94);
 	}
 </style>

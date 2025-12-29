@@ -18,6 +18,7 @@ from ..core.models import (
     HostRecoveryAction,
     HostResources,
     HostStopAction,
+    Image,
     Network,
     NetworkModel,
     NotificationLevel,
@@ -1527,7 +1528,10 @@ class InventoryService:
                     networks=[
                         Network(**net) for net in host_section.get("Networks", [])
                     ],
-                    virtual_machines_path=host_section.get("VirtualMachinesPath", "")
+                    virtual_machines_path=host_section.get("VirtualMachinesPath", ""),
+                    images=[
+                        Image(**img) for img in host_section.get("Images", [])
+                    ]
                 )
         except Exception as exc:
             logger.warning("Failed to parse host resources for %s: %s", hostname, exc)
