@@ -227,6 +227,9 @@ class ManagedDeploymentRequest(BaseModel):
     )
     
     # === Disk Configuration (optional - if image_name provided, disk is cloned) ===
+    # Note: disk_type (Dynamic/Fixed) is NOT configurable in managed deployments.
+    # When cloning from an image, the disk_type is inherited from the source image
+    # and cannot be converted. Only disk_size_gb and controller_type are configurable.
     image_name: Optional[str] = Field(
         None,
         description="Name of a golden image to clone. If provided, a disk will be created by cloning the image",

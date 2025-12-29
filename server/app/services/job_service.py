@@ -1176,7 +1176,9 @@ class JobService:
             )
 
             # Build disk spec dict from flat request fields
-            # Note: disk_type is not specified because it's inherited from the source image when cloning
+            # Note: disk_type is NOT included - it is always inherited from the source image
+            # when cloning. Hyper-V does not support converting disk types during clone operations.
+            # Only disk_size_gb (for resizing) and controller_type are specified.
             disk_dict = {
                 "vm_id": vm_id,
                 "image_name": request.image_name,

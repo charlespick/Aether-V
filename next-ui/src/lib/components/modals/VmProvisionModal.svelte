@@ -36,7 +36,10 @@
 		vm_clustered: false,
 	});
 
-	// Disk configuration (disk_type is inherited from the source image when cloning)
+	// Disk configuration
+	// Note: In managed deployments, VMs are always cloned from a source image.
+	// The disk_type (Dynamic/Fixed) is inherited from the source image and cannot be changed.
+	// Only disk_size_gb and controller_type can be configured.
 	let diskData = $state({
 		disk_size_gb: 100,
 		controller_type: "SCSI" as "SCSI" | "IDE",
@@ -275,7 +278,8 @@
 				cpu_cores: vmData.cpu_cores,
 				storage_class: vmData.storage_class || undefined,
 				vm_clustered: vmData.vm_clustered,
-				// Disk configuration (disk_type is inherited from the source image when cloning)
+				// Disk configuration
+				// Note: disk_type is inherited from the source image and cannot be changed during cloning
 				image_name: imageName || undefined,
 				disk_size_gb: diskData.disk_size_gb,
 				controller_type: diskData.controller_type,
