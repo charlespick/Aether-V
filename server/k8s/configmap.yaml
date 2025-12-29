@@ -37,7 +37,7 @@ data:
   # HYPERV_HOSTS: "hyperv01.example.com,hyperv02.example.com"  # Default: (empty; provide hostnames to manage workloads)
 
   # WinRM Kerberos authentication
-  WINRM_KERBEROS_PRINCIPAL: "svc-aetherv@AD.EXAMPLE.COM"  # Required: Service account UPN; if using an HTTP/ SPN ensure it maps to this account
+  # WINRM_KERBEROS_PRINCIPAL: "svc-aetherv@AD.EXAMPLE.COM"  # Optional: Service account UPN; required for Hyper-V host management
   # WINRM_KERBEROS_REALM: "AD.EXAMPLE.COM"  # Optional: Kerberos realm override
   # WINRM_KERBEROS_KDC: "dc01.ad.example.com"  # Optional: KDC server override
   

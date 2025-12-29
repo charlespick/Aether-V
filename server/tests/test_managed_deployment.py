@@ -22,7 +22,6 @@ from app.core.pydantic_models import (
     VmSpec,
     DiskSpec,
     NicSpec,
-    GuestConfigSpec,
     JobResultEnvelope,
     JobResultStatus,
 )
@@ -34,81 +33,65 @@ class TestManagedDeploymentRequest:
     def test_minimal_managed_deployment_request(self):
         """Test minimal valid managed deployment request."""
         request = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="test-vm",
-                gb_ram=4,
-                cpu_cores=2,
-            ),
             target_host="hyperv-01.example.com",
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            network="Production",
+            guest_la_uid="Administrator",
+            guest_la_pw="SecurePass123!",
         )
 
-        assert request.vm_spec.vm_name == "test-vm"
-        assert request.vm_spec.gb_ram == 4
-        assert request.vm_spec.cpu_cores == 2
+        assert request.vm_name == "test-vm"
+        assert request.gb_ram == 4
+        assert request.cpu_cores == 2
         assert request.target_host == "hyperv-01.example.com"
-        assert request.disk_spec is None
-        assert request.nic_spec is None
-        assert request.guest_config is None
+        assert request.image_name is None
+        assert request.guest_domain_join_target is None
 
     def test_full_managed_deployment_request(self):
         """Test managed deployment request with all optional components."""
         request = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="web-01",
-                gb_ram=8,
-                cpu_cores=4,
-                storage_class="fast-ssd",
-            ),
-            disk_spec=DiskSpec(
-                image_name="Windows Server 2022",
-                disk_size_gb=100,
-                storage_class="fast-ssd",
-            ),
-            nic_spec=NicSpec(
-                network="Production",
-                adapter_name="Ethernet 1",
-            ),
-            guest_config=GuestConfigSpec(
-                guest_la_uid="Administrator",
-                guest_la_pw="SecurePass123!",
-                guest_domain_join_target="corp.example.com",
-                guest_domain_join_uid="EXAMPLE\\svc_join",
-                guest_domain_join_pw="DomainPass456!",
-                guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
-            ),
             target_host="hyperv-01.example.com",
+            vm_name="web-01",
+            gb_ram=8,
+            cpu_cores=4,
+            storage_class="fast-ssd",
+            image_name="Windows Server 2022",
+            disk_size_gb=100,
+            network="Production",
+            guest_la_uid="Administrator",
+            guest_la_pw="SecurePass123!",
+            guest_domain_join_target="corp.example.com",
+            guest_domain_join_uid="EXAMPLE\\svc_join",
+            guest_domain_join_pw="DomainPass456!",
+            guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
         )
 
-        assert request.vm_spec.vm_name == "web-01"
-        assert request.disk_spec.image_name == "Windows Server 2022"
-        assert request.nic_spec.network == "Production"
-        assert request.guest_config.guest_la_uid == "Administrator"
-        assert request.guest_config.guest_domain_join_target == "corp.example.com"
+        assert request.vm_name == "web-01"
+        assert request.image_name == "Windows Server 2022"
+        assert request.network == "Production"
+        assert request.guest_la_uid == "Administrator"
+        assert request.guest_domain_join_target == "corp.example.com"
 
     def test_managed_deployment_with_static_ip(self):
         """Test managed deployment with static IP configuration."""
         request = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="app-01",
-                gb_ram=16,
-                cpu_cores=8,
-            ),
-            nic_spec=NicSpec(
-                network="Production",
-            ),
-            guest_config=GuestConfigSpec(
-                guest_la_uid="Administrator",
-                guest_la_pw="SecurePass123!",
-                guest_v4_ip_addr="192.168.1.100",
-                guest_v4_cidr_prefix=24,
-                guest_v4_default_gw="192.168.1.1",
-                guest_v4_dns1="192.168.1.10",
-            ),
             target_host="hyperv-02.example.com",
+            vm_name="app-01",
+            gb_ram=16,
+            cpu_cores=8,
+            network="Production",
+            guest_la_uid="Administrator",
+            guest_la_pw="SecurePass123!",
+            guest_v4_ip_addr="192.168.1.100",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="192.168.1.1",
+            guest_v4_dns1="192.168.1.10",
         )
 
-        assert request.guest_config.guest_v4_ip_addr == "192.168.1.100"
-        assert request.guest_config.guest_v4_cidr_prefix == 24
+        assert request.guest_v4_ip_addr == "192.168.1.100"
+        assert request.guest_v4_cidr_prefix == 24
 
 
 class TestManagedDeploymentJobSubmission:
@@ -126,12 +109,13 @@ class TestManagedDeploymentJobSubmission:
 
             try:
                 request = ManagedDeploymentRequest(
-                    vm_spec=VmSpec(
-                        vm_name="test-vm",
-                        gb_ram=4,
-                        cpu_cores=2,
-                    ),
                     target_host="hyperv-01",
+                    vm_name="test-vm",
+                    gb_ram=4,
+                    cpu_cores=2,
+                    network="Production",
+                    guest_la_uid="Administrator",
+                    guest_la_pw="SecurePass123!",
                 )
 
                 job = await service.submit_managed_deployment_job(request=request)
@@ -145,7 +129,7 @@ class TestManagedDeploymentJobSubmission:
                 # Verify request was serialized correctly
                 stored_request = ManagedDeploymentRequest(
                     **job.parameters["request"])
-                assert stored_request.vm_spec.vm_name == "test-vm"
+                assert stored_request.vm_name == "test-vm"
             finally:
                 await service.stop()
 
@@ -163,23 +147,15 @@ class TestManagedDeploymentJobSubmission:
 
             try:
                 request = ManagedDeploymentRequest(
-                    vm_spec=VmSpec(
-                        vm_name="web-01",
-                        gb_ram=8,
-                        cpu_cores=4,
-                    ),
-                    disk_spec=DiskSpec(
-                        image_name="Windows Server 2022",
-                        disk_size_gb=100,
-                    ),
-                    nic_spec=NicSpec(
-                        network="Production",
-                    ),
-                    guest_config=GuestConfigSpec(
-                        guest_la_uid="Administrator",
-                        guest_la_pw="SecurePass123!",
-                    ),
                     target_host="hyperv-01",
+                    vm_name="web-01",
+                    gb_ram=8,
+                    cpu_cores=4,
+                    image_name="Windows Server 2022",
+                    disk_size_gb=100,
+                    network="Production",
+                    guest_la_uid="Administrator",
+                    guest_la_pw="SecurePass123!",
                 )
 
                 job = await service.submit_managed_deployment_job(request=request)
@@ -189,9 +165,9 @@ class TestManagedDeploymentJobSubmission:
                 # Verify all components were serialized
                 stored_request = ManagedDeploymentRequest(
                     **job.parameters["request"])
-                assert stored_request.disk_spec.image_name == "Windows Server 2022"
-                assert stored_request.nic_spec.network == "Production"
-                assert stored_request.guest_config.guest_la_uid == "Administrator"
+                assert stored_request.image_name == "Windows Server 2022"
+                assert stored_request.network == "Production"
+                assert stored_request.guest_la_uid == "Administrator"
             finally:
                 await service.stop()
 
@@ -210,12 +186,13 @@ class TestManagedDeploymentExecution:
         service = job_service_module.job_service
 
         request = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="test-vm",
-                gb_ram=4,
-                cpu_cores=2,
-            ),
             target_host="hyperv-01",
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            network="Production",
+            guest_la_uid="Administrator",
+            guest_la_pw="SecurePass123!",
         )
 
         job = Job(
@@ -272,23 +249,15 @@ class TestManagedDeploymentExecution:
         service = job_service_module.job_service
 
         request = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="web-01",
-                gb_ram=8,
-                cpu_cores=4,
-            ),
-            disk_spec=DiskSpec(
-                image_name="Windows Server 2022",
-                disk_size_gb=100,
-            ),
-            nic_spec=NicSpec(
-                network="Production",
-            ),
-            guest_config=GuestConfigSpec(
-                guest_la_uid="Administrator",
-                guest_la_pw="SecurePass123!",
-            ),
             target_host="hyperv-01",
+            vm_name="web-01",
+            gb_ram=8,
+            cpu_cores=4,
+            image_name="Windows Server 2022",
+            disk_size_gb=100,
+            network="Production",
+            guest_la_uid="Administrator",
+            guest_la_pw="SecurePass123!",
         )
 
         job = Job(
@@ -401,21 +370,16 @@ class TestManagedDeploymentExecution:
 
         # Create request with network and storage_class that need validation
         request = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="web-01",
-                gb_ram=8,
-                cpu_cores=4,
-                storage_class="fast-ssd",
-            ),
-            disk_spec=DiskSpec(
-                image_name="Windows Server 2022",
-                disk_size_gb=100,
-                storage_class="bulk-storage",
-            ),
-            nic_spec=NicSpec(
-                network="Production",
-            ),
             target_host="hyperv-01",
+            vm_name="web-01",
+            gb_ram=8,
+            cpu_cores=4,
+            storage_class="fast-ssd",
+            image_name="Windows Server 2022",
+            disk_size_gb=100,
+            network="Production",
+            guest_la_uid="Administrator",
+            guest_la_pw="SecurePass123!",
         )
 
         job = Job(
@@ -458,8 +422,7 @@ class TestManagedDeploymentExecution:
         assert "fields" in validation_called_with["payload"]
         fields = validation_called_with["payload"]["fields"]
 
-        # Disk storage_class takes precedence
-        assert fields["storage_class"] == "bulk-storage"
+        assert fields["storage_class"] == "fast-ssd"
         assert fields["network"] == "Production"
         assert validation_called_with["target_host"] == "hyperv-01"
 
@@ -471,13 +434,12 @@ class TestGuestConfigIntegration:
         """Test that guest config is generated correctly during deployment."""
         from app.core.guest_config_generator import generate_guest_config
 
-        vm_spec = VmSpec(
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01",
             vm_name="test-vm",
             gb_ram=4,
             cpu_cores=2,
-        )
-
-        guest_config_spec = GuestConfigSpec(
+            network="Production",
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
             guest_domain_join_target="corp.example.com",
@@ -486,10 +448,7 @@ class TestGuestConfigIntegration:
             guest_domain_join_ou="OU=Servers,DC=corp,DC=example,DC=com",
         )
 
-        config = generate_guest_config(
-            vm_spec=vm_spec,
-            guest_config_spec=guest_config_spec,
-        )
+        config = generate_guest_config(request)
 
         # Verify all domain join fields are present
         assert "guest_la_uid" in config
@@ -503,17 +462,12 @@ class TestGuestConfigIntegration:
         """Test guest config generation with static IP."""
         from app.core.guest_config_generator import generate_guest_config
 
-        vm_spec = VmSpec(
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01",
             vm_name="app-01",
             gb_ram=8,
             cpu_cores=4,
-        )
-
-        nic_spec = NicSpec(
             network="Production",
-        )
-
-        guest_config_spec = GuestConfigSpec(
             guest_la_uid="Administrator",
             guest_la_pw="SecurePass123!",
             guest_v4_ip_addr="192.168.1.100",
@@ -522,11 +476,7 @@ class TestGuestConfigIntegration:
             guest_v4_dns1="192.168.1.10",
         )
 
-        config = generate_guest_config(
-            vm_spec=vm_spec,
-            nic_spec=nic_spec,
-            guest_config_spec=guest_config_spec,
-        )
+        config = generate_guest_config(request)
 
         # Verify static IP fields are present
         assert config["guest_v4_ip_addr"] == "192.168.1.100"

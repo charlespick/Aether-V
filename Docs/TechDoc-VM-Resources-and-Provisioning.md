@@ -79,51 +79,44 @@ As a result:
 
 ---
 
-## 4. Schema Model & Guest Configuration
+## 4. API Model & Guest Configuration
 
-### 4.1. Split Schemas
+### 4.1. Hardware-Only Models for Independent APIs
 
-The original monolithic schema is now split into **three schemas**:
+The hardware resource models (VmSpec, DiskSpec, NicSpec) are **hardware-only**:
 
-* **VM schema** (e.g., name, CPU, memory, cluster preference, etc.).
-* **Disk schema** (e.g., size, type, storage class).
-* **NIC schema** (e.g., network, IP behavior, static IP fields).
+* **VmSpec**: vm_name, gb_ram, cpu_cores, target_host, cluster_preference
+* **DiskSpec**: size_gb, storage_type, storage_class  
+* **NicSpec**: network, adapter_name
 
-Each schema contains:
+These models contain **no guest configuration fields**. They are used by:
 
-* Metadata: schema name, version.
-* A collection of **field definitions**, each including:
+1. Independent resource APIs (create VM, create disk, create NIC separately)
+2. Internal construction within the managed deployment orchestrator
 
-  * Display label / hint text.
-  * Input type.
-  * Validation rules.
-  * The **key** used in the JSON payload sent to the agent.
-  * A flag indicating whether this field is **guest configuration**.
+### 4.2. Flat ManagedDeploymentRequest for UI Form Submission
 
-There is **no separate “guest configuration section”** in the schema. Instead:
+The ManagedDeploymentRequest model is a **flat structure** that mirrors the UI form:
 
-* Individual fields across any of the three schemas can be flagged as guest config.
+* All form fields are top-level properties (not nested under vm_spec/guest_config)
+* Hardware fields: vm_name, gb_ram, cpu_cores, target_host, network, ip_behavior, etc.
+* Guest config fields: guest_la_uid, guest_la_pw, domain, domain_ou, dns_server, etc.
+* Optional join credentials: join_account, join_password
 
-  * Example: `hostname` might exist in the VM schema and be flagged both as:
+When a managed deployment job executes:
 
-    * A field required for VM creation (for VM name).
-    * A field to be included in guest configuration for step 4.
+1. The flat request is parsed
+2. Hardware specs (VmSpec, DiskSpec, NicSpec) are constructed internally
+3. Guest configuration is extracted using generate_guest_config()
+4. Hardware APIs create resources, then Initialize API injects guest config via KVP
 
-### 4.2. Guest Configuration Composition
+### 4.3. Guest Configuration Composition
 
-The data model, at runtime, essentially looks like this:
+The guest_config_generator extracts guest configuration from the flat request:
 
-* Each of the three components (VM, Disk, NIC) yields:
-
-  * Some schema metadata, and
-  * A **dictionary of key→value pairs** for that component.
-* Guest config fields are **filtered and concatenated**:
-
-  * All key/value pairs marked as guest config across the three schemas are collected.
-  * They are combined into a **single “guest configuration payload”**:
-
-    * Some metadata (schema version, schema name).
-    * A **flat dictionary** of guest config key/value pairs.
+* Takes ManagedDeploymentRequest directly (not nested dicts)
+* Extracts fields like hostname, domain, credentials, network settings
+* Returns a flat dictionary for KVP transmission to the guest agent
 
 This composed guest configuration dictionary is what is ultimately passed to the **initialization (step 4) agent** for encryption and injection into the guest via Hyper-V KVP.
 

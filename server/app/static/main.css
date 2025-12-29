@@ -505,6 +505,34 @@ body {
     background: rgba(255, 255, 255, 0.08);
 }
 
+.next-ui-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #4a9eff, #3a8eef);
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    color: white;
+    text-decoration: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.next-ui-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(74, 158, 255, 0.3);
+}
+
+.next-ui-label {
+    flex: 1;
+    text-align: left;
+    font-weight: 500;
+}
+
 .settings-icon {
     margin-right: 8px;
     color: var(--muted-ink);

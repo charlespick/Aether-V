@@ -431,6 +431,7 @@ class WinRMService:
                 connection_timeout=connection_timeout,
                 operation_timeout=operation_timeout,
                 read_timeout=read_timeout,
+                kerberos_delegation=True,  # Enable delegation for cluster operations (double-hop)
             )
         except AuthenticationError as exc:  # pragma: no cover - network heavy
             logger.error("Kerberos authentication failed while connecting to %s: %s", hostname, exc)

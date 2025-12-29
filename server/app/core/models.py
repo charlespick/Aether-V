@@ -1,5 +1,5 @@
 """Data models for the application."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
@@ -49,6 +49,69 @@ class VMState(str, Enum):
     DELETING = "Deleting"
 
 
+class NetworkModel(str, Enum):
+    """Network model type."""
+    VLAN = "vlan"
+
+
+class HostRecoveryAction(str, Enum):
+    """VM automatic start action after host recovery."""
+    NONE = "none"
+    RESUME = "resume"
+    ALWAYS_START = "always-start"
+
+
+class HostStopAction(str, Enum):
+    """VM action when host stops."""
+    SAVE = "save"
+    STOP = "stop"
+    SHUT_DOWN = "shut-down"
+
+
+class StorageClass(BaseModel):
+    """Storage class configuration for a host.
+    
+    Represents a named storage location where VM disks can be stored.
+    Maps storage class names to filesystem paths.
+    """
+    name: str = Field(..., description="Unique identifier for the storage class")
+    path: str = Field(..., description="Filesystem path where VM disks will be stored")
+
+
+class VlanConfiguration(BaseModel):
+    """VLAN network configuration.
+    
+    Configuration specific to VLAN-based networks.
+    """
+    virtual_switch: str = Field(..., description="Name of the Hyper-V virtual switch")
+    vlan_id: int = Field(..., ge=1, le=4094, description="VLAN identifier")
+
+
+class Network(BaseModel):
+    """Network configuration for a host.
+    
+    Represents a named network that VMs can connect to.
+    Maps network names to VLAN IDs and virtual switches.
+    """
+    name: str = Field(..., description="Unique identifier for the network")
+    model: NetworkModel = Field(..., description="Network model type")
+    configuration: VlanConfiguration = Field(..., description="Network configuration data")
+
+
+class HostResources(BaseModel):
+    """Host resources configuration.
+    
+    Complete resource configuration for a host including storage classes,
+    networks, and default paths. This model matches the hostresources.json
+    schema that can be deployed to hosts.
+    """
+    version: int = Field(..., description="Schema version number")
+    schema_name: str = Field(..., description="Name of the schema")
+    storage_classes: List[StorageClass] = Field(default_factory=list, description="Available storage classes")
+    networks: List[Network] = Field(default_factory=list, description="Available networks")
+    virtual_machines_path: str = Field(..., description="Default path for VM configuration files")
+
+
 class Cluster(BaseModel):
     """Hyper-V cluster information."""
     name: str
@@ -66,6 +129,17 @@ class Host(BaseModel):
     error: Optional[str] = None
     total_cpu_cores: int = 0
     total_memory_gb: float = 0.0
+    resources: Optional[HostResources] = None  # Host resource configuration
+    
+
+class HostSummary(BaseModel):
+    """Shallow host representation for list views."""
+
+    hostname: str
+    cluster: Optional[str] = None
+    connected: bool = False
+    last_seen: Optional[datetime] = None
+    vm_count: int = 0
 
 
 class Notification(BaseModel):
@@ -86,6 +160,8 @@ class VM(BaseModel):
     id: Optional[str] = None
     name: str
     host: str
+    clustered: Optional[bool] = None  # Whether VM has failover cluster protection
+    cluster_name: Optional[str] = None  # Cluster name if VM is clustered
     state: VMState
     cpu_cores: int = 0
     memory_gb: float = 0.0
@@ -93,7 +169,7 @@ class VM(BaseModel):
     memory_min_gb: Optional[float] = None
     memory_max_gb: Optional[float] = None
     dynamic_memory_enabled: Optional[bool] = None
-    ip_address: Optional[str] = None
+    dynamic_memory_buffer: Optional[int] = None  # Memory buffer percentage for dynamic memory
     ip_addresses: List[str] = Field(default_factory=list)
     notes: Optional[str] = None
     os_family: Optional[OSFamily] = None
@@ -101,8 +177,39 @@ class VM(BaseModel):
     generation: Optional[int] = None
     version: Optional[str] = None
     created_at: Optional[datetime] = None
+    # Security settings
+    secure_boot_enabled: Optional[bool] = None
+    secure_boot_template: Optional[str] = None
+    trusted_platform_module_enabled: Optional[bool] = None
+    key_protector_kind: Optional[str] = None  # Values: 'none', 'host', 'host-guardian-service', 'unknown'
+    # Boot settings
+    primary_boot_device: Optional[str] = None
+    # Host actions
+    host_recovery_action: Optional[HostRecoveryAction] = None
+    host_stop_action: Optional[HostStopAction] = None
+    # Integration services
+    integration_services_shutdown: Optional[bool] = None
+    integration_services_time: Optional[bool] = None
+    integration_services_data_exchange: Optional[bool] = None
+    integration_services_heartbeat: Optional[bool] = None
+    integration_services_vss_backup: Optional[bool] = None
+    integration_services_guest_services: Optional[bool] = None
+    # Related objects
     disks: List["VMDisk"] = Field(default_factory=list)
     networks: List["VMNetworkAdapter"] = Field(default_factory=list)
+
+
+class VMListItem(BaseModel):
+    """Shallow VM representation for inventory tables."""
+
+    id: Optional[str] = None
+    name: str
+    host: str
+    clustered: Optional[bool] = None  # Whether VM has failover cluster protection
+    cluster_name: Optional[str] = None  # Cluster name if VM is clustered
+    state: VMState
+    os_name: Optional[str] = None
+    ip_address: Optional[str] = None
 
 
 class VMDisk(BaseModel):
@@ -111,24 +218,42 @@ class VMDisk(BaseModel):
     id: Optional[str] = None
     name: Optional[str] = None
     path: Optional[str] = None
-    location: Optional[str] = None
     type: Optional[str] = None
     size_gb: Optional[float] = None
     file_size_gb: Optional[float] = None
+    storage_class: Optional[str] = None  # Storage class name from host resources
 
 
 class VMNetworkAdapter(BaseModel):
     """Network adapter attached to a VM."""
 
     id: Optional[str] = None
-    name: Optional[str] = None
     adapter_name: Optional[str] = None
-    network: Optional[str] = None
+    network: Optional[str] = None  # Network name from host resources
     virtual_switch: Optional[str] = None
-    vlan: Optional[str] = None
-    network_name: Optional[str] = None
+    vlan_id: Optional[int] = None  # VLAN ID from network configuration
     ip_addresses: List[str] = Field(default_factory=list)
     mac_address: Optional[str] = None
+    mac_address_config: Optional[str] = None  # "Dynamic" or "Static"
+    # Security settings
+    dhcp_guard: Optional[bool] = None
+    router_guard: Optional[bool] = None
+    mac_spoof_guard: Optional[bool] = None
+    # Bandwidth settings
+    min_bandwidth_mbps: Optional[int] = None
+    max_bandwidth_mbps: Optional[int] = None
+
+
+class DiskDetail(VMDisk):
+    """Disk detail including owning VM reference."""
+
+    vm_id: Optional[str] = None
+
+
+class NetworkAdapterDetail(VMNetworkAdapter):
+    """NIC detail including owning VM reference."""
+
+    vm_id: Optional[str] = None
 
 
 VM.model_rebuild()
@@ -144,42 +269,192 @@ class VMDeleteRequest(BaseModel):
         False, description="Delete all attached disks with the VM (validates no shared disks)")
 
 
-class ResourceCreateRequest(BaseModel):
-    """Base class for resource creation requests."""
-    values: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Field values keyed by schema field id",
+class VMCreateRequest(BaseModel):
+    """Request to create a virtual machine with direct host or cluster-based targeting.
+    
+    Supports both explicit host targeting (for precise placement) and cluster-based
+    targeting (for automatic host selection based on available resources).
+    Exactly one of target_host or target_cluster must be specified.
+    """
+
+    target_host: Optional[str] = Field(
+        None, description="Hostname of the connected Hyper-V host that will execute the job",
     )
-    target_host: str = Field(
-        ...,
-        description="Hostname of the connected Hyper-V host that will execute the job",
+    target_cluster: Optional[str] = Field(
+        None, description="Name of the failover cluster - the server will select the optimal host",
+    )
+    vm_name: str = Field(
+        ..., min_length=1, max_length=64, description="Unique name for the new virtual machine",
+    )
+    gb_ram: int = Field(
+        ..., ge=1, le=512, description="Amount of memory to assign to the VM in gigabytes",
+    )
+    cpu_cores: int = Field(
+        ..., ge=1, le=64, description="Number of virtual CPU cores",
+    )
+    storage_class: Optional[str] = Field(
+        None, description="Name of the storage class where VM configuration files will be stored",
+    )
+    os_family: Optional[OSFamily] = Field(
+        None,
+        description="Operating system family (windows or linux) used to configure secure boot settings",
+    )
+    
+    @model_validator(mode='after')
+    def validate_deployment_target(self) -> 'VMCreateRequest':
+        """Validate that exactly one deployment target is specified."""
+        if self.target_host and self.target_cluster:
+            raise ValueError(
+                "Cannot specify both target_host and target_cluster. "
+                "Please specify only one deployment destination."
+            )
+        if not self.target_host and not self.target_cluster:
+            raise ValueError(
+                "Must specify either target_host or target_cluster as the deployment destination."
+            )
+        return self
+
+
+class VMUpdateRequest(BaseModel):
+    """Request to update VM hardware properties via PATCH.
+    
+    All fields are optional - only provided fields will be updated.
+    Based on Terraform schema mutable properties.
+    """
+    
+    vm_clustered: Optional[bool] = Field(
+        None, description="Register or unregister the VM with the Failover Cluster",
+    )
+
+    # Core hardware - mutable
+    cpu_cores: Optional[int] = Field(
+        None, ge=1, le=64, description="Number of virtual CPU cores",
+    )
+    startup_memory_gb: Optional[float] = Field(
+        None, ge=1.0, le=512.0, description="Startup memory in gigabytes",
+    )
+    
+    # Dynamic memory - mutable
+    memory_gb_min: Optional[float] = Field(
+        None, ge=0.5, le=512.0, description="Minimum memory for dynamic memory (GB)",
+    )
+    memory_gb_max: Optional[float] = Field(
+        None, ge=1.0, le=1024.0, description="Maximum memory for dynamic memory (GB)",
+    )
+    memory_prcnt_buffer: Optional[int] = Field(
+        None, ge=5, le=100, description="Memory buffer percentage for dynamic memory",
+    )
+    
+    # Security settings - mutable
+    secure_boot: Optional[str] = Field(
+        None, 
+        description="Secure boot template: 'Microsoft Windows', 'Microsoft UEFI Certificate Authority', 'Open Source Shielded VM', or 'Disabled'",
+    )
+    tpm_enabled: Optional[bool] = Field(
+        None, description="Enable or disable Trusted Platform Module",
+    )
+    
+    # Host action settings - mutable
+    host_recovery_action: Optional[HostRecoveryAction] = Field(
+        None, description="VM automatic start action after host recovery",
+    )
+    host_stop_action: Optional[HostStopAction] = Field(
+        None, description="VM action when host stops",
+    )
+    
+    # Integration services - mutable
+    integration_services_shutdown: Optional[bool] = Field(
+        None, description="Enable/disable shutdown integration service",
+    )
+    integration_services_time: Optional[bool] = Field(
+        None, description="Enable/disable time synchronization integration service",
+    )
+    integration_services_data_exchange: Optional[bool] = Field(
+        None, description="Enable/disable data exchange (KVP) integration service",
+    )
+    integration_services_heartbeat: Optional[bool] = Field(
+        None, description="Enable/disable heartbeat integration service",
+    )
+    integration_services_vss_backup: Optional[bool] = Field(
+        None, description="Enable/disable VSS backup integration service",
+    )
+    integration_services_guest_services: Optional[bool] = Field(
+        None, description="Enable/disable guest services integration service",
     )
 
 
-class DiskCreateRequest(ResourceCreateRequest):
-    """Request to create a new disk."""
-    pass
+class DiskCreateRequest(BaseModel):
+    """Request to create a new disk attached to a VM."""
 
-
-class NicCreateRequest(ResourceCreateRequest):
-    """Request to create a new network adapter."""
-    pass
-
-
-class ResourceUpdateRequest(ResourceCreateRequest):
-    """Request to update an existing resource."""
-
-    resource_id: str = Field(
-        ..., description="Hyper-V ID of the resource being updated"
+    disk_size_gb: int = Field(
+        100, ge=1, le=65536, description="Size of the virtual disk in gigabytes",
+    )
+    disk_type: str = Field(
+        "Dynamic", description="Type of virtual hard disk (Dynamic or Fixed)",
+    )
+    controller_type: str = Field(
+        "SCSI", description="Type of controller to attach the disk to (SCSI or IDE)",
+    )
+    image_name: Optional[str] = Field(
+        None, description="Optional golden image name to clone for the disk",
+    )
+    storage_class: Optional[str] = Field(
+        None,
+        deprecated=True,
+        description="[Deprecated] Storage class is determined by the VM location and is ignored",
     )
 
 
-class ResourceDeleteRequest(BaseModel):
-    """Request to delete a resource by ID."""
-    resource_id: str = Field(...,
-                             description="Hyper-V ID of the resource to delete")
-    hyperv_host: str = Field(...,
-                             description="Host where the resource is located")
+class DiskUpdateRequest(BaseModel):
+    """Request to update an existing disk via PATCH.
+    
+    Only mutable fields are supported. Disk size can only be expanded.
+    """
+
+    disk_size_gb: Optional[int] = Field(
+        None, ge=1, le=65536, description="New size of the virtual disk in gigabytes (expand only)",
+    )
+
+
+class NicCreateRequest(BaseModel):
+    """Request to create a new network adapter on a VM."""
+
+    network: str = Field(
+        ..., description="Name of the network to connect the adapter to",
+    )
+    adapter_name: Optional[str] = Field(
+        None, description="Optional name for the network adapter",
+    )
+
+
+class NicUpdateRequest(BaseModel):
+    """Request to update an existing network adapter via PATCH.
+    
+    All fields are optional - only provided fields will be updated.
+    Based on Terraform schema mutable properties.
+    """
+
+    network: Optional[str] = Field(
+        None, description="Name of the network to connect the adapter to",
+    )
+    dhcp_guard: Optional[bool] = Field(
+        None, description="Enable/disable DHCP guard",
+    )
+    router_guard: Optional[bool] = Field(
+        None, description="Enable/disable router guard",
+    )
+    mac_spoof_guard: Optional[bool] = Field(
+        None, description="Enable/disable MAC spoofing guard (True = guard enabled = spoofing blocked)",
+    )
+    mac_address: Optional[str] = Field(
+        None, description="MAC address ('Dynamic' for auto-assignment or specific MAC address)",
+    )
+    min_bandwidth_mbps: Optional[int] = Field(
+        None, ge=0, description="Minimum bandwidth in Mbps",
+    )
+    max_bandwidth_mbps: Optional[int] = Field(
+        None, ge=0, description="Maximum bandwidth in Mbps",
+    )
 
 
 class VMInitializationRequest(BaseModel):
@@ -251,6 +526,43 @@ class InventoryResponse(BaseModel):
     total_vms: int
     total_clusters: int = 0
     disconnected_count: int = 0
+    last_refresh: Optional[datetime] = None
+    environment_name: str = "Production Environment"  # New field for page titles
+
+
+class ClusterSummary(BaseModel):
+    """Shallow cluster representation."""
+
+    id: str
+    name: str
+    host_count: int = 0
+    connected_host_count: int = 0
+    vm_count: int = 0
+
+
+class ClusterDetail(BaseModel):
+    """Cluster detail view with shallow child objects."""
+
+    id: str
+    name: str
+    hosts: List[HostSummary] = Field(default_factory=list)
+    virtual_machines: List[VMListItem] = Field(default_factory=list)
+
+
+class HostDetail(HostSummary):
+    """Host detail with shallow VM list."""
+
+    virtual_machines: List[VMListItem] = Field(default_factory=list)
+
+
+class StatisticsResponse(BaseModel):
+    """Inventory statistics replacing legacy inventory summary counts."""
+
+    total_hosts: int
+    total_clusters: int
+    total_vms: int
+    disconnected_count: int = 0
+    environment_name: str
     last_refresh: Optional[datetime] = None
 
 

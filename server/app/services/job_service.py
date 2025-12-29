@@ -386,6 +386,7 @@ class JobService:
     async def submit_managed_deployment_job(
         self,
         request: ManagedDeploymentRequest,
+        effective_target_host: Optional[str] = None,
     ) -> Job:
         """Submit a managed deployment job using the Pydantic-based protocol.
 
@@ -397,16 +398,31 @@ class JobService:
         2. Disk creation via disk.create operation
         3. NIC creation via nic.create operation
         4. Guest configuration via generate_guest_config() and KVP
+        
+        Args:
+            request: The managed deployment request from the API. The vm_clustered
+                field is pre-validated by the route handler.
+            effective_target_host: The host to deploy to. When cluster targeting is used,
+                this contains the cluster-selected host. When direct host targeting is used,
+                this contains the user-specified target_host. If None, falls back to
+                request.target_host (for backward compatibility).
         """
         if not self._started or self._queue is None:
             raise RuntimeError("Job service is not running")
 
-        target_host = request.target_host.strip()
+        # Determine the target host: use effective_target_host if provided, otherwise fall back to request's target_host
+        target_host = effective_target_host if effective_target_host else (
+            request.target_host.strip() if request.target_host else None
+        )
         if not target_host:
             raise RuntimeError(
                 "Managed deployment job requires a target host")
 
         job_id = str(uuid.uuid4())
+        
+        # Use the request data directly - vm_clustered is already validated
+        request_data = request.model_dump()
+        
         job = Job(
             job_id=job_id,
             job_type="managed_deployment",
@@ -414,7 +430,7 @@ class JobService:
             created_at=datetime.now(timezone.utc),
             target_host=target_host,
             parameters={
-                "request": request.model_dump(),
+                "request": request_data,
             },
         )
 
@@ -595,7 +611,7 @@ class JobService:
                     if resource_id and vm.networks:
                         for nic in vm.networks:
                             if nic.id and nic.id.lower() == resource_id.lower():
-                                resource_name = nic.name or f"NIC {resource_id[:8]}"
+                                resource_name = nic.adapter_name or f"NIC {resource_id[:8]}"
                                 break
                     
                     # Fallback to field values for create operations
@@ -1038,16 +1054,17 @@ class JobService:
         await self._update_job(job.job_id, parameters=job.parameters)
 
     async def _execute_managed_deployment_job(self, job: Job) -> None:
-        """Execute a managed deployment using the Pydantic-based protocol.
+        """Execute a managed deployment using the flat ManagedDeploymentRequest.
 
-        Orchestrates VM creation using the JobRequest/JobResult protocol:
-        1. Create VM via vm.create JobRequest
-        2. Create Disk via disk.create JobRequest
+        Orchestrates VM creation from the flat form payload:
+        1. Extract hardware fields and create VM via vm.create JobRequest
+        2. Create Disk via disk.create JobRequest (if image_name provided)
         3. Create NIC via nic.create JobRequest
-        4. Generate guest config using generate_guest_config()
+        4. Generate guest config from flat payload using generate_guest_config()
         5. Send guest config via KVP (using existing initialize-vm mechanism)
 
-        This completely bypasses schemas and uses Pydantic models throughout.
+        The flat ManagedDeploymentRequest mirrors the UI form submission directly.
+        This service parses the flat payload into hardware specs internally.
         """
         from ..core.pydantic_models import (
             ManagedDeploymentRequest,
@@ -1057,14 +1074,15 @@ class JobService:
         request_dict = job.parameters.get("request", {})
         request = ManagedDeploymentRequest(**request_dict)
 
-        target_host = request.target_host.strip()
+        # Use the target_host from the job object (this is the resolved host if cluster was specified)
+        target_host = job.target_host
         if not target_host:
             raise RuntimeError(
                 "Managed deployment job is missing a target host")
 
         await self._append_job_output(
             job.job_id,
-            "Managed deployment starting - using Pydantic protocol",
+            "Managed deployment starting - using flat form payload",
         )
 
         # Ensure host is prepared
@@ -1074,22 +1092,15 @@ class JobService:
                 f"Failed to prepare host {target_host} for deployment")
 
         # Validate host resources before creating any resources
-        # Build a fields dict from Pydantic models for validation
         validation_fields = {}
 
-        # Extract storage_class from VM spec
-        if request.vm_spec.storage_class:
-            validation_fields["storage_class"] = request.vm_spec.storage_class
+        # Extract storage_class from request (flat field)
+        if request.storage_class:
+            validation_fields["storage_class"] = request.storage_class
 
-        # Extract storage_class from disk spec (takes precedence if specified)
-        if request.disk_spec and request.disk_spec.storage_class:
-            validation_fields["storage_class"] = (
-                request.disk_spec.storage_class
-            )
-
-        # Extract network from NIC spec
-        if request.nic_spec and request.nic_spec.network:
-            validation_fields["network"] = request.nic_spec.network
+        # Extract network from request (flat field)
+        if request.network:
+            validation_fields["network"] = request.network
 
         # Validate against host configuration
         await self._validate_job_against_host_config(
@@ -1097,13 +1108,7 @@ class JobService:
         )
 
         # Detect OS family from image name for secure boot configuration
-        # The managed deployment service is responsible for parsing the image name
-        # and setting the os_family field so the host agent can configure secure boot correctly
-        image_name = (
-            request.disk_spec.image_name
-            if request.disk_spec
-            else None
-        )
+        image_name = request.image_name
         detected_os_family = detect_os_family_from_image_name(image_name)
         if image_name:
             await self._append_job_output(
@@ -1114,12 +1119,17 @@ class JobService:
         # Step 1: Create VM as a child job
         await self._append_job_output(
             job.job_id,
-            f"Creating VM '{request.vm_spec.vm_name}'...",
+            f"Creating VM '{request.vm_name}'...",
         )
 
-        # Build VM spec with OS family for secure boot configuration
-        vm_spec_dict = request.vm_spec.model_dump()
-        vm_spec_dict["os_family"] = detected_os_family.value
+        # Build VM spec dict from flat request fields
+        vm_spec_dict = {
+            "vm_name": request.vm_name,
+            "gb_ram": request.gb_ram,
+            "cpu_cores": request.cpu_cores,
+            "storage_class": request.storage_class,
+            "os_family": detected_os_family.value,
+        }
 
         vm_job_definition = {
             "schema": {"id": "vm.create", "version": 1},
@@ -1158,16 +1168,23 @@ class JobService:
         job.parameters["vm_id"] = vm_id
         await self._update_job(job.job_id, parameters=job.parameters)
 
-        # Step 2: Create Disk as a child job if specified
-        if request.disk_spec:
+        # Step 2: Create Disk as a child job if image_name provided
+        if request.image_name:
             await self._append_job_output(
                 job.job_id,
-                "Creating disk...",
+                "Creating disk by cloning image...",
             )
 
-            # Add VM ID to disk spec
-            disk_dict = request.disk_spec.model_dump()
-            disk_dict["vm_id"] = vm_id
+            # Build disk spec dict from flat request fields
+            # Note: disk_type is NOT included - it is always inherited from the source image
+            # when cloning. Hyper-V does not support converting disk types during clone operations.
+            # Only disk_size_gb (for resizing) and controller_type are specified.
+            disk_dict = {
+                "vm_id": vm_id,
+                "image_name": request.image_name,
+                "disk_size_gb": request.disk_size_gb,
+                "controller_type": request.controller_type,
+            }
 
             disk_job_definition = {
                 "schema": {"id": "disk.create", "version": 1},
@@ -1195,104 +1212,142 @@ class JobService:
                 "Disk created successfully",
             )
 
-        # Step 3: Create NIC as a child job if specified
-        if request.nic_spec:
-            await self._append_job_output(
-                job.job_id,
-                "Creating NIC...",
+        # Step 3: Create NIC as a child job
+        await self._append_job_output(
+            job.job_id,
+            "Creating NIC...",
+        )
+
+        # Build NIC spec dict from flat request fields
+        nic_dict = {
+            "vm_id": vm_id,
+            "network": request.network,
+            "adapter_name": None,
+        }
+
+        nic_job_definition = {
+            "schema": {"id": "nic.create", "version": 1},
+            "fields": nic_dict,
+        }
+
+        nic_job = await self._queue_child_job(
+            job,
+            job_type="create_nic",
+            schema_id="nic.create",
+            payload=nic_job_definition,
+        )
+
+        nic_job_result = await self._wait_for_child_job_completion(
+            job.job_id, nic_job.job_id
+        )
+
+        if nic_job_result.status != JobStatus.COMPLETED:
+            raise RuntimeError(
+                f"NIC creation failed: {nic_job_result.error or 'unknown error'}"
             )
 
-            # Add VM ID to NIC spec
-            nic_dict = request.nic_spec.model_dump()
-            nic_dict["vm_id"] = vm_id
+        await self._append_job_output(
+            job.job_id,
+            "NIC created successfully",
+        )
 
-            nic_job_definition = {
-                "schema": {"id": "nic.create", "version": 1},
-                "fields": nic_dict,
+        # Step 4: Generate and send guest config
+        # Guest config is always generated from the flat request (local admin is required)
+        await self._append_job_output(
+            job.job_id,
+            "Generating guest configuration from form payload...",
+        )
+
+        # Generate guest config using the new flat-payload generator
+        guest_config_dict = generate_guest_config(request)
+
+        await self._append_job_output(
+            job.job_id,
+            f"Generated guest config with {len(guest_config_dict)} keys",
+        )
+
+        # Send guest config via existing KVP mechanism
+        init_fields = {
+            "vm_id": vm_id,
+            "vm_name": request.vm_name,
+            **guest_config_dict,
+        }
+
+        # Pass OS family to initialize job for correct provisioning ISO
+        init_fields["os_family"] = detected_os_family.value
+
+        init_job_definition = {
+            "schema": {"id": "initialize-vm", "version": 1},
+            "fields": init_fields,
+        }
+
+        init_job = await self._queue_child_job(
+            job,
+            job_type="initialize_vm",
+            schema_id="initialize-vm",
+            payload=init_job_definition,
+        )
+
+        init_job_result = await self._wait_for_child_job_completion(
+            job.job_id, init_job.job_id
+        )
+
+        if init_job_result.status != JobStatus.COMPLETED:
+            raise RuntimeError(
+                f"Guest initialization failed: {init_job_result.error or 'unknown error'}"
+            )
+
+        await self._append_job_output(
+            job.job_id,
+            "Guest configuration sent successfully",
+        )
+
+        # Step 5: Register VM with failover cluster if requested
+        # This must happen AFTER guest initialization to avoid VM migration during KVP exchange
+        if request.vm_clustered:
+            await self._append_job_output(
+                job.job_id,
+                "Registering VM with failover cluster...",
+            )
+
+            # Build update spec to enable clustering
+            update_spec_dict = {
+                "vm_id": vm_id,
+                "vm_name": request.vm_name,
+                "vm_clustered": True,
             }
 
-            nic_job = await self._queue_child_job(
+            update_job_definition = {
+                "schema": {"id": "vm.update", "version": 1},
+                "fields": update_spec_dict,
+            }
+
+            update_job = await self._queue_child_job(
                 job,
-                job_type="create_nic",
-                schema_id="nic.create",
-                payload=nic_job_definition,
+                job_type="update_vm",
+                schema_id="vm.update",
+                payload=update_job_definition,
             )
 
-            nic_job_result = await self._wait_for_child_job_completion(
-                job.job_id, nic_job.job_id
+            update_job_result = await self._wait_for_child_job_completion(
+                job.job_id, update_job.job_id
             )
 
-            if nic_job_result.status != JobStatus.COMPLETED:
-                raise RuntimeError(
-                    f"NIC creation failed: {nic_job_result.error or 'unknown error'}"
-                )
-
-            await self._append_job_output(
-                job.job_id,
-                "NIC created successfully",
-            )
-
-        # Step 4: Generate and send guest config if specified
-        if request.guest_config:
-            await self._append_job_output(
-                job.job_id,
-                "Generating guest configuration using Pydantic models...",
-            )
-
-            # Generate guest config using the new generator
-            guest_config_dict = generate_guest_config(
-                vm_spec=request.vm_spec,
-                nic_spec=request.nic_spec,
-                disk_spec=request.disk_spec,
-                guest_config_spec=request.guest_config,
-            )
-
-            await self._append_job_output(
-                job.job_id,
-                f"Generated guest config with {len(guest_config_dict)} keys",
-            )
-
-            if guest_config_dict:
-                # Send guest config via existing KVP mechanism
-                # We reuse the initialize-vm job type for KVP transmission
-                init_fields = {
-                    "vm_id": vm_id,
-                    "vm_name": request.vm_spec.vm_name,
-                    **guest_config_dict,
-                }
-
-                # Pass OS family to initialize job for correct provisioning ISO
-                init_fields["os_family"] = detected_os_family.value
-
-                init_job_definition = {
-                    "schema": {"id": "initialize-vm", "version": 1},
-                    "fields": init_fields,
-                }
-
-                init_job = await self._queue_child_job(
-                    job,
-                    job_type="initialize_vm",
-                    schema_id="initialize-vm",
-                    payload=init_job_definition,
-                )
-
-                init_job_result = await self._wait_for_child_job_completion(
-                    job.job_id, init_job.job_id
-                )
-
-                if init_job_result.status != JobStatus.COMPLETED:
-                    raise RuntimeError(
-                        f"Guest initialization failed: {init_job_result.error or 'unknown error'}"
-                    )
-
+            if update_job_result.status != JobStatus.COMPLETED:
+                # Log warning but don't fail the entire deployment
                 await self._append_job_output(
                     job.job_id,
-                    "Guest configuration sent successfully",
+                    f"Warning: Cluster registration failed: {update_job_result.error or 'unknown error'}",
+                )
+            else:
+                await self._append_job_output(
+                    job.job_id,
+                    "VM successfully registered with failover cluster",
                 )
 
         await self._append_job_output(
             job.job_id,
-            f"Managed deployment complete. VM '{request.vm_spec.vm_name}' fully deployed on {target_host}.",
+            f"Managed deployment complete. VM '{request.vm_name}' fully deployed on {target_host}.",
         )
 
     async def _queue_child_job(

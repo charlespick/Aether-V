@@ -151,7 +151,7 @@ def test_vm_lookup_by_id_route_uses_global_search(monkeypatch):
     monkeypatch.setattr(routes.settings, "allow_dev_auth", True, raising=False)
 
     client = TestClient(app)
-    response = client.get("/api/v1/vms/by-id/abc")
+    response = client.get("/api/v1/virtualmachines/abc")
 
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
@@ -449,3 +449,242 @@ async def test_trigger_redeploy_rejects_when_service_disabled(monkeypatch):
     
     assert exc.value.status_code == 503
     assert "disabled" in exc.value.detail
+
+
+# Tests for _resolve_cluster_target_host function
+
+def test_resolve_cluster_target_host_cluster_not_found(monkeypatch):
+    """Test that requesting a non-existent cluster raises 404."""
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [])
+    
+    with pytest.raises(HTTPException) as exc:
+        routes._resolve_cluster_target_host("nonexistent-cluster", 8)
+    
+    assert exc.value.status_code == status.HTTP_404_NOT_FOUND
+    assert "Cluster nonexistent-cluster not found" in exc.value.detail
+
+
+def test_resolve_cluster_target_host_no_connected_hosts(monkeypatch):
+    """Test that a cluster with no connected hosts raises 409."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create hosts but mark them as disconnected
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=False, total_memory_gb=64.0)
+    host2 = SimpleNamespace(hostname="host2", cluster="cluster1", connected=False, total_memory_gb=32.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1, host2])
+    
+    with pytest.raises(HTTPException) as exc:
+        routes._resolve_cluster_target_host("cluster1", 8)
+    
+    assert exc.value.status_code == status.HTTP_409_CONFLICT
+    assert "No connected hosts available in cluster cluster1" in exc.value.detail
+
+
+def test_resolve_cluster_target_host_insufficient_memory(monkeypatch):
+    """Test that insufficient memory across all hosts raises 409 with details."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create connected hosts with limited memory
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=True, total_memory_gb=16.0)
+    host2 = SimpleNamespace(hostname="host2", cluster="cluster1", connected=True, total_memory_gb=32.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1, host2])
+    
+    # Create VMs consuming memory
+    vm1 = SimpleNamespace(host="host1", memory_gb=12.0, memory_startup_gb=None)
+    vm2 = SimpleNamespace(host="host2", memory_gb=28.0, memory_startup_gb=None)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm1, vm2])
+    
+    # Request more memory than available on any host
+    # host1: 16 - 12 = 4 GB available
+    # host2: 32 - 28 = 4 GB available
+    # Requesting 8 GB should fail
+    with pytest.raises(HTTPException) as exc:
+        routes._resolve_cluster_target_host("cluster1", 8)
+    
+    assert exc.value.status_code == status.HTTP_409_CONFLICT
+    assert "Insufficient memory in cluster cluster1" in exc.value.detail
+    assert "VM requires 8 GB" in exc.value.detail
+    assert "4.00 GB" in exc.value.detail
+
+
+def test_resolve_cluster_target_host_selects_host_with_most_memory(monkeypatch):
+    """Test that the host with the most available memory is selected."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create connected hosts with different memory
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=True, total_memory_gb=64.0)
+    host2 = SimpleNamespace(hostname="host2", cluster="cluster1", connected=True, total_memory_gb=128.0)
+    host3 = SimpleNamespace(hostname="host3", cluster="cluster1", connected=True, total_memory_gb=96.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1, host2, host3])
+    
+    # Create VMs consuming memory
+    vm1 = SimpleNamespace(host="host1", memory_gb=32.0, memory_startup_gb=None)
+    vm2 = SimpleNamespace(host="host2", memory_gb=64.0, memory_startup_gb=None)
+    vm3 = SimpleNamespace(host="host3", memory_gb=80.0, memory_startup_gb=None)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm1, vm2, vm3])
+    
+    # Available memory:
+    # host1: 64 - 32 = 32 GB
+    # host2: 128 - 64 = 64 GB (most available)
+    # host3: 96 - 80 = 16 GB
+    
+    result = routes._resolve_cluster_target_host("cluster1", 16)
+    
+    assert result == "host2"
+
+
+def test_resolve_cluster_target_host_prefers_memory_startup_gb(monkeypatch):
+    """Test that memory_startup_gb is used for dynamic memory VMs."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create connected hosts
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=True, total_memory_gb=64.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1])
+    
+    # Create a VM with dynamic memory (memory_startup_gb takes precedence)
+    vm1 = SimpleNamespace(host="host1", memory_gb=32.0, memory_startup_gb=16.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm1])
+    
+    # Available memory should be calculated using startup: 64 - 16 = 48 GB
+    result = routes._resolve_cluster_target_host("cluster1", 40)
+    
+    assert result == "host1"
+
+
+def test_resolve_cluster_target_host_handles_none_memory_values(monkeypatch):
+    """Test that None memory values are handled as 0 for accurate accounting."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create connected hosts
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=True, total_memory_gb=64.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1])
+    
+    # Create VMs with None memory values
+    vm1 = SimpleNamespace(host="host1", memory_gb=None, memory_startup_gb=None)
+    vm2 = SimpleNamespace(host="host1", memory_gb=16.0, memory_startup_gb=None)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm1, vm2])
+    
+    # Available memory: 64 - 0 - 16 = 48 GB
+    result = routes._resolve_cluster_target_host("cluster1", 40)
+    
+    assert result == "host1"
+
+
+def test_resolve_cluster_target_host_filters_non_cluster_hosts(monkeypatch):
+    """Test that only hosts in the target cluster are considered."""
+    # Create multiple clusters
+    cluster1 = SimpleNamespace(name="cluster1")
+    cluster2 = SimpleNamespace(name="cluster2")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [cluster1, cluster2])
+    
+    # Create hosts in different clusters
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=True, total_memory_gb=64.0)
+    host2 = SimpleNamespace(hostname="host2", cluster="cluster2", connected=True, total_memory_gb=128.0)
+    host3 = SimpleNamespace(hostname="host3", cluster=None, connected=True, total_memory_gb=96.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1, host2, host3])
+    
+    # Create VMs
+    vm1 = SimpleNamespace(host="host1", memory_gb=32.0, memory_startup_gb=None)
+    vm2 = SimpleNamespace(host="host2", memory_gb=64.0, memory_startup_gb=None)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm1, vm2])
+    
+    # Resolve cluster1 - should only consider host1 (not host2 or host3)
+    result = routes._resolve_cluster_target_host("cluster1", 16)
+    
+    assert result == "host1"
+
+
+def test_resolve_cluster_target_host_filters_disconnected_hosts(monkeypatch):
+    """Test that disconnected hosts are excluded even if they have sufficient memory."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create hosts with one disconnected
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=False, total_memory_gb=128.0)
+    host2 = SimpleNamespace(hostname="host2", cluster="cluster1", connected=True, total_memory_gb=64.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1, host2])
+    
+    # Create VMs
+    vm2 = SimpleNamespace(host="host2", memory_gb=16.0, memory_startup_gb=None)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm2])
+    
+    # host1 has more memory but is disconnected - should select host2
+    # host2: 64 - 16 = 48 GB available
+    result = routes._resolve_cluster_target_host("cluster1", 32)
+    
+    assert result == "host2"
+
+
+def test_resolve_cluster_target_host_with_multiple_vms_per_host(monkeypatch):
+    """Test memory calculation with multiple VMs on the same host."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create connected hosts
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=True, total_memory_gb=128.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1])
+    
+    # Create multiple VMs on the same host
+    vm1 = SimpleNamespace(host="host1", memory_gb=16.0, memory_startup_gb=None)
+    vm2 = SimpleNamespace(host="host1", memory_gb=32.0, memory_startup_gb=None)
+    vm3 = SimpleNamespace(host="host1", memory_gb=8.0, memory_startup_gb=None)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm1, vm2, vm3])
+    
+    # Available memory: 128 - (16 + 32 + 8) = 72 GB
+    result = routes._resolve_cluster_target_host("cluster1", 64)
+    
+    assert result == "host1"
+
+
+def test_resolve_cluster_target_host_edge_case_exact_memory_match(monkeypatch):
+    """Test that host is selected when available memory exactly matches requirement."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create connected hosts
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=True, total_memory_gb=64.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1])
+    
+    # Create VMs
+    vm1 = SimpleNamespace(host="host1", memory_gb=48.0, memory_startup_gb=None)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm1])
+    
+    # Available memory: 64 - 48 = 16 GB (exactly what we need)
+    result = routes._resolve_cluster_target_host("cluster1", 16)
+    
+    assert result == "host1"
+
+
+def test_resolve_cluster_target_host_no_vms_on_host(monkeypatch):
+    """Test host selection when a host has no VMs (all memory available)."""
+    # Create a cluster
+    fake_cluster = SimpleNamespace(name="cluster1")
+    monkeypatch.setattr(routes.inventory_service, "get_all_clusters", lambda: [fake_cluster])
+    
+    # Create connected hosts
+    host1 = SimpleNamespace(hostname="host1", cluster="cluster1", connected=True, total_memory_gb=64.0)
+    host2 = SimpleNamespace(hostname="host2", cluster="cluster1", connected=True, total_memory_gb=32.0)
+    monkeypatch.setattr(routes.inventory_service, "get_all_hosts", lambda: [host1, host2])
+    
+    # Create VMs only on host2
+    vm1 = SimpleNamespace(host="host2", memory_gb=16.0, memory_startup_gb=None)
+    monkeypatch.setattr(routes.inventory_service, "get_all_vms", lambda: [vm1])
+    
+    # host1 has all 64 GB available, host2 has 16 GB available
+    # Should select host1
+    result = routes._resolve_cluster_target_host("cluster1", 32)
+    
+    assert result == "host1"

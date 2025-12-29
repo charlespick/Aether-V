@@ -18,7 +18,6 @@ from app.core.pydantic_models import (
     VmSpec,
     DiskSpec,
     NicSpec,
-    GuestConfigSpec,
     ManagedDeploymentRequest,
     JobResultEnvelope,
     JobResultStatus,
@@ -197,12 +196,17 @@ class TestValidationErrorHandling:
 
 
 class TestGuestConfigParameterSets:
-    """Test parameter set validation in guest configuration."""
+    """Test parameter set validation in ManagedDeploymentRequest."""
 
     def test_partial_domain_join_rejected(self):
         """Reject partial domain join configuration (all-or-none)."""
         with pytest.raises(ValidationError) as exc_info:
-            GuestConfigSpec(
+            ManagedDeploymentRequest(
+                target_host="hyperv-01",
+                vm_name="test-vm",
+                gb_ram=4,
+                cpu_cores=2,
+                network="Production",
                 guest_la_uid="admin",
                 guest_la_pw="password123",
                 guest_domain_join_target="domain.com",  # Partial - missing other fields
@@ -213,7 +217,12 @@ class TestGuestConfigParameterSets:
 
     def test_complete_domain_join_accepted(self):
         """Accept complete domain join configuration."""
-        config = GuestConfigSpec(
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01",
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            network="Production",
             guest_la_uid="admin",
             guest_la_pw="password123",
             guest_domain_join_target="domain.com",
@@ -222,12 +231,17 @@ class TestGuestConfigParameterSets:
             guest_domain_join_ou="OU=Servers,DC=domain,DC=com",
         )
         
-        assert config.guest_domain_join_target == "domain.com"
+        assert request.guest_domain_join_target == "domain.com"
 
     def test_partial_static_ip_rejected(self):
         """Reject partial static IP configuration (all-or-none for required fields)."""
         with pytest.raises(ValidationError) as exc_info:
-            GuestConfigSpec(
+            ManagedDeploymentRequest(
+                target_host="hyperv-01",
+                vm_name="test-vm",
+                gb_ram=4,
+                cpu_cores=2,
+                network="Production",
                 guest_la_uid="admin",
                 guest_la_pw="password123",
                 guest_v4_ip_addr="192.168.1.10",  # Partial - missing gateway, DNS, etc.
@@ -238,7 +252,12 @@ class TestGuestConfigParameterSets:
 
     def test_complete_static_ip_accepted(self):
         """Accept complete static IP configuration."""
-        config = GuestConfigSpec(
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01",
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            network="Production",
             guest_la_uid="admin",
             guest_la_pw="password123",
             guest_v4_ip_addr="192.168.1.10",
@@ -247,12 +266,17 @@ class TestGuestConfigParameterSets:
             guest_v4_dns1="8.8.8.8",
         )
         
-        assert config.guest_v4_ip_addr == "192.168.1.10"
+        assert request.guest_v4_ip_addr == "192.168.1.10"
 
     def test_partial_ansible_config_rejected(self):
         """Reject partial Ansible configuration (all-or-none)."""
         with pytest.raises(ValidationError) as exc_info:
-            GuestConfigSpec(
+            ManagedDeploymentRequest(
+                target_host="hyperv-01",
+                vm_name="test-vm",
+                gb_ram=4,
+                cpu_cores=2,
+                network="Production",
                 guest_la_uid="admin",
                 guest_la_pw="password123",
                 cnf_ansible_ssh_user="ansible",  # Partial - missing SSH key
@@ -263,14 +287,19 @@ class TestGuestConfigParameterSets:
 
     def test_complete_ansible_config_accepted(self):
         """Accept complete Ansible configuration."""
-        config = GuestConfigSpec(
+        request = ManagedDeploymentRequest(
+            target_host="hyperv-01",
+            vm_name="test-vm",
+            gb_ram=4,
+            cpu_cores=2,
+            network="Production",
             guest_la_uid="admin",
             guest_la_pw="password123",
             cnf_ansible_ssh_user="ansible",
             cnf_ansible_ssh_key="ssh-rsa AAAAB3...",
         )
         
-        assert config.cnf_ansible_ssh_user == "ansible"
+        assert request.cnf_ansible_ssh_user == "ansible"
 
 
 class TestLargeVMConfiguration:
@@ -303,47 +332,36 @@ class TestLargeVMConfiguration:
     def test_complete_deployment_with_all_features(self):
         """Test complete deployment with all optional features enabled."""
         deployment = ManagedDeploymentRequest(
-            vm_spec=VmSpec(
-                vm_name="full-featured-vm",
-                gb_ram=64,
-                cpu_cores=16,
-                storage_class="premium-ssd",
-                vm_clustered=True,
-            ),
-            disk_spec=DiskSpec(
-                disk_size_gb=1024,
-                storage_class="premium-ssd",
-                disk_type="Dynamic",
-                image_name="windows-server-2022",
-            ),
-            nic_spec=NicSpec(
-                network="Production",
-                adapter_name="Production-NIC",
-            ),
-            guest_config=GuestConfigSpec(
-                guest_la_uid="administrator",
-                guest_la_pw="P@ssw0rd123!",
-                guest_domain_join_target="corp.example.com",
-                guest_domain_join_uid="CORP\\svc-provisioning",
-                guest_domain_join_pw="DomainP@ss123!",
-                guest_domain_join_ou="OU=Servers,OU=Production,DC=corp,DC=example,DC=com",
-                guest_v4_ip_addr="10.0.1.100",
-                guest_v4_cidr_prefix=24,
-                guest_v4_default_gw="10.0.1.1",
-                guest_v4_dns1="10.0.1.10",
-                guest_v4_dns2="10.0.1.11",
-                guest_net_dns_suffix="corp.example.com",
-                cnf_ansible_ssh_user="ansible",
-                cnf_ansible_ssh_key="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...",
-            ),
             target_host="hyperv-prod-01.corp.example.com",
+            vm_name="full-featured-vm",
+            gb_ram=64,
+            cpu_cores=16,
+            storage_class="premium-ssd",
+            vm_clustered=True,
+            disk_size_gb=1024,
+            image_name="windows-server-2022",
+            network="Production",
+            guest_la_uid="administrator",
+            guest_la_pw="P@ssw0rd123!",
+            guest_domain_join_target="corp.example.com",
+            guest_domain_join_uid="CORP\\svc-provisioning",
+            guest_domain_join_pw="DomainP@ss123!",
+            guest_domain_join_ou="OU=Servers,OU=Production,DC=corp,DC=example,DC=com",
+            guest_v4_ip_addr="10.0.1.100",
+            guest_v4_cidr_prefix=24,
+            guest_v4_default_gw="10.0.1.1",
+            guest_v4_dns1="10.0.1.10",
+            guest_v4_dns2="10.0.1.11",
+            guest_net_dns_suffix="corp.example.com",
+            cnf_ansible_ssh_user="ansible",
+            cnf_ansible_ssh_key="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...",
         )
         
-        assert deployment.vm_spec.vm_clustered is True
-        assert deployment.disk_spec.image_name == "windows-server-2022"
-        assert deployment.guest_config.guest_domain_join_target == "corp.example.com"
-        assert deployment.guest_config.guest_v4_ip_addr == "10.0.1.100"
-        assert deployment.guest_config.cnf_ansible_ssh_user == "ansible"
+        assert deployment.vm_clustered is True
+        assert deployment.image_name == "windows-server-2022"
+        assert deployment.guest_domain_join_target == "corp.example.com"
+        assert deployment.guest_v4_ip_addr == "10.0.1.100"
+        assert deployment.cnf_ansible_ssh_user == "ansible"
 
 
 class TestJobRequestEnvelopeCreation:

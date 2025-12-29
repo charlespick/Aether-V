@@ -37,7 +37,7 @@ class OverlayManager {
         // Setup event listeners
         document.getElementById('overlay-backdrop').addEventListener('click', () => this.close());
         document.getElementById('overlay-close').addEventListener('click', () => this.close());
-        
+
         // ESC key to close
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.isOpen) {
@@ -59,12 +59,12 @@ class OverlayManager {
 
         // Create and render overlay
         this.currentOverlay = new OverlayClass(data);
-        
+
         // Store instance globally for onclick handlers
         if (overlayName === 'settings') {
             window.settingsOverlayInstance = this.currentOverlay;
         }
-        
+
         const content = await this.currentOverlay.render();
         const title = this.currentOverlay.getTitle();
 
@@ -421,7 +421,7 @@ class SettingsOverlay extends BaseOverlay {
                     redeployBtn.setAttribute('disabled', 'disabled');
                     redeployBtn.title = 'Requires admin role';
                 }
-                
+
                 this.redeployHandler = () => this.showRedeployConfirmation();
                 redeployBtn.addEventListener('click', this.redeployHandler);
             }
@@ -444,10 +444,10 @@ class SettingsOverlay extends BaseOverlay {
 
         // Apply settings
         console.log('Settings saved:', { showHosts, refreshInterval, themeMode });
-        
+
         // Apply theme immediately
         applyTheme(themeMode);
-        
+
         // Close overlay
         overlayManager.close();
 
@@ -977,19 +977,19 @@ class JobDetailsOverlay extends BaseOverlay {
         if (!job) {
             return 'Job Details';
         }
-        
+
         // Use enriched metadata if available for better resource naming
         const metadata = job.parameters?._metadata || {};
         const resourceType = metadata.resource_type || '';
         const resourceName = metadata.resource_name || this.extractVmName(job) || job.job_id || 'Job';
-        
+
         const label = this.formatJobType(job.job_type);
-        
+
         // Format: <Operation> <Resource Type> • <Resource Name>
         // For VM jobs, resource_type will be "VM", so we get "Delete VM • vm-name"
         // For NIC jobs, we get "Delete Network Adapter • NIC-Prod-01"
         // For Disk jobs, we get "Create Disk • data-disk-01"
-        
+
         return `${label} • ${resourceName}`;
     }
 
@@ -1013,7 +1013,7 @@ class JobDetailsOverlay extends BaseOverlay {
         const isManagedDeployment = job.job_type === 'managed_deployment';
 
         // For managed deployment, show deployment steps instead of activity log
-        const activitySection = isManagedDeployment ? 
+        const activitySection = isManagedDeployment ?
             this.renderManagedDeploymentSteps(job) :
             `<div class='job-section'>
                 <h3>Activity log</h3>
@@ -1112,13 +1112,13 @@ class JobDetailsOverlay extends BaseOverlay {
 
     renderChildJobSection(childJobs = []) {
         const jobs = Array.isArray(childJobs) ? childJobs : [];
-        
+
         // Don't show Sub-jobs section for managed_deployment - use Deployment Steps instead
         const isManagedDeployment = this.job?.job_type === 'managed_deployment';
         if (isManagedDeployment) {
             return '';
         }
-        
+
         const shouldShow = jobs.length > 0;
         if (!shouldShow) {
             return '';
@@ -1300,23 +1300,23 @@ class JobDetailsOverlay extends BaseOverlay {
         ];
 
         const childJobs = Array.isArray(job.child_jobs) ? job.child_jobs : [];
-        
+
         // Map each step to its corresponding child job and determine status
         const stepStatuses = stepDefinitions.map(step => {
             // Find the child job for this step
             const childJob = childJobs.find(child => child.job_type === step.jobType);
-            
+
             let status = 'pending';
             let statusClass = 'status-pending';
             let childJobId = null;
-            
+
             if (childJob) {
                 // Use the actual child job status
                 status = childJob.status || 'pending';
                 statusClass = `status-${status}`;
                 childJobId = childJob.job_id;
             }
-            
+
             return {
                 ...step,
                 status,
@@ -1326,10 +1326,10 @@ class JobDetailsOverlay extends BaseOverlay {
         });
 
         return stepStatuses.map(step => {
-            const buttonHtml = step.childJobId ? 
+            const buttonHtml = step.childJobId ?
                 `<button class='job-child-view' data-sub-job-id='${this.escapeHtml(step.childJobId)}' type='button'>View</button>` :
                 '';
-            
+
             return `
                 <div class='deployment-step'>
                     <div class='step-info'>
@@ -1570,7 +1570,7 @@ class JobDetailsOverlay extends BaseOverlay {
         if (!job) {
             return null;
         }
-        
+
         // Check enriched metadata first
         const metadata = job.parameters?._metadata || {};
         for (const field of fieldNames) {
@@ -1579,7 +1579,7 @@ class JobDetailsOverlay extends BaseOverlay {
                 return value.trim();
             }
         }
-        
+
         // Fallback to original logic
         const parameters = job.parameters || {};
         const sources = [parameters.definition?.fields, parameters.fields, parameters];
@@ -1609,10 +1609,10 @@ class NotificationsOverlay extends BaseOverlay {
 
         return `
             <div class="notifications-list">
-                ${notifications.length === 0 ? 
-                    '<p class="empty">No notifications</p>' :
-                    notifications.map(n => this.renderNotification(n)).join('')
-                }
+                ${notifications.length === 0 ?
+                '<p class="empty">No notifications</p>' :
+                notifications.map(n => this.renderNotification(n)).join('')
+            }
             </div>
 
             <div class="settings-actions">
@@ -1630,10 +1630,10 @@ class NotificationsOverlay extends BaseOverlay {
                     <div class="notification-message">${notification.message}</div>
                     <div class="notification-time">${new Date(notification.timestamp).toLocaleString()}</div>
                 </div>
-                ${notification.actionable ? 
-                    `<button class="notification-action" onclick="notificationsOverlay.handleAction('${notification.id}')">View</button>` : 
-                    ''
-                }
+                ${notification.actionable ?
+                `<button class="notification-action" onclick="notificationsOverlay.handleAction('${notification.id}')">View</button>` :
+                ''
+            }
             </div>
         `;
     }
@@ -1728,7 +1728,7 @@ class DiskCreateOverlay extends BaseOverlay {
 
     renderForm() {
         const requiredPill = '<span class="field-required-pill">Required</span>';
-        
+
         this.rootEl.innerHTML = `
             <form id="disk-create-form" class="schema-form-body">
                 <div id="disk-create-messages" class="form-messages" role="alert"></div>
@@ -1811,27 +1811,24 @@ class DiskCreateOverlay extends BaseOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = { vm_id: this.vmId };
+        const body = {};
 
         // Collect form values based on Pydantic DiskSpec model
-        values.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
-        values.disk_type = formData.get('disk_type');
-        values.controller_type = formData.get('controller_type');
-        
+        body.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
+        body.disk_type = formData.get('disk_type');
+        body.controller_type = formData.get('controller_type');
+
         const storageClass = formData.get('storage_class');
         if (storageClass && storageClass.trim()) {
-            values.storage_class = storageClass.trim();
+            body.storage_class = storageClass.trim();
         }
 
         try {
-            const response = await fetch('/api/v1/resources/disks', {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/disks`, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host
-                })
+                body: JSON.stringify(body)
             });
 
             const result = await response.json();
@@ -1841,16 +1838,16 @@ class DiskCreateOverlay extends BaseOverlay {
                 // Refresh the VM view
                 if (window.viewManager && window.viewManager.currentViewName === 'vm') {
                     setTimeout(() => {
-                        viewManager.switchView('vm', { 
-                            id: this.vmId, 
-                            name: this.vmName, 
-                            host: this.host 
+                        viewManager.switchView('vm', {
+                            id: this.vmId,
+                            name: this.vmName,
+                            host: this.host
                         }, { skipHistory: true });
                     }, 100);
                 }
             } else {
-                const errorMsg = (result && result.detail) ? 
-                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                const errorMsg = (result && result.detail) ?
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) :
                     'Failed to create disk';
                 this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
             }
@@ -1897,7 +1894,7 @@ class DiskEditOverlay extends DiskCreateOverlay {
 
     renderForm() {
         const requiredPill = '<span class="field-required-pill">Required</span>';
-        
+
         // Get current values from resource data
         const currentDiskSize = this.resourceData.size_gb || 100;
         const currentDiskType = this.resourceData.type || 'Dynamic';
@@ -1905,7 +1902,7 @@ class DiskEditOverlay extends DiskCreateOverlay {
         const currentStorageClass = this.resourceData.storage_class || '';
 
         // Add notice about disk size restrictions
-        const sizeNotice = this.originalDiskSize ? 
+        const sizeNotice = this.originalDiskSize ?
             `<p class="field-note" style="margin-bottom: 16px;">
                 <strong>Note:</strong> Disk size cannot be reduced below its current size of ${this.originalDiskSize} GB.
             </p>` : '';
@@ -1997,34 +1994,35 @@ class DiskEditOverlay extends DiskCreateOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = { vm_id: this.vmId };
+        const body = {};
 
         // Collect form values based on Pydantic DiskSpec model
-        values.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
-        values.disk_type = formData.get('disk_type');
-        values.controller_type = formData.get('controller_type');
-        
+        body.disk_size_gb = parseInt(formData.get('disk_size_gb'), 10);
+        body.disk_type = formData.get('disk_type');
+        body.controller_type = formData.get('controller_type');
+
         const storageClass = formData.get('storage_class');
         if (storageClass && storageClass.trim()) {
-            values.storage_class = storageClass.trim();
+            body.storage_class = storageClass.trim();
         }
 
         // Client-side validation: prevent disk shrinking
-        if (values.disk_size_gb && this.originalDiskSize && values.disk_size_gb < this.originalDiskSize) {
+        if (body.disk_size_gb && this.originalDiskSize && body.disk_size_gb < this.originalDiskSize) {
             this.messagesEl.innerHTML = `<div class="form-error">Disk size cannot be reduced below its current size of ${this.originalDiskSize} GB.</div>`;
             return;
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/disks/${encodeURIComponent(this.resourceId)}`, {
-                method: 'PUT',
+            // For PATCH, only send the field that actually changed (disk_size_gb)
+            const patchBody = {
+                disk_size_gb: body.disk_size_gb
+            };
+
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/disks/${encodeURIComponent(this.resourceId)}`, {
+                method: 'PATCH',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host,
-                    resource_id: this.resourceId
-                })
+                body: JSON.stringify(patchBody)
             });
 
             const result = await response.json();
@@ -2033,16 +2031,16 @@ class DiskEditOverlay extends DiskCreateOverlay {
                 overlayManager.close();
                 if (window.viewManager && window.viewManager.currentViewName === 'vm') {
                     setTimeout(() => {
-                        viewManager.switchView('vm', { 
-                            id: this.vmId, 
-                            name: this.vmName, 
-                            host: this.host 
+                        viewManager.switchView('vm', {
+                            id: this.vmId,
+                            name: this.vmName,
+                            host: this.host
                         }, { skipHistory: true });
                     }, 100);
                 }
             } else {
-                const errorMsg = (result && result.detail) ? 
-                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                const errorMsg = (result && result.detail) ?
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) :
                     'Failed to update disk';
                 this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
             }
@@ -2097,7 +2095,7 @@ class NicCreateOverlay extends BaseOverlay {
 
     renderForm() {
         const requiredPill = '<span class="field-required-pill">Required</span>';
-        
+
         this.rootEl.innerHTML = `
             <form id="nic-create-form" class="schema-form-body">
                 <div id="nic-create-messages" class="form-messages" role="alert"></div>
@@ -2148,25 +2146,22 @@ class NicCreateOverlay extends BaseOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = { vm_id: this.vmId };
+        const body = {};
 
         // Collect form values based on Pydantic NicSpec model
-        values.network = formData.get('network');
-        
+        body.network = formData.get('network');
+
         const adapterName = formData.get('adapter_name');
         if (adapterName && adapterName.trim()) {
-            values.adapter_name = adapterName.trim();
+            body.adapter_name = adapterName.trim();
         }
 
         try {
-            const response = await fetch('/api/v1/resources/nics', {
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/networkadapters`, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host
-                })
+                body: JSON.stringify(body)
             });
 
             const result = await response.json();
@@ -2175,16 +2170,16 @@ class NicCreateOverlay extends BaseOverlay {
                 overlayManager.close();
                 if (window.viewManager && window.viewManager.currentViewName === 'vm') {
                     setTimeout(() => {
-                        viewManager.switchView('vm', { 
-                            id: this.vmId, 
-                            name: this.vmName, 
-                            host: this.host 
+                        viewManager.switchView('vm', {
+                            id: this.vmId,
+                            name: this.vmName,
+                            host: this.host
                         }, { skipHistory: true });
                     }, 100);
                 }
             } else {
-                const errorMsg = (result && result.detail) ? 
-                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                const errorMsg = (result && result.detail) ?
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) :
                     'Failed to create network adapter';
                 this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
             }
@@ -2226,7 +2221,7 @@ class NicEditOverlay extends NicCreateOverlay {
 
     renderForm() {
         const requiredPill = '<span class="field-required-pill">Required</span>';
-        
+
         // Get current values from resource data
         const currentNetwork = this.resourceData.network_name || this.resourceData.network || this.resourceData.virtual_switch || '';
         const currentAdapterName = this.resourceData.adapter_name || this.resourceData.name || '';
@@ -2283,32 +2278,28 @@ class NicEditOverlay extends NicCreateOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = { vm_id: this.vmId };
+        const body = {};
 
         // Collect form values based on Pydantic NicSpec model
-        values.network = formData.get('network');
-        
+        body.network = formData.get('network');
+
         const adapterName = formData.get('adapter_name');
         if (adapterName && adapterName.trim()) {
-            values.adapter_name = adapterName.trim();
+            body.adapter_name = adapterName.trim();
         }
 
         // Client-side validation: ensure network is specified
-        if (!values.network?.trim()) {
+        if (!body.network?.trim()) {
             this.messagesEl.innerHTML = `<div class="form-error">Network name is required.</div>`;
             return;
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}/nics/${encodeURIComponent(this.resourceId)}`, {
-                method: 'PUT',
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}/networkadapters/${encodeURIComponent(this.resourceId)}`, {
+                method: 'PATCH',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host,
-                    resource_id: this.resourceId
-                })
+                body: JSON.stringify(body)
             });
 
             const result = await response.json();
@@ -2317,16 +2308,16 @@ class NicEditOverlay extends NicCreateOverlay {
                 overlayManager.close();
                 if (window.viewManager && window.viewManager.currentViewName === 'vm') {
                     setTimeout(() => {
-                        viewManager.switchView('vm', { 
-                            id: this.vmId, 
-                            name: this.vmName, 
-                            host: this.host 
+                        viewManager.switchView('vm', {
+                            id: this.vmId,
+                            name: this.vmName,
+                            host: this.host
                         }, { skipHistory: true });
                     }, 100);
                 }
             } else {
-                const errorMsg = (result && result.detail) ? 
-                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                const errorMsg = (result && result.detail) ?
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) :
                     'Failed to update network adapter';
                 this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
             }
@@ -2381,12 +2372,17 @@ class VMEditOverlay extends BaseOverlay {
 
     renderForm() {
         const requiredPill = '<span class="field-required-pill">Required</span>';
-        
-        // Get current values from VM data
+
+        // Get current values from VM data and store for diff comparison
         const currentCpuCores = this.vmData.cpu_cores ?? 2;
         const currentMemoryGb = this.vmData.memory_gb ?? this.vmData.memory_startup_gb ?? 4;
         const currentStorageClass = this.vmData.storage_class ?? '';
-        const currentVmClustered = this.vmData.vm_clustered ?? false;
+        const currentVmClustered = this.vmData.clustered ?? false;
+
+        // Store original values for PATCH diff
+        this.originalCpuCores = currentCpuCores;
+        this.originalMemoryGb = currentMemoryGb;
+        this.originalVmClustered = currentVmClustered;
 
         this.rootEl.innerHTML = `
             <form id="vm-edit-form" class="schema-form-body">
@@ -2474,28 +2470,43 @@ class VMEditOverlay extends BaseOverlay {
         event.preventDefault();
 
         const formData = new FormData(this.formEl);
-        const values = {};
+        const body = {};
 
         // Collect form values based on Pydantic VmSpec model
-        values.vm_name = this.vmName;  // VM name is not editable, use existing name
-        values.cpu_cores = parseInt(formData.get('cpu_cores'), 10);
-        values.gb_ram = parseInt(formData.get('gb_ram'), 10);
-        values.vm_clustered = formData.has('vm_clustered');
-        
+        body.vm_name = this.vmName;  // VM name is not editable, use existing name
+        body.cpu_cores = parseInt(formData.get('cpu_cores'), 10);
+        body.gb_ram = parseInt(formData.get('gb_ram'), 10);
+        body.vm_clustered = formData.has('vm_clustered');
+
         const storageClass = formData.get('storage_class');
         if (storageClass && storageClass.trim()) {
-            values.storage_class = storageClass.trim();
+            body.storage_class = storageClass.trim();
         }
 
         try {
-            const response = await fetch(`/api/v1/resources/vms/${encodeURIComponent(this.vmId)}`, {
-                method: 'PUT',
+            // For PATCH, only send fields that changed from original values
+            const patchBody = {};
+            if (body.cpu_cores !== this.originalCpuCores) {
+                patchBody.cpu_cores = body.cpu_cores;
+            }
+            if (body.gb_ram !== this.originalMemoryGb) {
+                patchBody.startup_memory_gb = body.gb_ram;
+            }
+            if (body.vm_clustered !== this.originalVmClustered) {
+                patchBody.vm_clustered = body.vm_clustered;
+            }
+
+            // Prevent sending empty PATCH body
+            if (Object.keys(patchBody).length === 0) {
+                this.messagesEl.innerHTML = `<div class="form-error">No changes detected. Please modify at least one field before updating.</div>`;
+                return;
+            }
+
+            const response = await fetch(`/api/v1/virtualmachines/${encodeURIComponent(this.vmId)}`, {
+                method: 'PATCH',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    values: values,
-                    target_host: this.host
-                })
+                body: JSON.stringify(patchBody)
             });
 
             const result = await response.json();
@@ -2504,16 +2515,16 @@ class VMEditOverlay extends BaseOverlay {
                 overlayManager.close();
                 if (window.viewManager && window.viewManager.currentViewName === 'vm') {
                     setTimeout(() => {
-                        viewManager.switchView('vm', { 
-                            id: this.vmId, 
-                            name: this.vmName, 
-                            host: this.host 
+                        viewManager.switchView('vm', {
+                            id: this.vmId,
+                            name: this.vmName,
+                            host: this.host
                         }, { skipHistory: true });
                     }, 100);
                 }
             } else {
-                const errorMsg = (result && result.detail) ? 
-                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : 
+                const errorMsg = (result && result.detail) ?
+                    (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) :
                     'Failed to update VM';
                 this.messagesEl.innerHTML = `<div class="form-error">${this.escapeHtml(errorMsg)}</div>`;
             }

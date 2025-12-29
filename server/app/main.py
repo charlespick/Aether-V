@@ -10,7 +10,7 @@ import secrets
 import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -186,8 +186,10 @@ async def lifespan(app: FastAPI):
             "Skipping Kerberos initialization because configuration errors were detected"
         )
     else:
-        logger.warning(
-            "Kerberos credentials not configured; WinRM operations will fail")
+        logger.info(
+            "Kerberos authentication not configured; running without host management features. "
+            "Configure WINRM_KERBEROS_PRINCIPAL and WINRM_KEYTAB_B64 to enable Hyper-V host operations."
+        )
 
     remote_started = False
     notifications_started = False
@@ -409,6 +411,35 @@ else:  # pragma: no cover - filesystem dependent
     logger.warning(
         "Agent artifacts directory '%s' not found; host deployments will be disabled",
         AGENT_ARTIFACTS_DIR,
+    )
+
+# Mount next-ui build directory
+next_ui_candidates = [
+    PROJECT_ROOT / "next-ui" / "build",  # Development layout
+    SERVER_DIR / "next-ui-build",  # Production/container layout
+]
+next_ui_dir = next((path for path in next_ui_candidates if path.is_dir()), None)
+
+if next_ui_dir:
+    # Next-UI SPA route handlers (must be registered before StaticFiles mount)
+    _next_ui_dir = next_ui_dir  # Capture for closure (type narrowing)
+    async def serve_next_ui_index():
+        """Serve Next-UI index.html for SPA routes."""
+        return FileResponse(_next_ui_dir / "index.html")
+    
+    app.get("/next-ui/", response_class=HTMLResponse, tags=["UI"])(serve_next_ui_index)
+    app.get("/next-ui/cluster/{cluster_name}", response_class=HTMLResponse, tags=["UI"])(serve_next_ui_index)
+    app.get("/next-ui/host/{hostname}", response_class=HTMLResponse, tags=["UI"])(serve_next_ui_index)
+    app.get("/next-ui/virtual-machine/{vm_id}", response_class=HTMLResponse, tags=["UI"])(serve_next_ui_index)
+    app.get("/next-ui/disconnected-hosts", response_class=HTMLResponse, tags=["UI"])(serve_next_ui_index)
+    
+    # Mount static files for JS, CSS, images, etc.
+    app.mount("/next-ui", StaticFiles(directory=str(next_ui_dir)), name="next-ui")
+    logger.info("Next-UI mounted at /next-ui from %s", next_ui_dir)
+else:  # pragma: no cover - filesystem dependent
+    logger.info(
+        "Next-UI build directory not found in expected locations %s; next-ui routes disabled",
+        next_ui_candidates,
     )
 
 # Add security headers and audit logging middleware

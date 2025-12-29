@@ -517,7 +517,7 @@ const CONNECTION_STATES = {
 
 function updateWebSocketIndicator(status, data) {
     const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10; // Fallback if wsClient not available
-    
+
     const indicator = document.getElementById('connection-status-indicator');
     const iconEl = indicator?.querySelector('.connection-status-icon');
     const titleEl = indicator?.querySelector('.connection-status-title');
@@ -559,7 +559,7 @@ function updateConnectionContent(status, data, iconEl, titleEl, messageEl, retry
     // Update content only if status changed
     if (connectionStatusState.currentStatus !== status) {
         connectionStatusState.currentStatus = status;
-        
+
         // Update all content (no DOM visibility changes)
         iconEl.innerHTML = stateConfig.icon;
         titleEl.textContent = stateConfig.title;
@@ -570,24 +570,24 @@ function updateConnectionContent(status, data, iconEl, titleEl, messageEl, retry
     if (status === 'reconnecting' && data && data.delay) {
         // Stop any existing timer first (but don't clear state yet)
         stopCountdownTimer(false);
-        
+
         // Always update state for timer callback (attempt number changes each time)
         connectionStatusState.lastAttempt = data.attempt;
         connectionStatusState.maxAttempts = maxAttempts;
         connectionStatusState.messageElement = messageEl;
         connectionStatusState.reconnectDeadline = Date.now() + data.delay;
-        
+
         // Start countdown timer that updates every second
         connectionStatusState.countdownTimer = setInterval(() => {
             if (connectionStatusState.messageElement && connectionStatusState.lastAttempt) {
                 updateCountdownMessage(
-                    connectionStatusState.messageElement, 
-                    connectionStatusState.lastAttempt, 
+                    connectionStatusState.messageElement,
+                    connectionStatusState.lastAttempt,
                     connectionStatusState.maxAttempts
                 );
             }
         }, 1000);
-        
+
         // Update message immediately
         updateCountdownMessage(messageEl, data.attempt, maxAttempts);
     } else {
@@ -602,17 +602,17 @@ function updateCountdownMessage(messageEl, attempt, maxAttempts) {
         messageEl.textContent = `Trying to reconnect... (attempt ${attempt}/${maxAttempts})`;
         return;
     }
-    
+
     const remainingMs = connectionStatusState.reconnectDeadline - Date.now();
     const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-    
+
     let newMessage;
     if (remainingSeconds > 0) {
         newMessage = `Trying to reconnect... (attempt ${attempt}/${maxAttempts}, retry in ${remainingSeconds}s)`;
     } else {
         newMessage = `Reconnecting... (attempt ${attempt}/${maxAttempts})`;
     }
-    
+
     messageEl.textContent = newMessage;
 }
 
@@ -630,10 +630,10 @@ function stopCountdownTimer(clearState = true) {
 function showConnectionIndicator() {
     const indicator = document.getElementById('connection-status-indicator');
     if (!indicator || connectionStatusState.isVisible) return;
-    
+
     connectionStatusState.isVisible = true;
     indicator.style.display = 'block';
-    
+
     // Trigger entrance animation
     requestAnimationFrame(() => {
         indicator.classList.add('visible');
@@ -643,16 +643,16 @@ function showConnectionIndicator() {
 function hideConnectionIndicator() {
     const indicator = document.getElementById('connection-status-indicator');
     if (!indicator || !connectionStatusState.isVisible) return;
-    
+
     connectionStatusState.isVisible = false;
     connectionStatusState.currentStatus = null;
     connectionStatusState.isInErrorState = false; // Reset error state
     connectionStatusState.lastAttempt = null;
     connectionStatusState.reconnectDeadline = null;
-    
+
     // Trigger exit animation
     indicator.classList.remove('visible');
-    
+
     // Hide after animation completes
     setTimeout(() => {
         if (!connectionStatusState.isVisible) {
@@ -712,15 +712,15 @@ async function checkAuthenticationStatus() {
     if (authCheckInProgress) {
         return false;
     }
-    
+
     authCheckInProgress = true;
-    
+
     try {
         const response = await fetch('/auth/token', {
             method: 'GET',
             credentials: 'same-origin' // Include session cookies
         });
-        
+
         if (response.ok) {
             const data = await response.json();
 
@@ -771,18 +771,18 @@ async function checkAuthenticationStatus() {
 async function handleAuthCallback() {
     const urlParams = new URLSearchParams(window.location.search);
     const authSuccess = urlParams.get('auth');
-    
+
     if (authSuccess === 'success') {
         // Clean up URL
         const url = new URL(window.location);
         url.searchParams.delete('auth');
         window.history.replaceState({}, '', url);
-        
+
         console.log('Authentication callback received');
         // Check auth status which will update the UI
         return await checkAuthenticationStatus();
     }
-    
+
     return false;
 }
 
@@ -790,14 +790,14 @@ async function handleAuthCallback() {
 async function initializeAuth() {
     // Clean up any old localStorage tokens since we now use sessions
     localStorage.removeItem('authToken');
-    
+
     // Handle auth callback first
     const callbackHandled = await handleAuthCallback();
-    
+
     if (!callbackHandled) {
         // Check existing session
         const isAuthenticated = await checkAuthenticationStatus();
-        
+
         // If OIDC is enabled and we're not authenticated, redirect to login
         if (authEnabled && !isAuthenticated) {
             console.log('OIDC enabled but not authenticated, redirecting to login');
@@ -807,7 +807,7 @@ async function initializeAuth() {
             return;
         }
     }
-    
+
     updateProfileOverlayContent(userInfo);
 }
 
@@ -852,15 +852,20 @@ async function logout() {
 
 async function loadInventory() {
     try {
-        const response = await fetch('/api/v1/inventory', {
-            credentials: 'same-origin'
-        });
-        
-        if (response.status === 401) {
+        const data = await window.fetchInventoryData();
+
+        // Update sidebar navigation with hosts and VMs
+        updateSidebarNavigation(data);
+
+        return data;
+
+    } catch (error) {
+        console.error('Error loading inventory:', error);
+        if (error.status === 401) {
             if (authEnabled) {
                 console.log('Token invalid, checking auth state');
                 const isAuthenticated = await checkAuthenticationStatus();
-                
+
                 if (!isAuthenticated) {
                     console.log('Not authenticated, redirecting to login');
                     setTimeout(() => {
@@ -868,27 +873,12 @@ async function loadInventory() {
                     }, 1000);
                     return null;
                 }
-                
+
                 return loadInventory();
-            } else {
-                showError('Authentication required. Please configure authentication.');
-                return null;
             }
+            showError('Authentication required. Please configure authentication.');
+            return null;
         }
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        
-        // Update sidebar navigation with hosts and VMs
-        updateSidebarNavigation(data);
-        
-        return data;
-        
-    } catch (error) {
-        console.error('Error loading inventory:', error);
         showError('Failed to load inventory: ' + error.message);
         return null;
     }
@@ -934,30 +924,30 @@ async function loadNotifications() {
         const response = await fetch('/api/v1/notifications', {
             credentials: 'same-origin'
         });
-        
+
         if (response.status === 401) {
             if (authEnabled) {
                 console.log('Token invalid for notifications, checking auth state');
                 const isAuthenticated = await checkAuthenticationStatus();
-                
+
                 if (!isAuthenticated) {
                     console.log('Not authenticated for notifications');
                     return null;
                 }
-                
+
                 return loadNotifications();
             } else {
                 showError('Authentication required for notifications.');
                 return null;
             }
         }
-        
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-        
+
         const data = await response.json();
-        
+
         // Update notification panel
         updateNotificationPanel(data);
 
@@ -968,9 +958,9 @@ async function loadNotifications() {
             // Ensure UI reflects absence of notification updates when deployment ends
             applyProvisioningAvailability(window.agentDeploymentState);
         }
-        
+
         return data;
-        
+
     } catch (error) {
         console.error('Error loading notifications:', error);
         showError('Failed to load notifications: ' + error.message);
@@ -1241,10 +1231,10 @@ function formatJobStatus(status) {
 async function markNotificationAsRead(notificationId) {
     try {
         const response = await fetch(`/api/v1/notifications/${notificationId}/read`, {
-            method: 'PUT',
+            method: 'PATCH',
             credentials: 'same-origin'
         });
-        
+
         if (response.ok) {
             // Reload notifications to update UI
             await loadNotifications();
@@ -1258,10 +1248,10 @@ async function markNotificationAsRead(notificationId) {
 async function markAllNotificationsAsRead() {
     try {
         const response = await fetch('/api/v1/notifications/mark-all-read', {
-            method: 'PUT',
+            method: 'PATCH',
             credentials: 'same-origin'
         });
-        
+
         if (response.ok) {
             // Reload notifications to update UI
             await loadNotifications();
@@ -1274,15 +1264,15 @@ async function markAllNotificationsAsRead() {
 // Update notification button badge
 function updateNotificationBadge(unreadCount) {
     const notificationsBtn = document.getElementById('notifications-btn');
-    
+
     if (!notificationsBtn) return;
-    
+
     // Remove existing badge
     const existingBadge = notificationsBtn.querySelector('.notification-badge');
     if (existingBadge) {
         existingBadge.remove();
     }
-    
+
     // Add badge if there are unread notifications
     if (unreadCount > 0) {
         const badge = document.createElement('span');
@@ -1297,17 +1287,17 @@ function updateSidebarNavigation(inventory) {
     const clustersContainer = document.getElementById('clusters-container');
     const disconnectedHostsItem = document.querySelector('.disconnected-hosts');
     const disconnectedBadge = document.querySelector('.disconnected-count');
-    
+
     if (!clustersContainer || !inventory) return;
-    
+
     const clusters = inventory.clusters || [];
     const hosts = inventory.hosts || [];
     const vms = inventory.vms || [];
     const disconnectedHosts = inventory.disconnected_hosts || [];
-    
+
     // Get user setting for showing hosts
     const showHosts = localStorage.getItem('setting.showHosts') !== 'false';
-    
+
     // Save current expanded/collapsed state before updating
     const expandedClusters = new Set();
     const expandedHosts = new Set();
@@ -1317,7 +1307,7 @@ function updateSidebarNavigation(inventory) {
     document.querySelectorAll('.nav-group.expanded[data-host]').forEach(el => {
         expandedHosts.add(el.dataset.host);
     });
-    
+
     // Group VMs by host
     const vmsByHost = {};
     vms.forEach(vm => {
@@ -1326,7 +1316,7 @@ function updateSidebarNavigation(inventory) {
         }
         vmsByHost[vm.host].push(vm);
     });
-    
+
     // Group hosts by cluster
     const hostsByCluster = {};
     hosts.forEach(host => {
@@ -1336,10 +1326,10 @@ function updateSidebarNavigation(inventory) {
         }
         hostsByCluster[clusterName].push(host);
     });
-    
+
     // Generate clusters HTML
     let clustersHtml = '';
-    
+
     if (clusters.length === 0) {
         // No clusters available - show empty state
         clustersHtml = `
@@ -1351,7 +1341,7 @@ function updateSidebarNavigation(inventory) {
         clusters.forEach(cluster => {
             const clusterHosts = hostsByCluster[cluster.name] || [];
             const isExpanded = expandedClusters.has(cluster.name);
-            
+
             clustersHtml += `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-cluster="${cluster.name}">
                     <div class="nav-item group-header" data-nav-type="cluster" data-cluster-name="${cluster.name}">
@@ -1366,9 +1356,9 @@ function updateSidebarNavigation(inventory) {
             `;
         });
     }
-    
+
     clustersContainer.innerHTML = `<ul class="nav-list">${clustersHtml}</ul>`;
-    
+
     // Update disconnected hosts section
     if (disconnectedHosts.length > 0) {
         disconnectedHostsItem.style.display = 'list-item';
@@ -1378,7 +1368,7 @@ function updateSidebarNavigation(inventory) {
         disconnectedHostsItem.style.display = 'none';
         disconnectedBadge.style.display = 'none';
     }
-    
+
     // Re-attach event listeners
     attachNavigationEventListeners();
 
@@ -1394,7 +1384,7 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
             const shortName = host.hostname.split('.')[0];
             const hostVMs = vmsByHost[host.hostname] || [];
             const isExpanded = expandedHosts.has(host.hostname);
-            
+
             return `
                 <li class="nav-group ${isExpanded ? 'expanded' : ''}" data-host="${host.hostname}">
                     <div class="sub-item group-header" data-nav-type="host" data-hostname="${host.hostname}">
@@ -1405,15 +1395,15 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
                     ${hostVMs.length > 0 ? `
                         <ul class="sub-sub-list">
                             ${hostVMs.map(vm => {
-                                const meta = getVmStateMeta(vm.state);
-                                const vmId = vm.id || '';
-                                return `
+                const meta = getVmStateMeta(vm.state);
+                const vmId = vm.id || '';
+                return `
                                     <li class="vm-item" data-nav-type="vm" data-vm-id="${vmId}" data-vm-name="${vm.name}" data-vm-host="${vm.host}">
                                         <span class="vm-status">${meta.icon}</span>
                                         <span class="vm-name">${vm.name}</span>
                                     </li>
                                 `;
-                            }).join('')}
+            }).join('')}
                         </ul>
                     ` : ''}
                 </li>
@@ -1426,7 +1416,7 @@ function renderClusterContent(cluster, hosts, vmsByHost, showHosts, expandedHost
             const hostVMs = vmsByHost[host.hostname] || [];
             allVMs.push(...hostVMs);
         });
-        
+
         return allVMs.map(vm => {
             const meta = getVmStateMeta(vm.state);
             const hostShort = vm.host.split('.')[0];
@@ -1452,28 +1442,28 @@ function attachNavigationEventListeners() {
         if (oldListener) {
             clustersContainer.removeEventListener('click', oldListener);
         }
-        
+
         // Create new listener
         const navListener = (e) => {
             // Check if click was on expand icon
             const expandIcon = e.target.closest('.expand-icon');
-            
+
             if (expandIcon) {
                 e.stopPropagation();
                 e.preventDefault();
                 const navGroup = expandIcon.closest('.nav-group');
-                
+
                 if (navGroup) {
                     navGroup.classList.toggle('expanded');
                 }
                 return;
             }
-            
+
             // Handle navigation clicks
             const navItem = e.target.closest('[data-nav-type]');
             if (navItem) {
                 const navType = navItem.dataset.navType;
-                
+
                 if (navType === 'cluster') {
                     const clusterName = navItem.dataset.clusterName;
                     const navGroup = navItem.closest('.nav-group');
@@ -1508,12 +1498,12 @@ function attachNavigationEventListeners() {
                 }
             }
         };
-        
+
         clustersContainer.addEventListener('click', navListener);
         // Store reference for cleanup
         clustersContainer._navListener = navListener;
     }
-    
+
     // Handle disconnected hosts click
     document.querySelector('.disconnected-hosts')?.addEventListener('click', () => {
         viewManager.switchView('disconnected-hosts');
@@ -1523,7 +1513,7 @@ function attachNavigationEventListeners() {
 // Theme management
 function applyTheme(themeMode) {
     const html = document.documentElement;
-    
+
     if (themeMode === 'system') {
         // Use system preference
         const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1603,7 +1593,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Load initial inventory
     const inventory = await loadInventory();
-    
+
     // Load initial notifications (will also come via WebSocket)
     await loadNotifications();
 
@@ -1640,7 +1630,7 @@ function setupNavigation() {
             await toggleNotifications();
         });
     }
-    
+
     // Mark all as read button handler
     const markAllReadBtn = document.querySelector('.mark-all-read-btn');
     if (markAllReadBtn) {
@@ -1672,14 +1662,14 @@ function setupNavigation() {
             }
         });
     }
-    
+
     // Close notifications when clicking outside
     document.addEventListener('click', (e) => {
         const notificationsOverlay = document.getElementById('notifications-overlay');
         const notificationsBtn = document.getElementById('notifications-btn');
-        
-        if (notificationsOverlay && 
-            !notificationsOverlay.contains(e.target) && 
+
+        if (notificationsOverlay &&
+            !notificationsOverlay.contains(e.target) &&
             !notificationsBtn.contains(e.target)) {
             closeNotifications();
         }
@@ -1776,11 +1766,11 @@ function showError(message) {
 
 async function refreshInventory() {
     console.log('Refreshing inventory and notifications...');
-    
+
     // Refresh both inventory and notifications
     const inventory = await loadInventory();
     await loadNotifications();
-    
+
     // Refresh current view if it needs updated data
     if (viewManager.currentView && typeof viewManager.currentView.refresh === 'function') {
         await viewManager.currentView.refresh();
@@ -1840,14 +1830,14 @@ class SearchOverlay {
         backdrop.addEventListener('click', () => {
             this.close();
         });
-        
+
         const closeBtn = overlay.querySelector('.search-close-btn');
         closeBtn.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
             this.close();
         });
-        
+
         // ESC key to close - use a bound method to ensure proper this context
         this.escapeHandler = (e) => {
             if (e.key === 'Escape' && this.isOpen) {
@@ -1903,7 +1893,7 @@ class SearchOverlay {
 
     updateExpandedPosition() {
         if (!this.originRect) return;
-        
+
         const rootStyles = getComputedStyle(document.documentElement);
         const rawGap = rootStyles.getPropertyValue('--search-overlay-gap').trim();
         const rootFontSize = parseFloat(rootStyles.fontSize) || 16;
@@ -2025,15 +2015,7 @@ class SearchOverlay {
 
         // Get inventory data for searching
         try {
-            const response = await fetch('/api/v1/inventory', { 
-                credentials: 'same-origin'
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const inventory = await response.json();
+            const inventory = await window.fetchInventoryData();
             this.renderSearchResults(query, inventory);
         } catch (error) {
             console.error('Error searching inventory:', error);
@@ -2045,21 +2027,21 @@ class SearchOverlay {
         if (!content) return;
 
         const queryLower = query.toLowerCase();
-        
+
         // Filter VMs
-        const vms = (inventory.vms || []).filter(vm => 
-            vm.name.toLowerCase().includes(queryLower) || 
+        const vms = (inventory.vms || []).filter(vm =>
+            vm.name.toLowerCase().includes(queryLower) ||
             vm.host.toLowerCase().includes(queryLower)
         );
 
         // Filter Hosts
-        const hosts = (inventory.hosts || []).filter(host => 
+        const hosts = (inventory.hosts || []).filter(host =>
             host.hostname.toLowerCase().includes(queryLower) ||
             (host.cluster && host.cluster.toLowerCase().includes(queryLower))
         );
 
         // Filter Clusters
-        const clusters = (inventory.clusters || []).filter(cluster => 
+        const clusters = (inventory.clusters || []).filter(cluster =>
             cluster.name.toLowerCase().includes(queryLower)
         );
 
@@ -2162,10 +2144,10 @@ class SearchOverlay {
             return;
         }
         this.isOpen = true;
-        
+
         const originalInput = document.querySelector('#global-search');
         const expandoInput = this.overlayElement.querySelector('.search-expando-input');
-        
+
         // Set aria-expanded on original search container
         const searchContainer = document.querySelector('.search-container');
         if (searchContainer) {
@@ -2182,7 +2164,7 @@ class SearchOverlay {
             const computed = getComputedStyle(searchInput);
             initialBorderRadius = parseFloat(computed.borderRadius) || 20;
         }
-        
+
         this.expandoElement.style.left = this.originRect.left + 'px';
         this.expandoElement.style.top = this.originRect.top + 'px';
         this.expandoElement.style.width = this.originRect.width + 'px';
@@ -2225,7 +2207,7 @@ class SearchOverlay {
 
         const originalInput = document.querySelector('#global-search');
         const expandoInput = this.overlayElement.querySelector('.search-expando-input');
-        
+
         // Set aria-expanded on original search container
         const searchContainer = document.querySelector('.search-container');
         if (searchContainer) {
@@ -2235,7 +2217,7 @@ class SearchOverlay {
         // Revert expando back to pill size and position
         this.expandoElement.classList.remove('open');
         this.calcOrigin();
-        
+
         // Reset to original search box dimensions and border radius
         const searchInput = document.querySelector('.search-container .search');
         let borderRadius = 20; // fallback
@@ -2243,7 +2225,7 @@ class SearchOverlay {
             const computed = getComputedStyle(searchInput);
             borderRadius = parseFloat(computed.borderRadius) || 20;
         }
-        
+
         this.expandoElement.style.left = this.originRect.left + 'px';
         this.expandoElement.style.top = this.originRect.top + 'px';
         this.expandoElement.style.width = this.originRect.width + 'px';
@@ -2299,11 +2281,11 @@ const searchOverlay = new SearchOverlay();
 document.addEventListener('DOMContentLoaded', () => {
     const searchContainer = document.querySelector('.search-container');
     const searchBox = document.getElementById('global-search');
-    
+
     if (searchContainer && searchBox) {
         // Set initial aria-expanded
         searchContainer.setAttribute('aria-expanded', 'false');
-        
+
         // Handle clicks on search container
         searchContainer.addEventListener('click', (e) => {
             if (searchOverlay.suppressNextOpen) {
@@ -2313,7 +2295,7 @@ document.addEventListener('DOMContentLoaded', () => {
             e.preventDefault();
             searchOverlay.open();
         });
-        
+
         // Handle Enter/Space on search container
         searchContainer.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -2325,7 +2307,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 searchOverlay.open();
             }
         });
-        
+
         // Handle focus on search input - redirect to overlay
         searchBox.addEventListener('focus', (e) => {
             if (searchOverlay.isOpen) {

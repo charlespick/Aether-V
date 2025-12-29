@@ -1,5 +1,6 @@
 """API route handlers."""
 import asyncio
+from collections import defaultdict
 import base64
 import copy
 import json
@@ -18,22 +19,27 @@ from dataclasses import dataclass
 
 from ..core.models import (
     Host,
+    HostDetail,
+    HostSummary,
     VM,
+    VMListItem,
     VMDisk,
     VMNetworkAdapter,
     Job,
     VMDeleteRequest,
-    InventoryResponse,
+    StatisticsResponse,
     HealthResponse,
     NotificationsResponse,
     AboutResponse,
     BuildInfo,
     VMState,
     ServiceDiagnosticsResponse,
-    ResourceCreateRequest,
+    VMCreateRequest,
+    VMUpdateRequest,
     DiskCreateRequest,
+    DiskUpdateRequest,
     NicCreateRequest,
-    ResourceUpdateRequest,
+    NicUpdateRequest,
     VMInitializationRequest,
     NoopTestRequest,
     JobResult,
@@ -46,13 +52,16 @@ from ..core.models import (
     OSSLicenseSummary,
     NotificationLevel,
     NotificationCategory,
+    ClusterSummary,
+    ClusterDetail,
+    DiskDetail,
+    NetworkAdapterDetail,
 )
 from ..core.pydantic_models import (
     ManagedDeploymentRequest,
     VmSpec,
     DiskSpec,
     NicSpec,
-    GuestConfigSpec,
 )
 from ..core.auth import (
     Permission,
@@ -200,6 +209,9 @@ def _get_vm_or_404(vm_id: str) -> VM:
 def _find_vm_disk(vm: VM, disk_id: str) -> Optional[VMDisk]:
     """Locate a disk by ID on a VM."""
 
+    if not disk_id:
+        return None
+
     return next((disk for disk in vm.disks if disk.id == disk_id), None)
 
 
@@ -207,6 +219,138 @@ def _find_vm_nic(vm: VM, nic_id: str) -> Optional[VMNetworkAdapter]:
     """Locate a NIC by ID on a VM."""
 
     return next((nic for nic in vm.networks if nic.id == nic_id), None)
+
+
+def _get_host_or_404(hostname: str) -> Host:
+    """Return a host by name or raise a 404 error."""
+
+    host = inventory_service.hosts.get(hostname)
+    if not host:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Host {hostname} not found",
+        )
+    return host
+
+
+def _cluster_lookup() -> Dict[str, Optional[str]]:
+    """Return a mapping of hostnames to their cluster names."""
+
+    return {host.hostname: host.cluster for host in inventory_service.get_all_hosts()}
+
+
+def _vm_counts_by_host(vms: List[VM]) -> Dict[str, int]:
+    """Compute VM counts keyed by host name."""
+
+    counts: Dict[str, int] = defaultdict(int)
+    for vm in vms:
+        counts[vm.host] += 1
+    return counts
+
+
+def _vm_counts_by_cluster(cluster_by_host: Dict[str, Optional[str]], vms: List[VM]) -> Dict[str, int]:
+    """Compute VM counts keyed by cluster name."""
+
+    counts: Dict[str, int] = defaultdict(int)
+    for vm in vms:
+        cluster_name = cluster_by_host.get(vm.host)
+        if cluster_name:
+            counts[cluster_name] += 1
+    return counts
+
+
+def _to_vm_list_item(vm: VM, cluster_by_host: Dict[str, Optional[str]]) -> VMListItem:
+    """Convert a VM record to its shallow representation."""
+
+    ip_address = vm.ip_addresses[0] if vm.ip_addresses else None
+    return VMListItem(
+        id=vm.id,
+        name=vm.name,
+        host=vm.host,
+        clustered=vm.clustered,
+        cluster_name=vm.cluster_name,
+        state=_normalize_vm_state(vm.state),
+        os_name=vm.os_name,
+        ip_address=ip_address,
+    )
+
+
+def _resolve_cluster_target_host(cluster_name: str, required_memory_gb: int) -> str:
+    """Resolve a cluster name to an optimal target host based on available memory.
+    
+    Selects the host with the most available memory that can accommodate the
+    requested memory allocation.
+    
+    Args:
+        cluster_name: Name of the failover cluster
+        required_memory_gb: Memory required for the VM in GB
+        
+    Returns:
+        Hostname of the selected target host
+        
+    Raises:
+        HTTPException: If cluster not found, no connected hosts available,
+                      or insufficient memory across all hosts
+    """
+    # Validate cluster exists
+    clusters = inventory_service.get_all_clusters()
+    cluster = next((c for c in clusters if c.name == cluster_name), None)
+    
+    if not cluster:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cluster {cluster_name} not found",
+        )
+    
+    # Get all connected hosts in the cluster
+    all_hosts = inventory_service.get_all_hosts()
+    cluster_hosts = [h for h in all_hosts if h.cluster == cluster_name and h.connected]
+    
+    if not cluster_hosts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"No connected hosts available in cluster {cluster_name}",
+        )
+    
+    # Calculate available memory for each host
+    all_vms = inventory_service.get_all_vms()
+    host_memory_usage = {}
+    
+    for host in cluster_hosts:
+        # Get all VMs on this host
+        host_vms = [vm for vm in all_vms if vm.host == host.hostname]
+        
+        # Sum memory allocated to VMs (use memory_startup_gb for dynamic memory VMs)
+        # Handle None values by defaulting to 0 for accurate memory accounting
+        used_memory = sum(
+            (vm.memory_startup_gb or vm.memory_gb or 0)
+            for vm in host_vms
+        )
+        
+        # Calculate available memory
+        total_memory = host.total_memory_gb
+        available_memory = total_memory - used_memory
+        host_memory_usage[host.hostname] = available_memory
+    
+    # Filter to hosts with sufficient memory
+    eligible_hosts = {
+        hostname: available
+        for hostname, available in host_memory_usage.items()
+        if available >= required_memory_gb
+    }
+    
+    if not eligible_hosts:
+        max_available = max(host_memory_usage.values()) if host_memory_usage else 0
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Insufficient memory in cluster {cluster_name}. "
+                f"VM requires {required_memory_gb} GB but maximum available is {max_available:.2f} GB"
+            ),
+        )
+    
+    # Select host with most available memory among eligible hosts
+    return max(eligible_hosts, key=lambda h: eligible_hosts[h])
 
 
 async def _handle_vm_action(
@@ -388,7 +532,7 @@ async def readiness_check(response: Response):
 @router.get(
     "/api/v1/diagnostics/services",
     response_model=ServiceDiagnosticsResponse,
-    tags=["Diagnostics"],
+    tags=["Admin"],
 )
 async def get_service_diagnostics(
     user: dict = Depends(require_permission(Permission.ADMIN)),
@@ -578,63 +722,178 @@ async def get_oss_licenses(user: dict = Depends(require_permission(Permission.RE
     return OSSLicenseResponse(packages=packages, summary=summary)
 
 
-@router.get("/api/v1/inventory", response_model=InventoryResponse, tags=["Inventory"])
-async def get_inventory(user: dict = Depends(require_permission(Permission.READER))):
-    """Get complete inventory of clusters, hosts and VMs."""
-    clusters = inventory_service.get_all_clusters()
-    hosts = inventory_service.get_connected_hosts()
+@router.get("/api/v1/statistics", response_model=StatisticsResponse, tags=["Health"])
+async def get_inventory_statistics(
+    user: dict = Depends(require_permission(Permission.READER)),
+):
+    """Return aggregate inventory statistics replacing the legacy inventory API."""
+
+    hosts = inventory_service.get_all_hosts()
     vms = inventory_service.get_all_vms()
+    clusters = inventory_service.get_all_clusters()
     disconnected_hosts = inventory_service.get_disconnected_hosts()
 
-    return InventoryResponse(
-        clusters=clusters,
-        hosts=hosts,
-        vms=vms,
-        disconnected_hosts=disconnected_hosts,
-        total_hosts=len(hosts) + len(disconnected_hosts),
-        total_vms=len(vms),
+    return StatisticsResponse(
+        total_hosts=len(hosts),
         total_clusters=len(clusters),
+        total_vms=len(vms),
         disconnected_count=len(disconnected_hosts),
-        last_refresh=inventory_service.last_refresh
+        environment_name="Imaginary Datacenter"
+        if settings.dummy_data
+        else settings.environment_name,
+        last_refresh=inventory_service.last_refresh,
     )
 
 
-@router.get("/api/v1/hosts", response_model=List[Host], tags=["Hosts"])
-async def list_hosts(user: dict = Depends(require_permission(Permission.READER))):
-    """List all Hyper-V hosts."""
-    return inventory_service.get_all_hosts()
+@router.get(
+    "/api/v1/clusters",
+    response_model=List[ClusterSummary],
+    tags=["Clusters"],
+)
+async def list_clusters(user: dict = Depends(require_permission(Permission.READER))):
+    """List clusters using the new shallow inventory contract."""
+
+    clusters = inventory_service.get_all_clusters()
+    hosts = inventory_service.get_all_hosts()
+    vms = inventory_service.get_all_vms()
+
+    cluster_by_host = _cluster_lookup()
+    vm_counts = _vm_counts_by_cluster(cluster_by_host, vms)
+    host_counts: Dict[str, int] = defaultdict(int)
+    connected_host_counts: Dict[str, int] = defaultdict(int)
+
+    for host in hosts:
+        if host.cluster:
+            host_counts[host.cluster] += 1
+            if host.connected:
+                connected_host_counts[host.cluster] += 1
+
+    return [
+        ClusterSummary(
+            id=cluster.name,
+            name=cluster.name,
+            host_count=host_counts[cluster.name],
+            connected_host_count=connected_host_counts[cluster.name],
+            vm_count=vm_counts.get(cluster.name, 0),
+        )
+        for cluster in clusters
+    ]
 
 
-@router.get("/api/v1/hosts/{hostname}/vms", response_model=List[VM], tags=["Hosts"])
-async def list_host_vms(hostname: str, user: dict = Depends(require_permission(Permission.READER))):
-    """List VMs on a specific host."""
-    return inventory_service.get_host_vms(hostname)
+@router.get(
+    "/api/v1/clusters/{cluster_id}",
+    response_model=ClusterDetail,
+    tags=["Clusters"],
+)
+async def get_cluster_detail(
+    cluster_id: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """Return cluster detail with shallow child resources."""
 
+    clusters = inventory_service.get_all_clusters()
+    cluster = next((c for c in clusters if c.name == cluster_id), None)
 
-@router.get("/api/v1/vms/by-id/{vm_id}", response_model=VM, tags=["VMs"])
-async def get_vm_by_id(vm_id: str, user: dict = Depends(require_permission(Permission.READER))):
-    """Get details of a specific VM by its ID."""
-    vm = inventory_service.get_vm_by_id(vm_id)
-
-    if not vm:
+    if not cluster:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"VM with ID {vm_id} not found"
+            detail=f"Cluster {cluster_id} not found",
         )
 
-    return vm
+    hosts = [host for host in inventory_service.get_all_hosts() if host.cluster == cluster_id]
+    cluster_by_host = {host.hostname: host.cluster for host in hosts}
+    vms = [vm for vm in inventory_service.get_all_vms() if cluster_by_host.get(vm.host)]
+    vm_counts = _vm_counts_by_host(vms)
+
+    return ClusterDetail(
+        id=cluster.name,
+        name=cluster.name,
+        hosts=[
+            HostSummary(
+                hostname=host.hostname,
+                cluster=host.cluster,
+                connected=host.connected,
+                last_seen=host.last_seen,
+                vm_count=vm_counts.get(host.hostname, 0),
+            )
+            for host in hosts
+        ],
+        virtual_machines=[_to_vm_list_item(vm, cluster_by_host) for vm in vms],
+    )
 
 
-@router.get("/api/v1/vms", response_model=List[VM], tags=["VMs"])
-async def list_vms(user: dict = Depends(require_permission(Permission.READER))):
-    """List all VMs across all hosts."""
-    return inventory_service.get_all_vms()
+@router.get("/api/v1/hosts", response_model=List[HostSummary], tags=["Hosts"])
+async def list_hosts(user: dict = Depends(require_permission(Permission.READER))):
+    """List all Hyper-V hosts with shallow VM counts."""
+
+    hosts = inventory_service.get_all_hosts()
+    vm_counts = _vm_counts_by_host(inventory_service.get_all_vms())
+
+    return [
+        HostSummary(
+            hostname=host.hostname,
+            cluster=host.cluster,
+            connected=host.connected,
+            last_seen=host.last_seen,
+            vm_count=vm_counts.get(host.hostname, 0),
+        )
+        for host in hosts
+    ]
+
+
+@router.get(
+    "/api/v1/hosts/{hostname}", response_model=HostDetail, tags=["Hosts"]
+)
+async def get_host_detail(
+    hostname: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """Return host detail with shallow VM listings."""
+
+    host = _get_host_or_404(hostname)
+    host_vms = inventory_service.get_host_vms(hostname)
+    cluster_by_host = _cluster_lookup()
+
+    return HostDetail(
+        hostname=host.hostname,
+        cluster=host.cluster,
+        connected=host.connected,
+        last_seen=host.last_seen,
+        vm_count=len(host_vms),
+        virtual_machines=[_to_vm_list_item(vm, cluster_by_host) for vm in host_vms],
+    )
+
+
+@router.get(
+    "/api/v1/virtualmachines",
+    response_model=List[VMListItem],
+    tags=["Virtual Machines"],
+)
+async def list_virtual_machines(
+    user: dict = Depends(require_permission(Permission.READER)),
+):
+    """Shallow VM inventory for table and navigation use cases."""
+
+    vms = inventory_service.get_all_vms()
+    cluster_by_host = _cluster_lookup()
+    return [_to_vm_list_item(vm, cluster_by_host) for vm in vms]
+
+
+@router.get(
+    "/api/v1/virtualmachines/{vm_id}",
+    response_model=VM,
+    tags=["Virtual Machines"],
+)
+async def get_virtual_machine(
+    vm_id: str, user: dict = Depends(require_permission(Permission.READER))
+):
+    """Return full VM details for a single VM."""
+
+    return _get_vm_or_404(vm_id)
 
 
 @router.post(
-    "/api/v1/resources/vms/{vm_id}/start",
+    "/api/v1/virtualmachines/{vm_id}/start",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["Resources"],
+    tags=["Virtual Machine Actions"],
 )
 async def start_vm_action(
     vm_id: str,
@@ -646,9 +905,9 @@ async def start_vm_action(
 
 
 @router.post(
-    "/api/v1/resources/vms/{vm_id}/shutdown",
+    "/api/v1/virtualmachines/{vm_id}/shutdown",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["Resources"],
+    tags=["Virtual Machine Actions"],
 )
 async def shutdown_vm_action(
     vm_id: str,
@@ -660,9 +919,9 @@ async def shutdown_vm_action(
 
 
 @router.post(
-    "/api/v1/resources/vms/{vm_id}/stop",
+    "/api/v1/virtualmachines/{vm_id}/stop",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["Resources"],
+    tags=["Virtual Machine Actions"],
 )
 async def stop_vm_action(
     vm_id: str,
@@ -674,9 +933,9 @@ async def stop_vm_action(
 
 
 @router.post(
-    "/api/v1/resources/vms/{vm_id}/reset",
+    "/api/v1/virtualmachines/{vm_id}/reset",
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["Resources"],
+    tags=["Virtual Machine Actions"],
 )
 async def reset_vm_action(
     vm_id: str,
@@ -710,43 +969,30 @@ async def get_job(
     return job
 
 
-# New Resource-based API endpoints
+# Resource management APIs
 
-@router.get("/api/v1/resources/vms", response_model=List[VM], tags=["Resources"])
-async def list_vm_resources(
-    user: dict = Depends(require_permission(Permission.READER)),
-):
-    """List all VM resources."""
-
-    return inventory_service.get_all_vms()
-
-
-@router.get(
-    "/api/v1/resources/vms/{vm_id}", response_model=VM, tags=["Resources"]
-)
-async def get_vm_resource(
-    vm_id: str, user: dict = Depends(require_permission(Permission.READER))
-):
-    """Fetch a VM resource by its ID."""
-
-    return _get_vm_or_404(vm_id)
-
-
-@router.post("/api/v1/resources/vms", response_model=JobResult, tags=["Resources"])
+@router.post("/api/v1/virtualmachines", response_model=JobResult, tags=["Virtual Machines"])
 async def create_vm_resource(
-    request: ResourceCreateRequest,
+    request: VMCreateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Create a new virtual machine (without disk or NIC)."""
+    """Create a new virtual machine (without disk or NIC).
+    
+    Supports both direct host targeting and cluster-based targeting with
+    automatic host selection based on available memory. Exactly one of
+    target_host or target_cluster must be specified.
+    
+    VM clustering registration should be handled by the caller via a
+    separate PATCH operation after guest initialization is complete.
+    """
 
-    # Validate using Pydantic instead of schema
-    try:
-        vm_spec = VmSpec(**request.values)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]}
-        )
+    vm_spec = VmSpec(
+        vm_name=request.vm_name,
+        gb_ram=request.gb_ram,
+        cpu_cores=request.cpu_cores,
+        storage_class=request.storage_class,
+        os_family=request.os_family,
+    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -758,7 +1004,16 @@ async def create_vm_resource(
             },
         )
 
-    target_host = request.target_host.strip()
+    # Resolve target host from cluster if cluster targeting is used
+    if request.target_cluster:
+        target_host = _resolve_cluster_target_host(
+            cluster_name=request.target_cluster.strip(),
+            required_memory_gb=request.gb_ram,
+        )
+    else:
+        target_host = request.target_host.strip() if request.target_host else ""
+    
+    # Validate the resolved host is connected
     connected_hosts = inventory_service.get_connected_hosts()
     host_match = next(
         (host for host in connected_hosts if host.hostname == target_host), None)
@@ -768,20 +1023,16 @@ async def create_vm_resource(
             detail=f"Host {target_host} is not currently connected",
         )
 
-    vm_name = vm_spec.vm_name
-    if vm_name:
-        existing_vm = inventory_service.get_vm(target_host, vm_name)
-        if existing_vm:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"VM {vm_name} already exists on host {target_host}",
-            )
+    if inventory_service.get_vm(target_host, vm_spec.vm_name):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"VM {vm_spec.vm_name} already exists on host {target_host}",
+        )
 
-    # Use the validated Pydantic model's dict for the job payload
     job_definition = {
         "schema": {
             "id": "vm-create",
-            "version": 1,  # Static version, not schema-based
+            "version": 1,
         },
         "fields": vm_spec.model_dump(),
     }
@@ -800,26 +1051,20 @@ async def create_vm_resource(
     )
 
 
-@router.put(
-    "/api/v1/resources/vms/{vm_id}", response_model=JobResult, tags=["Resources"]
+@router.patch(
+    "/api/v1/virtualmachines/{vm_id}", response_model=JobResult, tags=["Virtual Machines"]
 )
 async def update_vm_resource(
     vm_id: str,
-    request: ResourceUpdateRequest,
+    request: VMUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Update an existing virtual machine."""
+    """Update an existing virtual machine via PATCH.
+    
+    Only provided fields will be updated. All fields are optional.
+    """
 
     vm = _get_vm_or_404(vm_id)
-
-    # Validate using Pydantic instead of schema
-    try:
-        vm_spec = VmSpec(**request.values)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]},
-        )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -831,32 +1076,38 @@ async def update_vm_resource(
             },
         )
 
-    target_host = request.target_host.strip()
-    if target_host != vm.host:
+    _ensure_connected_host(vm.host)
+
+    # Build updates dict with only provided (non-None) fields
+    updates = {}
+    request_dict = request.model_dump(exclude_unset=True)
+    for key, value in request_dict.items():
+        if value is not None:
+            updates[key] = value
+    
+    if not updates:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields provided for update",
         )
 
-    _ensure_connected_host(target_host)
-
-    # Add vm_id to the validated values
-    validated_values = vm_spec.model_dump()
-    validated_values["vm_id"] = vm_id
+    # Add VM ID to updates for PowerShell handler
+    updates["vm_id"] = vm_id
+    updates["vm_name"] = vm.name
 
     job_definition = {
         "schema": {
-            "id": "vm-create",
+            "id": "vm-update",
             "version": 1,
         },
-        "fields": validated_values,
+        "fields": updates,
     }
 
     job = await job_service.submit_resource_job(
         job_type="update_vm",
-        schema_id="vm-create",
+        schema_id="vm-update",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -867,7 +1118,7 @@ async def update_vm_resource(
 
 
 @router.delete(
-    "/api/v1/resources/vms/{vm_id}", response_model=JobResult, tags=["Resources"]
+    "/api/v1/virtualmachines/{vm_id}", response_model=JobResult, tags=["Virtual Machines"]
 )
 async def delete_vm_resource(
     vm_id: str,
@@ -912,21 +1163,26 @@ async def delete_vm_resource(
     )
 
 
-@router.post("/api/v1/resources/disks", response_model=JobResult, tags=["Resources"])
+@router.post(
+    "/api/v1/virtualmachines/{vm_id}/disks",
+    response_model=JobResult,
+    tags=["Virtual Machine Disks"],
+)
 async def create_disk_resource(
+    vm_id: str,
     request: DiskCreateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Create and attach a new disk to an existing VM."""
 
-    # Validate using Pydantic instead of schema
-    try:
-        disk_spec = DiskSpec(**request.values)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]}
-        )
+    disk_spec = DiskSpec(
+        vm_id=vm_id,
+        image_name=request.image_name,
+        disk_size_gb=request.disk_size_gb,
+        storage_class=request.storage_class,
+        disk_type=request.disk_type,
+        controller_type=request.controller_type,
+    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -938,30 +1194,9 @@ async def create_disk_resource(
             },
         )
 
-    target_host = request.target_host.strip()
-    connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next(
-        (host for host in connected_hosts if host.hostname == target_host), None)
-    if not host_match:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host {target_host} is not currently connected",
-        )
-
-    # Validate that VM exists
-    vm_id = disk_spec.vm_id
-    if not vm_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="VM ID is required for disk creation",
-        )
-
     vm = _get_vm_or_404(vm_id)
-    if target_host != vm.host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
-        )
+
+    _ensure_connected_host(vm.host)
 
     job_definition = {
         "schema": {
@@ -975,7 +1210,7 @@ async def create_disk_resource(
         job_type="create_disk",
         schema_id="disk-create",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -986,9 +1221,9 @@ async def create_disk_resource(
 
 
 @router.get(
-    "/api/v1/resources/vms/{vm_id}/disks",
+    "/api/v1/virtualmachines/{vm_id}/disks",
     response_model=List[VMDisk],
-    tags=["Resources"],
+    tags=["Virtual Machine Disks"],
 )
 async def list_vm_disks(
     vm_id: str, user: dict = Depends(require_permission(Permission.READER))
@@ -1000,9 +1235,9 @@ async def list_vm_disks(
 
 
 @router.get(
-    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
-    response_model=VMDisk,
-    tags=["Resources"],
+    "/api/v1/virtualmachines/{vm_id}/disks/{disk_id}",
+    response_model=DiskDetail,
+    tags=["Virtual Machine Disks"],
 )
 async def get_vm_disk(
     vm_id: str,
@@ -1018,21 +1253,24 @@ async def get_vm_disk(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Disk {disk_id} not found on VM {vm_id}",
         )
-    return disk
+    return DiskDetail(**disk.model_dump(), vm_id=vm_id)
 
 
-@router.put(
-    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
+@router.patch(
+    "/api/v1/virtualmachines/{vm_id}/disks/{disk_id}",
     response_model=JobResult,
-    tags=["Resources"],
+    tags=["Virtual Machine Disks"],
 )
 async def update_disk_resource(
     vm_id: str,
     disk_id: str,
-    request: ResourceUpdateRequest,
+    request: DiskUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Update an existing disk resource."""
+    """Update an existing disk resource via PATCH.
+    
+    Only provided fields will be updated. Currently supports expanding disk size only.
+    """
 
     vm = _get_vm_or_404(vm_id)
     disk = _find_vm_disk(vm, disk_id)
@@ -1040,22 +1278,6 @@ async def update_disk_resource(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Disk {disk_id} not found on VM {vm_id}",
-        )
-
-    if request.resource_id != disk_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Resource ID in payload does not match disk in path",
-        )
-
-    # Validate using Pydantic instead of schema
-    try:
-        values_with_vm = {**request.values, "vm_id": vm_id}
-        disk_spec = DiskSpec(**values_with_vm)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]},
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -1068,31 +1290,38 @@ async def update_disk_resource(
             },
         )
 
-    target_host = request.target_host.strip()
-    if target_host != vm.host:
+    _ensure_connected_host(vm.host)
+
+    # Build updates dict with only provided (non-None) fields
+    updates = {}
+    request_dict = request.model_dump(exclude_unset=True)
+    for key, value in request_dict.items():
+        if value is not None:
+            updates[key] = value
+    
+    if not updates:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields provided for update",
         )
 
-    _ensure_connected_host(target_host)
-
-    validated_values = disk_spec.model_dump()
-    validated_values["resource_id"] = request.resource_id
+    # Add identifiers for PowerShell handler
+    updates["vm_id"] = vm_id
+    updates["resource_id"] = disk_id
 
     job_definition = {
         "schema": {
-            "id": "disk-create",
+            "id": "disk-update",
             "version": 1,
         },
-        "fields": validated_values,
+        "fields": updates,
     }
 
     job = await job_service.submit_resource_job(
         job_type="update_disk",
-        schema_id="disk-create",
+        schema_id="disk-update",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -1103,9 +1332,9 @@ async def update_disk_resource(
 
 
 @router.delete(
-    "/api/v1/resources/vms/{vm_id}/disks/{disk_id}",
+    "/api/v1/virtualmachines/{vm_id}/disks/{disk_id}",
     response_model=JobResult,
-    tags=["Resources"],
+    tags=["Virtual Machine Disks"],
 )
 async def delete_disk_resource(
     vm_id: str,
@@ -1153,21 +1382,23 @@ async def delete_disk_resource(
     )
 
 
-@router.post("/api/v1/resources/nics", response_model=JobResult, tags=["Resources"])
+@router.post(
+    "/api/v1/virtualmachines/{vm_id}/networkadapters",
+    response_model=JobResult,
+    tags=["Virtual Machine Network Adapters"],
+)
 async def create_nic_resource(
+    vm_id: str,
     request: NicCreateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
     """Create and attach a new network adapter to an existing VM."""
 
-    # Validate using Pydantic instead of schema
-    try:
-        nic_spec = NicSpec(**request.values)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]}
-        )
+    nic_spec = NicSpec(
+        vm_id=vm_id,
+        network=request.network,
+        adapter_name=request.adapter_name,
+    )
 
     if not host_deployment_service.is_provisioning_available():
         summary = host_deployment_service.get_startup_summary()
@@ -1179,30 +1410,9 @@ async def create_nic_resource(
             },
         )
 
-    target_host = request.target_host.strip()
-    connected_hosts = inventory_service.get_connected_hosts()
-    host_match = next(
-        (host for host in connected_hosts if host.hostname == target_host), None)
-    if not host_match:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Host {target_host} is not currently connected",
-        )
-
-    # Validate that VM exists
-    vm_id = nic_spec.vm_id
-    if not vm_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="VM ID is required for NIC creation",
-        )
-
     vm = _get_vm_or_404(vm_id)
-    if target_host != vm.host:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
-        )
+
+    _ensure_connected_host(vm.host)
 
     job_definition = {
         "schema": {
@@ -1216,7 +1426,7 @@ async def create_nic_resource(
         job_type="create_nic",
         schema_id="nic-create",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -1227,9 +1437,9 @@ async def create_nic_resource(
 
 
 @router.get(
-    "/api/v1/resources/vms/{vm_id}/nics",
+    "/api/v1/virtualmachines/{vm_id}/networkadapters",
     response_model=List[VMNetworkAdapter],
-    tags=["Resources"],
+    tags=["Virtual Machine Network Adapters"],
 )
 async def list_vm_nics(
     vm_id: str, user: dict = Depends(require_permission(Permission.READER))
@@ -1241,9 +1451,9 @@ async def list_vm_nics(
 
 
 @router.get(
-    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
-    response_model=VMNetworkAdapter,
-    tags=["Resources"],
+    "/api/v1/virtualmachines/{vm_id}/networkadapters/{nic_id}",
+    response_model=NetworkAdapterDetail,
+    tags=["Virtual Machine Network Adapters"],
 )
 async def get_vm_nic(
     vm_id: str,
@@ -1259,21 +1469,24 @@ async def get_vm_nic(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"NIC {nic_id} not found on VM {vm_id}",
         )
-    return nic
+    return NetworkAdapterDetail(**nic.model_dump(), vm_id=vm_id)
 
 
-@router.put(
-    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
+@router.patch(
+    "/api/v1/virtualmachines/{vm_id}/networkadapters/{nic_id}",
     response_model=JobResult,
-    tags=["Resources"],
+    tags=["Virtual Machine Network Adapters"],
 )
 async def update_nic_resource(
     vm_id: str,
     nic_id: str,
-    request: ResourceUpdateRequest,
+    request: NicUpdateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Update an existing NIC resource."""
+    """Update an existing NIC resource via PATCH.
+    
+    Only provided fields will be updated. All fields are optional.
+    """
 
     vm = _get_vm_or_404(vm_id)
     nic = _find_vm_nic(vm, nic_id)
@@ -1281,22 +1494,6 @@ async def update_nic_resource(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"NIC {nic_id} not found on VM {vm_id}",
-        )
-
-    if request.resource_id != nic_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Resource ID in payload does not match NIC in path",
-        )
-
-    # Validate using Pydantic instead of schema
-    try:
-        values_with_vm = {**request.values, "vm_id": vm_id}
-        nic_spec = NicSpec(**values_with_vm)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"errors": [str(exc)]},
         )
 
     if not host_deployment_service.is_provisioning_available():
@@ -1309,31 +1506,38 @@ async def update_nic_resource(
             },
         )
 
-    target_host = request.target_host.strip()
-    if target_host != vm.host:
+    _ensure_connected_host(vm.host)
+
+    # Build updates dict with only provided (non-None) fields
+    updates = {}
+    request_dict = request.model_dump(exclude_unset=True)
+    for key, value in request_dict.items():
+        if value is not None:
+            updates[key] = value
+    
+    if not updates:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"VM {vm.name} is tracked on host {vm.host}, not {target_host}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields provided for update",
         )
 
-    _ensure_connected_host(target_host)
-
-    validated_values = nic_spec.model_dump()
-    validated_values["resource_id"] = request.resource_id
+    # Add identifiers for PowerShell handler
+    updates["vm_id"] = vm_id
+    updates["resource_id"] = nic_id
 
     job_definition = {
         "schema": {
-            "id": "nic-create",
+            "id": "nic-update",
             "version": 1,
         },
-        "fields": validated_values,
+        "fields": updates,
     }
 
     job = await job_service.submit_resource_job(
         job_type="update_nic",
-        schema_id="nic-create",
+        schema_id="nic-update",
         payload=job_definition,
-        target_host=target_host,
+        target_host=vm.host,
     )
 
     return JobResult(
@@ -1344,9 +1548,9 @@ async def update_nic_resource(
 
 
 @router.delete(
-    "/api/v1/resources/vms/{vm_id}/nics/{nic_id}",
+    "/api/v1/virtualmachines/{vm_id}/networkadapters/{nic_id}",
     response_model=JobResult,
-    tags=["Resources"],
+    tags=["Virtual Machine Network Adapters"],
 )
 async def delete_nic_resource(
     vm_id: str,
@@ -1395,9 +1599,9 @@ async def delete_nic_resource(
 
 
 @router.post(
-    "/api/v1/resources/vms/{vm_id}/initialize",
+    "/api/v1/virtualmachines/{vm_id}/initialize",
     response_model=JobResult,
-    tags=["Resources"],
+    tags=["Virtual Machine Actions"],
 )
 async def initialize_vm_resource(
     vm_id: str,
@@ -1463,7 +1667,7 @@ async def initialize_vm_resource(
     )
 
 
-@router.post("/api/managed-deployments", response_model=JobResult, tags=["Managed Deployments"])
+@router.post("/api/v1/managed-deployments", response_model=JobResult, tags=["Jobs"])
 async def create_managed_deployment(
     request: ManagedDeploymentRequest,
     user: dict = Depends(require_permission(Permission.WRITER))
@@ -1495,8 +1699,27 @@ async def create_managed_deployment(
             },
         )
 
-    # Ensure the target host is connected
-    target_host = request.target_host.strip()
+    # Resolve target host from cluster if cluster targeting is used
+    target_host: Optional[str] = None
+    
+    if request.target_cluster:
+        # Validate: cluster targeting requires vm_clustered=True
+        if not request.vm_clustered:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot disable clustering when targeting a cluster. "
+                       "Set vm_clustered=True or use direct host targeting.",
+            )
+        
+        target_host = _resolve_cluster_target_host(
+            cluster_name=request.target_cluster.strip(),
+            required_memory_gb=request.gb_ram,
+        )
+    else:
+        # Direct host targeting
+        target_host = request.target_host.strip() if request.target_host else None
+    
+    # Ensure the target host is specified and connected
     if not target_host:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1513,7 +1736,7 @@ async def create_managed_deployment(
         )
 
     # Check if VM already exists
-    vm_name = request.vm_spec.vm_name
+    vm_name = request.vm_name
     existing_vm = inventory_service.get_vm(target_host, vm_name)
     if existing_vm:
         raise HTTPException(
@@ -1522,8 +1745,10 @@ async def create_managed_deployment(
         )
 
     # Submit the managed deployment job
+    # Pass the resolved target host. The request.vm_clustered field is already validated.
     job = await job_service.submit_managed_deployment_job(
         request=request,
+        effective_target_host=target_host,
     )
 
     return JobResult(
@@ -1533,7 +1758,7 @@ async def create_managed_deployment(
     )
 
 
-@router.post("/api/v1/noop-test", response_model=JobResult, tags=["Testing"])
+@router.post("/api/v1/noop-test", response_model=JobResult, tags=["Admin"])
 async def submit_noop_test(
     request: NoopTestRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
@@ -1591,7 +1816,7 @@ async def get_notifications(
     )
 
 
-@router.put("/api/v1/notifications/{notification_id}/read", tags=["Notifications"])
+@router.patch("/api/v1/notifications/{notification_id}/read", tags=["Notifications"])
 async def mark_notification_read(
     notification_id: str,
     user: dict = Depends(require_permission(Permission.WRITER)),
@@ -1606,7 +1831,7 @@ async def mark_notification_read(
     return {"message": "Notification marked as read"}
 
 
-@router.put("/api/v1/notifications/mark-all-read", tags=["Notifications"])
+@router.patch("/api/v1/notifications/mark-all-read", tags=["Notifications"])
 async def mark_all_notifications_read(
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):

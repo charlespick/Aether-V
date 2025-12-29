@@ -570,67 +570,60 @@ class ProvisionFormPydantic {
             return;
         }
 
-        // Build Pydantic model structure
+        // Build flat payload that mirrors form fields directly
+        // The server parses this flat structure into hardware specs internally
         const payload = {
-            vm_spec: {
-                vm_name: formData.get('vm_name'),
-                gb_ram: parseInt(formData.get('gb_ram'), 10),
-                cpu_cores: parseInt(formData.get('cpu_cores'), 10),
-                storage_class: formData.get('storage_class') || null,
-                vm_clustered: formData.has('vm_clustered')
-            },
-            disk_spec: {
-                image_name: formData.get('image_name') || null,
-                disk_size_gb: parseInt(formData.get('disk_size_gb'), 10),
-                storage_class: formData.get('storage_class') || null,
-                disk_type: 'Dynamic',
-                controller_type: 'SCSI'
-            },
-            nic_spec: {
-                network: formData.get('network'),
-                adapter_name: null
-            },
-            guest_config: {
-                guest_la_uid: formData.get('guest_la_uid'),
-                guest_la_pw: formData.get('guest_la_pw')
-            },
-            target_host: targetHost
+            target_host: targetHost,
+            // VM hardware
+            vm_name: formData.get('vm_name'),
+            gb_ram: parseInt(formData.get('gb_ram'), 10),
+            cpu_cores: parseInt(formData.get('cpu_cores'), 10),
+            storage_class: formData.get('storage_class') || null,
+            vm_clustered: formData.has('vm_clustered'),
+            // Disk - if image_name provided, disk will be created
+            image_name: formData.get('image_name') || null,
+            disk_size_gb: parseInt(formData.get('disk_size_gb'), 10),
+            // Network
+            network: formData.get('network'),
+            // Guest config - local admin (required)
+            guest_la_uid: formData.get('guest_la_uid'),
+            guest_la_pw: formData.get('guest_la_pw')
         };
 
         // Add static IP config if not using DHCP
         const useDhcp = document.getElementById('use-dhcp').checked;
         if (!useDhcp) {
-            payload.guest_config.guest_v4_ip_addr = formData.get('guest_v4_ip_addr');
-            payload.guest_config.guest_v4_cidr_prefix = parseInt(formData.get('guest_v4_cidr_prefix'), 10);
-            payload.guest_config.guest_v4_default_gw = formData.get('guest_v4_default_gw');
-            payload.guest_config.guest_v4_dns1 = formData.get('guest_v4_dns1');
-            payload.guest_config.guest_v4_dns2 = formData.get('guest_v4_dns2') || null;
+            payload.guest_v4_ip_addr = formData.get('guest_v4_ip_addr');
+            payload.guest_v4_cidr_prefix = parseInt(formData.get('guest_v4_cidr_prefix'), 10);
+            payload.guest_v4_default_gw = formData.get('guest_v4_default_gw');
+            payload.guest_v4_dns1 = formData.get('guest_v4_dns1');
+            payload.guest_v4_dns2 = formData.get('guest_v4_dns2') || null;
             
-            // Add DNS suffix if provided (can be set with or without static IP)
+            // Add DNS suffix if provided
             const dnsSuffix = formData.get('guest_net_dns_suffix');
             if (dnsSuffix) {
-                payload.guest_config.guest_net_dns_suffix = dnsSuffix;
+                payload.guest_net_dns_suffix = dnsSuffix;
             }
         }
 
         // Add domain join config if enabled
         const enableDomainJoin = document.getElementById('enable-domain-join').checked;
         if (enableDomainJoin) {
-            payload.guest_config.guest_domain_join_target = formData.get('guest_domain_join_target');
-            payload.guest_config.guest_domain_join_uid = formData.get('guest_domain_join_uid');
-            payload.guest_config.guest_domain_join_pw = formData.get('guest_domain_join_pw');
-            payload.guest_config.guest_domain_join_ou = formData.get('guest_domain_join_ou');
+            payload.guest_domain_join_target = formData.get('guest_domain_join_target');
+            payload.guest_domain_join_uid = formData.get('guest_domain_join_uid');
+            payload.guest_domain_join_pw = formData.get('guest_domain_join_pw');
+            payload.guest_domain_join_ou = formData.get('guest_domain_join_ou');
         }
 
         // Add Ansible config if enabled
         const enableAnsible = document.getElementById('enable-ansible').checked;
         if (enableAnsible) {
-            payload.guest_config.cnf_ansible_ssh_user = formData.get('cnf_ansible_ssh_user');
-            payload.guest_config.cnf_ansible_ssh_key = formData.get('cnf_ansible_ssh_key');
+            payload.cnf_ansible_ssh_user = formData.get('cnf_ansible_ssh_user');
+            payload.cnf_ansible_ssh_key = formData.get('cnf_ansible_ssh_key');
         }
 
         try {
-            const response = await fetch('/api/managed-deployments', {
+            const response = await fetch('/api/v1/managed-deployments', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
