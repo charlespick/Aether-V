@@ -90,10 +90,27 @@ export interface VlanConfiguration {
     vlan_id: number;
 }
 
+export interface IPSettings {
+    gateway?: string;
+    dns?: string;
+    dns_secondary?: string;
+    subnet_mask?: string;
+    network_address?: string;
+    dhcp_available?: boolean;
+}
+
 export interface Network {
     name: string;
     model: string;
     configuration: VlanConfiguration;
+    ip_settings?: IPSettings;
+}
+
+export interface Image {
+    name: string;
+    path: string;
+    os_family?: string;
+    description?: string;
 }
 
 export interface HostResources {
@@ -102,6 +119,7 @@ export interface HostResources {
     storage_classes: StorageClass[];
     networks: Network[];
     virtual_machines_path: string;
+    images: Image[];
 }
 
 export interface Host {
