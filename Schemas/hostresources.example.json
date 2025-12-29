@@ -18,6 +18,14 @@
       "configuration": {
         "virtual_switch": "External-Switch",
         "vlan_id": 100
+      },
+      "ip_settings": {
+        "gateway": "10.0.100.1",
+        "dns": "10.0.100.10",
+        "dns_secondary": "10.0.100.11",
+        "subnet_mask": "255.255.255.0",
+        "network_address": "10.0.100.0",
+        "dhcp_available": true
       }
     },
     {
@@ -26,6 +34,13 @@
       "configuration": {
         "virtual_switch": "External-Switch",
         "vlan_id": 200
+      },
+      "ip_settings": {
+        "gateway": "10.0.200.1",
+        "dns": "10.0.100.10",
+        "subnet_mask": "255.255.255.0",
+        "network_address": "10.0.200.0",
+        "dhcp_available": false
       }
     },
     {
@@ -37,5 +52,19 @@
       }
     }
   ],
-  "virtual_machines_path": "C:\\ClusterStorage\\Volume1\\VirtualMachines"
+  "virtual_machines_path": "C:\\ClusterStorage\\Volume1\\VirtualMachines",
+  "images": [
+    {
+      "name": "ubuntu-22.04",
+      "path": "C:\\Images\\ubuntu-22.04-server.vhdx",
+      "os_family": "linux",
+      "description": "Ubuntu Server 22.04 LTS"
+    },
+    {
+      "name": "windows-server-2022",
+      "path": "C:\\Images\\windows-server-2022-standard.vhdx",
+      "os_family": "windows",
+      "description": "Windows Server 2022 Standard"
+    }
+  ]
 }

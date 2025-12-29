@@ -87,6 +87,19 @@ class VlanConfiguration(BaseModel):
     vlan_id: int = Field(..., ge=1, le=4094, description="VLAN identifier")
 
 
+class IPSettings(BaseModel):
+    """IP configuration settings for a network.
+    
+    Optional IP settings that can be used for prefilling or validation.
+    """
+    gateway: Optional[str] = Field(None, description="Default gateway IP address")
+    dns: Optional[str] = Field(None, description="Primary DNS server IP address")
+    dns_secondary: Optional[str] = Field(None, description="Secondary DNS server IP address")
+    subnet_mask: Optional[str] = Field(None, description="Subnet mask (e.g., 255.255.255.0)")
+    network_address: Optional[str] = Field(None, description="Network address (e.g., 192.168.1.0)")
+    dhcp_available: Optional[bool] = Field(None, description="Whether DHCP is available on this network")
+
+
 class Network(BaseModel):
     """Network configuration for a host.
     
@@ -96,6 +109,18 @@ class Network(BaseModel):
     name: str = Field(..., description="Unique identifier for the network")
     model: NetworkModel = Field(..., description="Network model type")
     configuration: VlanConfiguration = Field(..., description="Network configuration data")
+    ip_settings: Optional[IPSettings] = Field(None, description="Optional IP configuration settings")
+
+
+class Image(BaseModel):
+    """VM image configuration.
+    
+    Represents a named VM image available on a host.
+    """
+    name: str = Field(..., description="Unique identifier for the image")
+    path: str = Field(..., description="Filesystem path to the image file")
+    os_family: Optional[str] = Field(None, description="Operating system family (windows/linux)")
+    description: Optional[str] = Field(None, description="Human-readable description of the image")
 
 
 class HostResources(BaseModel):
@@ -110,6 +135,7 @@ class HostResources(BaseModel):
     storage_classes: List[StorageClass] = Field(default_factory=list, description="Available storage classes")
     networks: List[Network] = Field(default_factory=list, description="Available networks")
     virtual_machines_path: str = Field(..., description="Default path for VM configuration files")
+    images: List[Image] = Field(default_factory=list, description="Available VM images")
 
 
 class Cluster(BaseModel):
@@ -708,3 +734,18 @@ class ServiceDiagnosticsResponse(BaseModel):
     jobs: JobServiceMetrics
     inventory: InventoryServiceMetrics
     host_deployment: HostDeploymentMetrics
+
+
+class ImageListResponse(BaseModel):
+    """Response containing list of available VM images."""
+    images: List[Image] = Field(default_factory=list, description="List of available images")
+
+
+class StorageClassListResponse(BaseModel):
+    """Response containing list of available storage classes."""
+    storage_classes: List[StorageClass] = Field(default_factory=list, description="List of available storage classes")
+
+
+class NetworkListResponse(BaseModel):
+    """Response containing list of available networks."""
+    networks: List[Network] = Field(default_factory=list, description="List of available networks with optional IP settings")

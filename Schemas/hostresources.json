@@ -68,6 +68,36 @@
                 }
               }
             ]
+          },
+          "ip_settings": {
+            "type": "object",
+            "description": "Optional IP configuration settings for this network",
+            "properties": {
+              "gateway": {
+                "type": "string",
+                "description": "Default gateway IP address"
+              },
+              "dns": {
+                "type": "string",
+                "description": "Primary DNS server IP address"
+              },
+              "dns_secondary": {
+                "type": "string",
+                "description": "Secondary DNS server IP address"
+              },
+              "subnet_mask": {
+                "type": "string",
+                "description": "Subnet mask (e.g., 255.255.255.0)"
+              },
+              "network_address": {
+                "type": "string",
+                "description": "Network address (e.g., 192.168.1.0)"
+              },
+              "dhcp_available": {
+                "type": "boolean",
+                "description": "Whether DHCP is available on this network"
+              }
+            }
           }
         }
       }
@@ -75,6 +105,33 @@
     "virtual_machines_path": {
       "type": "string",
       "description": "Default filesystem path where VM configuration files will be stored"
+    },
+    "images": {
+      "type": "array",
+      "description": "List of available VM images on this host",
+      "items": {
+        "type": "object",
+        "required": ["name", "path"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique identifier for the image"
+          },
+          "path": {
+            "type": "string",
+            "description": "Filesystem path to the image file"
+          },
+          "os_family": {
+            "type": "string",
+            "enum": ["windows", "linux"],
+            "description": "Operating system family"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of the image"
+          }
+        }
+      }
     }
   },
   "required": ["version", "schema_name", "storage_classes", "networks", "virtual_machines_path"]
