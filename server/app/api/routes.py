@@ -760,16 +760,20 @@ async def list_clusters(user: dict = Depends(require_permission(Permission.READE
     cluster_by_host = _cluster_lookup()
     vm_counts = _vm_counts_by_cluster(cluster_by_host, vms)
     host_counts: Dict[str, int] = defaultdict(int)
+    connected_host_counts: Dict[str, int] = defaultdict(int)
 
     for host in hosts:
         if host.cluster:
             host_counts[host.cluster] += 1
+            if host.connected:
+                connected_host_counts[host.cluster] += 1
 
     return [
         ClusterSummary(
             id=cluster.name,
             name=cluster.name,
             host_count=host_counts[cluster.name],
+            connected_host_count=connected_host_counts[cluster.name],
             vm_count=vm_counts.get(cluster.name, 0),
         )
         for cluster in clusters

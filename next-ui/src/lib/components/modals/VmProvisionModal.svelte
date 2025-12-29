@@ -97,7 +97,7 @@
 			.map((h) => h.hostname) || [],
 	);
 	let availableClusters = $state<
-		Array<{ name: string; connected_hosts: number }>
+		Array<{ name: string; host_count: number; connected_host_count: number }>
 	>([]);
 
 	// Auto-enable clustering when cluster mode is selected
@@ -392,7 +392,7 @@
 				.then((clusters) => {
 					// Filter clusters with at least one connected host
 					availableClusters = clusters.filter(
-						(c: any) => c.host_count > 0,
+						(c: any) => c.connected_host_count > 0,
 					);
 				})
 				.catch((err) =>
@@ -471,7 +471,7 @@
 							<option value="">Select a cluster...</option>
 							{#each availableClusters as cluster}
 								<option value={cluster.name}
-									>{cluster.name} ({cluster.host_count} hosts)</option
+									>{cluster.name} ({cluster.connected_host_count} of {cluster.host_count} hosts connected)</option
 								>
 							{/each}
 						</select>

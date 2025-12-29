@@ -536,6 +536,7 @@ class ClusterSummary(BaseModel):
     id: str
     name: str
     host_count: int = 0
+    connected_host_count: int = 0
     vm_count: int = 0
 
 
