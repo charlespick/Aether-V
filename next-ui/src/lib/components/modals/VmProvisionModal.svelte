@@ -485,6 +485,7 @@
 				<FormField
 					label="Base Image"
 					description="Name of the golden image to clone"
+					required
 					error={errors.image_name}
 				>
 					<input
