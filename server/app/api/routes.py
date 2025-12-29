@@ -1044,6 +1044,15 @@ async def create_vm_resource(
             detail=f"Host {target_host} is not currently connected",
         )
 
+    # Validate storage class if provided
+    if request.storage_class and host_match.resources:
+        valid_storage_classes = [sc.name for sc in host_match.resources.storage_classes]
+        if request.storage_class not in valid_storage_classes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Storage class '{request.storage_class}' not found on host {target_host}. Available: {', '.join(valid_storage_classes) if valid_storage_classes else 'none'}",
+            )
+
     if inventory_service.get_vm(target_host, vm_spec.vm_name):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1218,6 +1227,17 @@ async def create_disk_resource(
     vm = _get_vm_or_404(vm_id)
 
     _ensure_connected_host(vm.host)
+    
+    # Validate storage class if provided
+    if request.storage_class:
+        host = inventory_service.hosts.get(vm.host)
+        if host and host.resources:
+            valid_storage_classes = [sc.name for sc in host.resources.storage_classes]
+            if request.storage_class not in valid_storage_classes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Storage class '{request.storage_class}' not found on host {vm.host}. Available: {', '.join(valid_storage_classes) if valid_storage_classes else 'none'}",
+                )
 
     job_definition = {
         "schema": {
@@ -1434,6 +1454,17 @@ async def create_nic_resource(
     vm = _get_vm_or_404(vm_id)
 
     _ensure_connected_host(vm.host)
+    
+    # Validate network if provided
+    if request.network:
+        host = inventory_service.hosts.get(vm.host)
+        if host and host.resources:
+            valid_networks = [net.name for net in host.resources.networks]
+            if request.network not in valid_networks:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Network '{request.network}' not found on host {vm.host}. Available: {', '.join(valid_networks) if valid_networks else 'none'}",
+                )
 
     job_definition = {
         "schema": {
@@ -1755,6 +1786,35 @@ async def create_managed_deployment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Host {target_host} is not currently connected",
         )
+
+    # Validate resources against host configuration
+    if host_match.resources:
+        # Validate storage class if provided
+        if request.storage_class:
+            valid_storage_classes = [sc.name for sc in host_match.resources.storage_classes]
+            if request.storage_class not in valid_storage_classes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Storage class '{request.storage_class}' not found on host {target_host}. Available: {', '.join(valid_storage_classes) if valid_storage_classes else 'none'}",
+                )
+        
+        # Validate network
+        if request.network:
+            valid_networks = [net.name for net in host_match.resources.networks]
+            if request.network not in valid_networks:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Network '{request.network}' not found on host {target_host}. Available: {', '.join(valid_networks) if valid_networks else 'none'}",
+                )
+        
+        # Validate image if provided
+        if request.image_name:
+            valid_images = [img.name for img in host_match.resources.images]
+            if request.image_name not in valid_images:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Image '{request.image_name}' not found on host {target_host}. Available: {', '.join(valid_images) if valid_images else 'none'}",
+                )
 
     # Check if VM already exists
     vm_name = request.vm_name
