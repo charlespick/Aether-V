@@ -567,18 +567,22 @@ class ClusterSummary(BaseModel):
 
 
 class ClusterDetail(BaseModel):
-    """Cluster detail view with shallow child objects."""
+    """Cluster detail view with shallow child objects and aggregated resources."""
 
     id: str
     name: str
     hosts: List[HostSummary] = Field(default_factory=list)
     virtual_machines: List[VMListItem] = Field(default_factory=list)
+    storage_classes: List[StorageClass] = Field(default_factory=list, description="Aggregated storage classes from all cluster hosts")
+    networks: List[Network] = Field(default_factory=list, description="Aggregated networks from all cluster hosts")
+    images: List[Image] = Field(default_factory=list, description="Aggregated images from all cluster hosts")
 
 
 class HostDetail(HostSummary):
-    """Host detail with shallow VM list."""
+    """Host detail with shallow VM list and resource configuration."""
 
     virtual_machines: List[VMListItem] = Field(default_factory=list)
+    resources: Optional[HostResources] = Field(None, description="Host resource configuration including storage classes, networks, and images")
 
 
 class StatisticsResponse(BaseModel):
@@ -734,18 +738,3 @@ class ServiceDiagnosticsResponse(BaseModel):
     jobs: JobServiceMetrics
     inventory: InventoryServiceMetrics
     host_deployment: HostDeploymentMetrics
-
-
-class ImageListResponse(BaseModel):
-    """Response containing list of available VM images."""
-    images: List[Image] = Field(default_factory=list, description="List of available images")
-
-
-class StorageClassListResponse(BaseModel):
-    """Response containing list of available storage classes."""
-    storage_classes: List[StorageClass] = Field(default_factory=list, description="List of available storage classes")
-
-
-class NetworkListResponse(BaseModel):
-    """Response containing list of available networks."""
-    networks: List[Network] = Field(default_factory=list, description="List of available networks with optional IP settings")

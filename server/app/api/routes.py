@@ -21,6 +21,9 @@ from ..core.models import (
     Host,
     HostDetail,
     HostSummary,
+    Image,
+    Network,
+    StorageClass,
     VM,
     VMListItem,
     VMDisk,
@@ -788,7 +791,7 @@ async def list_clusters(user: dict = Depends(require_permission(Permission.READE
 async def get_cluster_detail(
     cluster_id: str, user: dict = Depends(require_permission(Permission.READER))
 ):
-    """Return cluster detail with shallow child resources."""
+    """Return cluster detail with shallow child resources and aggregated host resources."""
 
     clusters = inventory_service.get_all_clusters()
     cluster = next((c for c in clusters if c.name == cluster_id), None)
@@ -804,6 +807,20 @@ async def get_cluster_detail(
     vms = [vm for vm in inventory_service.get_all_vms() if cluster_by_host.get(vm.host)]
     vm_counts = _vm_counts_by_host(vms)
 
+    # Aggregate resources from all connected hosts in the cluster
+    storage_classes_map: Dict[str, StorageClass] = {}
+    networks_map: Dict[str, Network] = {}
+    images_map: Dict[str, Image] = {}
+    
+    for host in hosts:
+        if host.connected and host.resources:
+            for sc in host.resources.storage_classes:
+                storage_classes_map[sc.name] = sc
+            for net in host.resources.networks:
+                networks_map[net.name] = net
+            for img in host.resources.images:
+                images_map[img.name] = img
+
     return ClusterDetail(
         id=cluster.name,
         name=cluster.name,
@@ -818,6 +835,9 @@ async def get_cluster_detail(
             for host in hosts
         ],
         virtual_machines=[_to_vm_list_item(vm, cluster_by_host) for vm in vms],
+        storage_classes=list(storage_classes_map.values()),
+        networks=list(networks_map.values()),
+        images=list(images_map.values()),
     )
 
 
@@ -846,7 +866,7 @@ async def list_hosts(user: dict = Depends(require_permission(Permission.READER))
 async def get_host_detail(
     hostname: str, user: dict = Depends(require_permission(Permission.READER))
 ):
-    """Return host detail with shallow VM listings."""
+    """Return host detail with shallow VM listings and resource configuration."""
 
     host = _get_host_or_404(hostname)
     host_vms = inventory_service.get_host_vms(hostname)
@@ -859,6 +879,7 @@ async def get_host_detail(
         last_seen=host.last_seen,
         vm_count=len(host_vms),
         virtual_machines=[_to_vm_list_item(vm, cluster_by_host) for vm in host_vms],
+        resources=host.resources,
     )
 
 
