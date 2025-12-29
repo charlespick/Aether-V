@@ -21,7 +21,7 @@ Architecture Note:
     2. Centralizes parsing/orchestration logic in the managed deployment service
     3. Maintains clean separation between hardware and guest config concerns
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator, ConfigDict
 from enum import Enum
 from .models import OSFamily
@@ -188,10 +188,14 @@ class ManagedDeploymentRequest(BaseModel):
     - POST /api/v1/resources/nics (NicSpec)
     - POST /api/v1/resources/vms/{vm_id}/initialize (guest config dict)
     """
-    # === Target Host (required) ===
-    target_host: str = Field(
-        ...,
+    # === Deployment Target (exactly one required) ===
+    target_host: Optional[str] = Field(
+        None,
         description="Hostname of the connected Hyper-V host that will execute the job",
+    )
+    target_cluster: Optional[str] = Field(
+        None,
+        description="Name of the failover cluster - the server will select the optimal host",
     )
     
     # === VM Hardware Configuration (required) ===
@@ -222,16 +226,23 @@ class ManagedDeploymentRequest(BaseModel):
         description="Request that the new VM be registered with the Failover Cluster",
     )
     
-    # === Disk Configuration (optional - if image_name provided, disk is created) ===
+    # === Disk Configuration (optional - if image_name provided, disk is cloned) ===
+    # Note: disk_type (Dynamic/Fixed) is NOT configurable in managed deployments.
+    # When cloning from an image, the disk_type is inherited from the source image
+    # and cannot be converted. Only disk_size_gb and controller_type are configurable.
     image_name: Optional[str] = Field(
         None,
-        description="Name of a golden image to clone. If provided, a disk will be created",
+        description="Name of a golden image to clone. If provided, a disk will be created by cloning the image",
     )
     disk_size_gb: int = Field(
         100,
         ge=1,
         le=65536,
-        description="Size of the virtual disk in gigabytes",
+        description="Size of the virtual disk in gigabytes (used for resizing after clone if larger than source)",
+    )
+    controller_type: Literal["SCSI", "IDE"] = Field(
+        "SCSI",
+        description="Disk controller type for attaching the disk: SCSI (recommended) or IDE",
     )
     
     # === Network Configuration (required) ===
@@ -309,6 +320,17 @@ class ManagedDeploymentRequest(BaseModel):
     @model_validator(mode='after')
     def validate_parameter_sets(self) -> 'ManagedDeploymentRequest':
         """Validate all-or-none parameter sets for domain join, ansible, and static IP."""
+        # Deployment target: exactly one of target_host or target_cluster
+        if self.target_host and self.target_cluster:
+            raise ValueError(
+                "Cannot specify both target_host and target_cluster. "
+                "Please specify only one deployment destination."
+            )
+        if not self.target_host and not self.target_cluster:
+            raise ValueError(
+                "Must specify either target_host or target_cluster as the deployment destination."
+            )
+        
         # Domain join: all-or-none
         domain_fields = [
             self.guest_domain_join_target,

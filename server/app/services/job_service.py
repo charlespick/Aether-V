@@ -386,6 +386,7 @@ class JobService:
     async def submit_managed_deployment_job(
         self,
         request: ManagedDeploymentRequest,
+        effective_target_host: Optional[str] = None,
     ) -> Job:
         """Submit a managed deployment job using the Pydantic-based protocol.
 
@@ -397,16 +398,31 @@ class JobService:
         2. Disk creation via disk.create operation
         3. NIC creation via nic.create operation
         4. Guest configuration via generate_guest_config() and KVP
+        
+        Args:
+            request: The managed deployment request from the API. The vm_clustered
+                field is pre-validated by the route handler.
+            effective_target_host: The host to deploy to. When cluster targeting is used,
+                this contains the cluster-selected host. When direct host targeting is used,
+                this contains the user-specified target_host. If None, falls back to
+                request.target_host (for backward compatibility).
         """
         if not self._started or self._queue is None:
             raise RuntimeError("Job service is not running")
 
-        target_host = request.target_host.strip()
+        # Determine the target host: use effective_target_host if provided, otherwise fall back to request's target_host
+        target_host = effective_target_host if effective_target_host else (
+            request.target_host.strip() if request.target_host else None
+        )
         if not target_host:
             raise RuntimeError(
                 "Managed deployment job requires a target host")
 
         job_id = str(uuid.uuid4())
+        
+        # Use the request data directly - vm_clustered is already validated
+        request_data = request.model_dump()
+        
         job = Job(
             job_id=job_id,
             job_type="managed_deployment",
@@ -414,7 +430,7 @@ class JobService:
             created_at=datetime.now(timezone.utc),
             target_host=target_host,
             parameters={
-                "request": request.model_dump(),
+                "request": request_data,
             },
         )
 
@@ -1058,7 +1074,8 @@ class JobService:
         request_dict = job.parameters.get("request", {})
         request = ManagedDeploymentRequest(**request_dict)
 
-        target_host = request.target_host.strip()
+        # Use the target_host from the job object (this is the resolved host if cluster was specified)
+        target_host = job.target_host
         if not target_host:
             raise RuntimeError(
                 "Managed deployment job is missing a target host")
@@ -1155,16 +1172,18 @@ class JobService:
         if request.image_name:
             await self._append_job_output(
                 job.job_id,
-                "Creating disk...",
+                "Creating disk by cloning image...",
             )
 
             # Build disk spec dict from flat request fields
+            # Note: disk_type is NOT included - it is always inherited from the source image
+            # when cloning. Hyper-V does not support converting disk types during clone operations.
+            # Only disk_size_gb (for resizing) and controller_type are specified.
             disk_dict = {
                 "vm_id": vm_id,
                 "image_name": request.image_name,
                 "disk_size_gb": request.disk_size_gb,
-                "disk_type": "Dynamic",
-                "controller_type": "SCSI",
+                "controller_type": request.controller_type,
             }
 
             disk_job_definition = {

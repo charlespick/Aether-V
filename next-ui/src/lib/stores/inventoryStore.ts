@@ -120,6 +120,7 @@ export interface Cluster {
     id: string;
     name: string;
     host_count: number;
+    connected_host_count: number;
     vm_count: number;
 }
 

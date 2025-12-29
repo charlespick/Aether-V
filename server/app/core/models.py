@@ -1,5 +1,5 @@
 """Data models for the application."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
@@ -270,10 +270,18 @@ class VMDeleteRequest(BaseModel):
 
 
 class VMCreateRequest(BaseModel):
-    """Request to create a virtual machine on a specific host."""
+    """Request to create a virtual machine with direct host or cluster-based targeting.
+    
+    Supports both explicit host targeting (for precise placement) and cluster-based
+    targeting (for automatic host selection based on available resources).
+    Exactly one of target_host or target_cluster must be specified.
+    """
 
-    target_host: str = Field(
-        ..., description="Hostname of the connected Hyper-V host that will execute the job",
+    target_host: Optional[str] = Field(
+        None, description="Hostname of the connected Hyper-V host that will execute the job",
+    )
+    target_cluster: Optional[str] = Field(
+        None, description="Name of the failover cluster - the server will select the optimal host",
     )
     vm_name: str = Field(
         ..., min_length=1, max_length=64, description="Unique name for the new virtual machine",
@@ -291,6 +299,20 @@ class VMCreateRequest(BaseModel):
         None,
         description="Operating system family (windows or linux) used to configure secure boot settings",
     )
+    
+    @model_validator(mode='after')
+    def validate_deployment_target(self) -> 'VMCreateRequest':
+        """Validate that exactly one deployment target is specified."""
+        if self.target_host and self.target_cluster:
+            raise ValueError(
+                "Cannot specify both target_host and target_cluster. "
+                "Please specify only one deployment destination."
+            )
+        if not self.target_host and not self.target_cluster:
+            raise ValueError(
+                "Must specify either target_host or target_cluster as the deployment destination."
+            )
+        return self
 
 
 class VMUpdateRequest(BaseModel):
@@ -514,6 +536,7 @@ class ClusterSummary(BaseModel):
     id: str
     name: str
     host_count: int = 0
+    connected_host_count: int = 0
     vm_count: int = 0
 
 

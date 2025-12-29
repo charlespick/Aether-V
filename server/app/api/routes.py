@@ -275,6 +275,84 @@ def _to_vm_list_item(vm: VM, cluster_by_host: Dict[str, Optional[str]]) -> VMLis
     )
 
 
+def _resolve_cluster_target_host(cluster_name: str, required_memory_gb: int) -> str:
+    """Resolve a cluster name to an optimal target host based on available memory.
+    
+    Selects the host with the most available memory that can accommodate the
+    requested memory allocation.
+    
+    Args:
+        cluster_name: Name of the failover cluster
+        required_memory_gb: Memory required for the VM in GB
+        
+    Returns:
+        Hostname of the selected target host
+        
+    Raises:
+        HTTPException: If cluster not found, no connected hosts available,
+                      or insufficient memory across all hosts
+    """
+    # Validate cluster exists
+    clusters = inventory_service.get_all_clusters()
+    cluster = next((c for c in clusters if c.name == cluster_name), None)
+    
+    if not cluster:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cluster {cluster_name} not found",
+        )
+    
+    # Get all connected hosts in the cluster
+    all_hosts = inventory_service.get_all_hosts()
+    cluster_hosts = [h for h in all_hosts if h.cluster == cluster_name and h.connected]
+    
+    if not cluster_hosts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"No connected hosts available in cluster {cluster_name}",
+        )
+    
+    # Calculate available memory for each host
+    all_vms = inventory_service.get_all_vms()
+    host_memory_usage = {}
+    
+    for host in cluster_hosts:
+        # Get all VMs on this host
+        host_vms = [vm for vm in all_vms if vm.host == host.hostname]
+        
+        # Sum memory allocated to VMs (use memory_startup_gb for dynamic memory VMs)
+        # Handle None values by defaulting to 0 for accurate memory accounting
+        used_memory = sum(
+            (vm.memory_startup_gb or vm.memory_gb or 0)
+            for vm in host_vms
+        )
+        
+        # Calculate available memory
+        total_memory = host.total_memory_gb
+        available_memory = total_memory - used_memory
+        host_memory_usage[host.hostname] = available_memory
+    
+    # Filter to hosts with sufficient memory
+    eligible_hosts = {
+        hostname: available
+        for hostname, available in host_memory_usage.items()
+        if available >= required_memory_gb
+    }
+    
+    if not eligible_hosts:
+        max_available = max(host_memory_usage.values()) if host_memory_usage else 0
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Insufficient memory in cluster {cluster_name}. "
+                f"VM requires {required_memory_gb} GB but maximum available is {max_available:.2f} GB"
+            ),
+        )
+    
+    # Select host with most available memory among eligible hosts
+    return max(eligible_hosts, key=lambda h: eligible_hosts[h])
+
+
 async def _handle_vm_action(
     action: str, vm_id: str
 ) -> Dict[str, str]:
@@ -682,16 +760,20 @@ async def list_clusters(user: dict = Depends(require_permission(Permission.READE
     cluster_by_host = _cluster_lookup()
     vm_counts = _vm_counts_by_cluster(cluster_by_host, vms)
     host_counts: Dict[str, int] = defaultdict(int)
+    connected_host_counts: Dict[str, int] = defaultdict(int)
 
     for host in hosts:
         if host.cluster:
             host_counts[host.cluster] += 1
+            if host.connected:
+                connected_host_counts[host.cluster] += 1
 
     return [
         ClusterSummary(
             id=cluster.name,
             name=cluster.name,
             host_count=host_counts[cluster.name],
+            connected_host_count=connected_host_counts[cluster.name],
             vm_count=vm_counts.get(cluster.name, 0),
         )
         for cluster in clusters
@@ -894,7 +976,15 @@ async def create_vm_resource(
     request: VMCreateRequest,
     user: dict = Depends(require_permission(Permission.WRITER)),
 ):
-    """Create a new virtual machine (without disk or NIC)."""
+    """Create a new virtual machine (without disk or NIC).
+    
+    Supports both direct host targeting and cluster-based targeting with
+    automatic host selection based on available memory. Exactly one of
+    target_host or target_cluster must be specified.
+    
+    VM clustering registration should be handled by the caller via a
+    separate PATCH operation after guest initialization is complete.
+    """
 
     vm_spec = VmSpec(
         vm_name=request.vm_name,
@@ -914,7 +1004,16 @@ async def create_vm_resource(
             },
         )
 
-    target_host = request.target_host.strip()
+    # Resolve target host from cluster if cluster targeting is used
+    if request.target_cluster:
+        target_host = _resolve_cluster_target_host(
+            cluster_name=request.target_cluster.strip(),
+            required_memory_gb=request.gb_ram,
+        )
+    else:
+        target_host = request.target_host.strip() if request.target_host else ""
+    
+    # Validate the resolved host is connected
     connected_hosts = inventory_service.get_connected_hosts()
     host_match = next(
         (host for host in connected_hosts if host.hostname == target_host), None)
@@ -1600,8 +1699,27 @@ async def create_managed_deployment(
             },
         )
 
-    # Ensure the target host is connected
-    target_host = request.target_host.strip()
+    # Resolve target host from cluster if cluster targeting is used
+    target_host: Optional[str] = None
+    
+    if request.target_cluster:
+        # Validate: cluster targeting requires vm_clustered=True
+        if not request.vm_clustered:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot disable clustering when targeting a cluster. "
+                       "Set vm_clustered=True or use direct host targeting.",
+            )
+        
+        target_host = _resolve_cluster_target_host(
+            cluster_name=request.target_cluster.strip(),
+            required_memory_gb=request.gb_ram,
+        )
+    else:
+        # Direct host targeting
+        target_host = request.target_host.strip() if request.target_host else None
+    
+    # Ensure the target host is specified and connected
     if not target_host:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1627,8 +1745,10 @@ async def create_managed_deployment(
         )
 
     # Submit the managed deployment job
+    # Pass the resolved target host. The request.vm_clustered field is already validated.
     job = await job_service.submit_managed_deployment_job(
         request=request,
+        effective_target_host=target_host,
     )
 
     return JobResult(

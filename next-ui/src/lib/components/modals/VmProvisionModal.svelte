@@ -1,11 +1,11 @@
 <script lang="ts">
-	import Modal from '$lib/components/Modal.svelte';
-	import FormField from '$lib/components/forms/FormField.svelte';
-	import FormSection from '$lib/components/forms/FormSection.svelte';
-	import FormActions from '$lib/components/forms/FormActions.svelte';
-	import Button from '$lib/components/common/Button.svelte';
-	import { toastStore } from '$lib/stores/toastStore';
-	import { inventoryStore } from '$lib/stores/inventoryStore';
+	import Modal from "$lib/components/Modal.svelte";
+	import FormField from "$lib/components/forms/FormField.svelte";
+	import FormSection from "$lib/components/forms/FormSection.svelte";
+	import FormActions from "$lib/components/forms/FormActions.svelte";
+	import Button from "$lib/components/common/Button.svelte";
+	import { toastStore } from "$lib/stores/toastStore";
+	import { inventoryStore } from "$lib/stores/inventoryStore";
 	import {
 		validateRequired,
 		validateRange,
@@ -16,8 +16,8 @@
 		combineValidationErrors,
 		hasErrors,
 		patterns,
-		type ParameterSet
-	} from '$lib/utils/validation';
+		type ParameterSet,
+	} from "$lib/utils/validation";
 
 	interface Props {
 		isOpen: boolean;
@@ -29,71 +29,87 @@
 
 	// Form state - VM Hardware
 	let vmData = $state({
-		vm_name: '',
+		vm_name: "",
 		gb_ram: 4,
 		cpu_cores: 2,
-		storage_class: '',
-		vm_clustered: false
+		storage_class: "",
+		vm_clustered: false,
 	});
 
 	// Disk configuration
+	// Note: In managed deployments, VMs are always cloned from a source image.
+	// The disk_type (Dynamic/Fixed) is inherited from the source image and cannot be changed.
+	// Only disk_size_gb and controller_type can be configured.
 	let diskData = $state({
 		disk_size_gb: 100,
-		disk_type: 'Dynamic' as 'Dynamic' | 'Fixed',
-		controller_type: 'SCSI' as 'SCSI' | 'IDE'
+		controller_type: "SCSI" as "SCSI" | "IDE",
 	});
 
 	// NIC configuration
 	let nicData = $state({
-		network: '',
-		adapter_name: ''
+		network: "",
+		adapter_name: "",
 	});
 
 	// Guest configuration - Local Admin
 	let guestLocalAdmin = $state({
-		guest_la_uid: '',
-		guest_la_pw: ''
+		guest_la_uid: "",
+		guest_la_pw: "",
 	});
 
 	// Guest configuration - Domain Join (all-or-none)
 	let domainJoinEnabled = $state(false);
 	let domainJoinData = $state({
-		guest_domain_join_target: '',
-		guest_domain_join_uid: '',
-		guest_domain_join_pw: '',
-		guest_domain_join_ou: ''
+		guest_domain_join_target: "",
+		guest_domain_join_uid: "",
+		guest_domain_join_pw: "",
+		guest_domain_join_ou: "",
 	});
 
 	// Guest configuration - Ansible (all-or-none)
 	let ansibleEnabled = $state(false);
 	let ansibleData = $state({
-		cnf_ansible_ssh_user: '',
-		cnf_ansible_ssh_key: ''
+		cnf_ansible_ssh_user: "",
+		cnf_ansible_ssh_key: "",
 	});
 
 	// Guest configuration - Static IP (all-or-none)
 	let staticIpEnabled = $state(false);
 	let staticIpData = $state({
-		guest_v4_ip_addr: '',
+		guest_v4_ip_addr: "",
 		guest_v4_cidr_prefix: 24,
-		guest_v4_default_gw: '',
-		guest_v4_dns1: '',
-		guest_v4_dns2: '',
-		guest_net_dns_suffix: ''
+		guest_v4_default_gw: "",
+		guest_v4_dns1: "",
+		guest_v4_dns2: "",
+		guest_net_dns_suffix: "",
 	});
 
 	// Host and image selection
-	let targetHost = $state('');
-	let imageName = $state('');
+	let deploymentMode = $state<"host" | "cluster">("host");
+	let targetHost = $state("");
+	let targetCluster = $state("");
+	let imageName = $state("");
 
-	// Available hosts and images
-	let availableHosts = $derived($inventoryStore?.hosts?.filter(h => h.connected).map(h => h.hostname) || []);
-	let selectedHost = $derived($inventoryStore?.hosts?.find(h => h.hostname === targetHost));
-	let availableStorageClasses = $derived(selectedHost?.resources?.storage_classes.map(sc => sc.name) || []);
-	let availableNetworks = $derived(selectedHost?.resources?.networks.map(n => n.name) || []);
+	// Available hosts, clusters, and images
+	let availableHosts = $derived(
+		$inventoryStore?.hosts
+			?.filter((h) => h.connected)
+			.map((h) => h.hostname) || [],
+	);
+	let availableClusters = $state<
+		Array<{
+			name: string;
+			host_count: number;
+			connected_host_count: number;
+		}>
+	>([]);
 
-	// Mock data for images - API endpoint for images is not yet available
-	let availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
+	// Auto-enable clustering when cluster mode is selected
+	$effect(() => {
+		if (deploymentMode === "cluster") {
+			vmData.vm_clustered = true;
+		}
+	});
 
 	let errors = $state<Record<string, string>>({});
 	let isSubmitting = $state(false);
@@ -101,27 +117,27 @@
 	// Parameter sets for all-or-none validation
 	const parameterSets: ParameterSet[] = [
 		{
-			name: 'Domain Join',
+			name: "Domain Join",
 			fields: [
-				'guest_domain_join_target',
-				'guest_domain_join_uid',
-				'guest_domain_join_pw',
-				'guest_domain_join_ou'
-			]
+				"guest_domain_join_target",
+				"guest_domain_join_uid",
+				"guest_domain_join_pw",
+				"guest_domain_join_ou",
+			],
 		},
 		{
-			name: 'Ansible Configuration',
-			fields: ['cnf_ansible_ssh_user', 'cnf_ansible_ssh_key']
+			name: "Ansible Configuration",
+			fields: ["cnf_ansible_ssh_user", "cnf_ansible_ssh_key"],
 		},
 		{
-			name: 'Static IP Configuration',
+			name: "Static IP Configuration",
 			fields: [
-				'guest_v4_ip_addr',
-				'guest_v4_cidr_prefix',
-				'guest_v4_default_gw',
-				'guest_v4_dns1'
-			]
-		}
+				"guest_v4_ip_addr",
+				"guest_v4_cidr_prefix",
+				"guest_v4_default_gw",
+				"guest_v4_dns1",
+			],
+		},
 	];
 
 	// Combine all form data
@@ -131,8 +147,10 @@
 			...diskData,
 			...nicData,
 			...guestLocalAdmin,
-			target_host: targetHost,
-			image_name: imageName
+			...(deploymentMode === "host"
+				? { target_host: targetHost }
+				: { target_cluster: targetCluster }),
+			image_name: imageName,
 		};
 
 		// Add optional parameter sets if enabled
@@ -156,39 +174,46 @@
 		const fullData = getFullFormData();
 
 		const validationErrors = combineValidationErrors([
-			// Required fields
+			// Required fields - conditional on deployment mode
 			...validateRequired(fullData, [
-				'vm_name',
-				'gb_ram',
-				'cpu_cores',
-				'disk_size_gb',
-				'disk_type',
-				'controller_type',
-				'network',
-				'guest_la_uid',
-				'guest_la_pw',
-				'target_host',
-				'image_name'
+				"vm_name",
+				"gb_ram",
+				"cpu_cores",
+				"disk_size_gb",
+				"controller_type",
+				"network",
+				"guest_la_uid",
+				"guest_la_pw",
 			]),
 
+			// Deployment target validation with clear error messages
+			...(deploymentMode === "host"
+				? validateRequired(fullData, ["target_host"])
+				: validateRequired(fullData, ["target_cluster"])),
+
 			// Range validations
-			validateRange(fullData, 'gb_ram', 1, 512),
-			validateRange(fullData, 'cpu_cores', 1, 64),
-			validateRange(fullData, 'disk_size_gb', 1, 65536),
+			validateRange(fullData, "gb_ram", 1, 512),
+			validateRange(fullData, "cpu_cores", 1, 64),
+			validateRange(fullData, "disk_size_gb", 1, 65536),
 
 			// VM name validation (hostname pattern)
 			validatePattern(
 				fullData,
-				'vm_name',
+				"vm_name",
 				patterns.hostname,
-				'Must be a valid hostname (alphanumeric and hyphens only)'
+				"Must be a valid hostname (alphanumeric and hyphens only)",
 			),
 
 			// Network name validation
-			validatePattern(fullData, 'network', patterns.networkName, 'Invalid network name format'),
+			validatePattern(
+				fullData,
+				"network",
+				patterns.networkName,
+				"Invalid network name format",
+			),
 
 			// Parameter set validations (all-or-none)
-			...validateParameterSets(fullData, parameterSets)
+			...validateParameterSets(fullData, parameterSets),
 		]);
 
 		// Static IP specific validations if enabled
@@ -197,30 +222,34 @@
 				staticIpData.guest_v4_ip_addr &&
 				!validateIPv4(staticIpData.guest_v4_ip_addr)
 			) {
-				validationErrors.guest_v4_ip_addr = 'Invalid IPv4 address';
+				validationErrors.guest_v4_ip_addr = "Invalid IPv4 address";
 			}
 
 			if (
 				staticIpData.guest_v4_default_gw &&
 				!validateIPv4(staticIpData.guest_v4_default_gw)
 			) {
-				validationErrors.guest_v4_default_gw = 'Invalid IPv4 address';
+				validationErrors.guest_v4_default_gw = "Invalid IPv4 address";
 			}
 
-			if (staticIpData.guest_v4_dns1 && !validateIPv4(staticIpData.guest_v4_dns1)) {
-				validationErrors.guest_v4_dns1 = 'Invalid IPv4 address';
+			if (
+				staticIpData.guest_v4_dns1 &&
+				!validateIPv4(staticIpData.guest_v4_dns1)
+			) {
+				validationErrors.guest_v4_dns1 = "Invalid IPv4 address";
 			}
 
 			if (
 				staticIpData.guest_v4_dns2 &&
-				staticIpData.guest_v4_dns2 !== '' &&
+				staticIpData.guest_v4_dns2 !== "" &&
 				!validateIPv4(staticIpData.guest_v4_dns2)
 			) {
-				validationErrors.guest_v4_dns2 = 'Invalid IPv4 address';
+				validationErrors.guest_v4_dns2 = "Invalid IPv4 address";
 			}
 
 			if (!validateCIDRPrefix(staticIpData.guest_v4_cidr_prefix)) {
-				validationErrors.guest_v4_cidr_prefix = 'Must be between 0 and 32';
+				validationErrors.guest_v4_cidr_prefix =
+					"Must be between 0 and 32";
 			}
 		}
 
@@ -233,7 +262,7 @@
 		e.preventDefault();
 
 		if (!validate()) {
-			toastStore.error('Please fix the validation errors');
+			toastStore.error("Please fix the validation errors");
 			return;
 		}
 
@@ -243,20 +272,25 @@
 			// Build flat payload that mirrors form fields directly
 			// The server parses this flat structure into hardware specs internally
 			const payload: Record<string, any> = {
-				target_host: targetHost,
+				// Deployment target - either host or cluster
+				...(deploymentMode === "host"
+					? { target_host: targetHost }
+					: { target_cluster: targetCluster }),
 				// VM hardware
 				vm_name: vmData.vm_name,
 				gb_ram: vmData.gb_ram,
 				cpu_cores: vmData.cpu_cores,
 				storage_class: vmData.storage_class || undefined,
 				vm_clustered: vmData.vm_clustered,
-				// Disk - if image_name provided, disk will be created
+				// Disk configuration
+				// Note: disk_type is inherited from the source image and cannot be changed during cloning
 				image_name: imageName || undefined,
 				disk_size_gb: diskData.disk_size_gb,
+				controller_type: diskData.controller_type,
 				// Network
 				network: nicData.network,
 				// Guest config - local admin (required)
-				...guestLocalAdmin
+				...guestLocalAdmin,
 			};
 
 			// Add domain join config if enabled
@@ -274,15 +308,15 @@
 				Object.assign(payload, staticIpData);
 			}
 
-			const response = await fetch('/api/v1/managed-deployments', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload)
+			const response = await fetch("/api/v1/managed-deployments", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload),
 			});
 
 			if (!response.ok) {
 				const error = await response.json();
-				throw new Error(error.detail || 'Failed to create VM');
+				throw new Error(error.detail || "Failed to create VM");
 			}
 
 			const result = await response.json();
@@ -294,8 +328,10 @@
 				onSuccess?.(result.job_id);
 			}
 		} catch (error) {
-			console.error('Failed to create VM:', error);
-			toastStore.error(error instanceof Error ? error.message : 'Failed to create VM');
+			console.error("Failed to create VM:", error);
+			toastStore.error(
+				error instanceof Error ? error.message : "Failed to create VM",
+			);
 		} finally {
 			isSubmitting = false;
 		}
@@ -305,90 +341,159 @@
 	$effect(() => {
 		if (!isOpen) {
 			vmData = {
-				vm_name: '',
+				vm_name: "",
 				gb_ram: 4,
 				cpu_cores: 2,
-				storage_class: '',
-				vm_clustered: false
+				storage_class: "",
+				vm_clustered: false,
 			};
+			deploymentMode = "host";
+			targetHost = "";
+			targetCluster = "";
 			diskData = {
 				disk_size_gb: 100,
-				disk_type: 'Dynamic',
-				controller_type: 'SCSI'
+				controller_type: "SCSI",
 			};
 			nicData = {
-				network: '',
-				adapter_name: ''
+				network: "",
+				adapter_name: "",
 			};
 			guestLocalAdmin = {
-				guest_la_uid: '',
-				guest_la_pw: ''
+				guest_la_uid: "",
+				guest_la_pw: "",
 			};
 			domainJoinEnabled = false;
 			domainJoinData = {
-				guest_domain_join_target: '',
-				guest_domain_join_uid: '',
-				guest_domain_join_pw: '',
-				guest_domain_join_ou: ''
+				guest_domain_join_target: "",
+				guest_domain_join_uid: "",
+				guest_domain_join_pw: "",
+				guest_domain_join_ou: "",
 			};
 			ansibleEnabled = false;
 			ansibleData = {
-				cnf_ansible_ssh_user: '',
-				cnf_ansible_ssh_key: ''
+				cnf_ansible_ssh_user: "",
+				cnf_ansible_ssh_key: "",
 			};
 			staticIpEnabled = false;
 			staticIpData = {
-				guest_v4_ip_addr: '',
+				guest_v4_ip_addr: "",
 				guest_v4_cidr_prefix: 24,
-				guest_v4_default_gw: '',
-				guest_v4_dns1: '',
-				guest_v4_dns2: '',
-				guest_net_dns_suffix: ''
+				guest_v4_default_gw: "",
+				guest_v4_dns1: "",
+				guest_v4_dns2: "",
+				guest_net_dns_suffix: "",
 			};
-			targetHost = '';
-			imageName = '';
+			imageName = "";
 			errors = {};
 		}
 	});
 
-	// Fetch available hosts from inventory
+	// Fetch available clusters
 	$effect(() => {
-		// Mock data for images - API endpoint for images is not yet available
-		// availableImages = ['Windows Server 2022', 'Ubuntu 22.04 LTS'];
+		if (isOpen) {
+			fetch("/api/v1/clusters")
+				.then((res) => res.json())
+				.then((clusters) => {
+					// Filter clusters with at least one connected host
+					availableClusters = clusters.filter(
+						(c: any) => c.connected_host_count > 0,
+					);
+				})
+				.catch((err) =>
+					console.error("Failed to fetch clusters:", err),
+				);
+		}
 	});
 </script>
 
-<Modal {isOpen} {onClose} title="Create Virtual Machine" variant="slideOver" width="xl">
+<Modal
+	{isOpen}
+	{onClose}
+	title="Create Virtual Machine"
+	variant="slideOver"
+	width="xl"
+>
 	<form onsubmit={handleSubmit}>
 		<div class="form-content">
 			<!-- Primary Controls: Host & Image -->
-			<FormSection title="Deployment Target" description="Select the destination host and base image">
+			<FormSection
+				title="Deployment Target"
+				description="Select the destination and base image"
+			>
 				<FormField
-					label="Target Host"
-					description="Hyper-V host where the VM will be created"
+					label="Deployment Mode"
+					description="Deploy to a specific host or let the cluster select the optimal host"
 					required
-					error={errors.target_host}
 				>
-					<select bind:value={targetHost} disabled={isSubmitting}>
-						<option value="">Select a host...</option>
-						{#each availableHosts as host}
-							<option value={host}>{host}</option>
-						{/each}
-					</select>
+					<div class="radio-group">
+						<label class="radio-label">
+							<input
+								type="radio"
+								bind:group={deploymentMode}
+								value="host"
+								disabled={isSubmitting}
+							/>
+							<span>Specific Host</span>
+						</label>
+						<label class="radio-label">
+							<input
+								type="radio"
+								bind:group={deploymentMode}
+								value="cluster"
+								disabled={isSubmitting}
+							/>
+							<span>Cluster (Auto-select Host)</span>
+						</label>
+					</div>
 				</FormField>
 
+				{#if deploymentMode === "host"}
+					<FormField
+						label="Target Host"
+						description="Hyper-V host where the VM will be created"
+						required
+						error={errors.target_host}
+					>
+						<select bind:value={targetHost} disabled={isSubmitting}>
+							<option value="">Select a host...</option>
+							{#each availableHosts as host}
+								<option value={host}>{host}</option>
+							{/each}
+						</select>
+					</FormField>
+				{:else}
+					<FormField
+						label="Target Cluster"
+						description="Cluster where the VM will be created - host will be auto-selected based on available memory"
+						required
+						error={errors.target_cluster}
+					>
+						<select
+							bind:value={targetCluster}
+							disabled={isSubmitting}
+						>
+							<option value="">Select a cluster...</option>
+							{#each availableClusters as cluster}
+								<option value={cluster.name}
+									>{cluster.name} ({cluster.connected_host_count}
+									of {cluster.host_count} hosts connected)</option
+								>
+							{/each}
+						</select>
+					</FormField>
+				{/if}
 				<FormField
 					label="Base Image"
-					description="Operating system image to clone"
+					description="Name of the golden image to clone"
 					required
 					error={errors.image_name}
 				>
-					<select bind:value={imageName} disabled={isSubmitting}>
-						<option value="">Select an image...</option>
-						{#each availableImages as image}
-							<option value={image}>{image}</option>
-						{/each}
-					</select>
+					<input
+						type="text"
+						bind:value={imageName}
+						placeholder="e.g., Windows Server 2022"
+						disabled={isSubmitting}
+					/>
 				</FormField>
 			</FormSection>
 
@@ -446,24 +551,38 @@
 					description="Optional: storage tier or class identifier"
 					error={errors.storage_class}
 				>
-					<select bind:value={vmData.storage_class} disabled={isSubmitting}>
-						<option value="">Select a storage class...</option>
-						{#each availableStorageClasses as sc}
-							<option value={sc}>{sc}</option>
-						{/each}
-					</select>
+					<input
+						type="text"
+						bind:value={vmData.storage_class}
+						placeholder="e.g., fast-ssd"
+						disabled={isSubmitting}
+					/>
 				</FormField>
 
-				<FormField description="Enable high availability clustering for this VM">
+				<FormField
+					description="Enable high availability clustering for this VM"
+				>
 					<label class="checkbox-label">
-						<input type="checkbox" bind:checked={vmData.vm_clustered} disabled={isSubmitting} />
-						<span>Enable VM Clustering</span>
+						<input
+							type="checkbox"
+							bind:checked={vmData.vm_clustered}
+							disabled={isSubmitting ||
+								deploymentMode === "cluster"}
+						/>
+						<span
+							>Enable VM Clustering{deploymentMode === "cluster"
+								? " (Auto-enabled)"
+								: ""}</span
+						>
 					</label>
 				</FormField>
 			</FormSection>
 
 			<!-- Disk Configuration -->
-			<FormSection title="Disk Configuration" description="Configure the primary virtual disk">
+			<FormSection
+				title="Disk Configuration"
+				description="Configure the primary virtual disk"
+			>
 				<FormField
 					label="Disk Size (GB)"
 					description="Size of the virtual disk"
@@ -479,15 +598,17 @@
 					/>
 				</FormField>
 
-				<FormField label="Disk Type" required error={errors.disk_type}>
-					<select bind:value={diskData.disk_type} disabled={isSubmitting}>
-						<option value="Dynamic">Dynamic (grows as needed)</option>
-						<option value="Fixed">Fixed (allocates full size)</option>
-					</select>
-				</FormField>
+				<!-- Note: Disk type (Dynamic/Fixed) is inherited from the source image when cloning -->
 
-				<FormField label="Controller Type" required error={errors.controller_type}>
-					<select bind:value={diskData.controller_type} disabled={isSubmitting}>
+				<FormField
+					label="Controller Type"
+					required
+					error={errors.controller_type}
+				>
+					<select
+						bind:value={diskData.controller_type}
+						disabled={isSubmitting}
+					>
 						<option value="SCSI">SCSI (recommended)</option>
 						<option value="IDE">IDE</option>
 					</select>
@@ -495,19 +616,22 @@
 			</FormSection>
 
 			<!-- Network Configuration -->
-			<FormSection title="Network Configuration" description="Configure the primary network adapter">
+			<FormSection
+				title="Network Configuration"
+				description="Configure the primary network adapter"
+			>
 				<FormField
 					label="Network"
-					description="Hyper-V virtual switch to connect to"
+					description="Name of Hyper-V virtual switch to connect to"
 					required
 					error={errors.network}
 				>
-					<select bind:value={nicData.network} disabled={isSubmitting}>
-						<option value="">Select a network...</option>
-						{#each availableNetworks as net}
-							<option value={net}>{net}</option>
-						{/each}
-					</select>
+					<input
+						type="text"
+						bind:value={nicData.network}
+						placeholder="e.g., External-Network"
+						disabled={isSubmitting}
+					/>
 				</FormField>
 
 				<FormField
@@ -522,178 +646,23 @@
 						disabled={isSubmitting}
 					/>
 				</FormField>
-			</FormSection>
 
-			<!-- Guest Configuration: Local Admin -->
-			<FormSection
-				title="Guest Configuration: Local Administrator"
-				description="Required: credentials for the local administrator account"
-			>
-				<FormField
-					label="Username"
-					description="Local administrator username"
-					required
-					error={errors.guest_la_uid}
-				>
-					<input
-						type="text"
-						bind:value={guestLocalAdmin.guest_la_uid}
-						placeholder="Administrator"
-						disabled={isSubmitting}
-					/>
-				</FormField>
-
-				<FormField
-					label="Password"
-					description="Local administrator password"
-					required
-					error={errors.guest_la_pw}
-				>
-					<input
-						type="password"
-						bind:value={guestLocalAdmin.guest_la_pw}
-						disabled={isSubmitting}
-					/>
-				</FormField>
-			</FormSection>
-
-			<!-- Guest Configuration: Domain Join -->
-			<FormSection
-				title="Guest Configuration: Domain Join"
-				description="Optional: join the VM to an Active Directory domain"
-				collapsible
-				defaultExpanded={false}
-			>
+				<!-- Static IP Configuration -->
 				<FormField>
 					<label class="checkbox-label">
-						<input type="checkbox" bind:checked={domainJoinEnabled} disabled={isSubmitting} />
-						<span>Enable Domain Join</span>
-					</label>
-				</FormField>
-
-				{#if domainJoinEnabled}
-					<div class="parameter-set-note">
-						All domain join fields must be provided together.
-					</div>
-
-					<FormField
-						label="Domain"
-						description="Fully qualified domain name"
-						required={domainJoinEnabled}
-						error={errors.guest_domain_join_target}
-					>
 						<input
-							type="text"
-							bind:value={domainJoinData.guest_domain_join_target}
-							placeholder="e.g., ad.example.com"
+							type="checkbox"
+							bind:checked={staticIpEnabled}
 							disabled={isSubmitting}
 						/>
-					</FormField>
-
-					<FormField
-						label="Domain Join Username"
-						description="Account with permission to join computers to the domain"
-						required={domainJoinEnabled}
-						error={errors.guest_domain_join_uid}
-					>
-						<input
-							type="text"
-							bind:value={domainJoinData.guest_domain_join_uid}
-							placeholder="e.g., DOMAIN\\admin"
-							disabled={isSubmitting}
-						/>
-					</FormField>
-
-					<FormField
-						label="Domain Join Password"
-						required={domainJoinEnabled}
-						error={errors.guest_domain_join_pw}
-					>
-						<input
-							type="password"
-							bind:value={domainJoinData.guest_domain_join_pw}
-							disabled={isSubmitting}
-						/>
-					</FormField>
-
-					<FormField
-						label="Organizational Unit"
-						description="LDAP path to OU (optional)"
-						error={errors.guest_domain_join_ou}
-					>
-						<input
-							type="text"
-							bind:value={domainJoinData.guest_domain_join_ou}
-							placeholder="e.g., OU=Servers,DC=ad,DC=example,DC=com"
-							disabled={isSubmitting}
-						/>
-					</FormField>
-				{/if}
-			</FormSection>
-
-			<!-- Guest Configuration: Ansible -->
-			<FormSection
-				title="Guest Configuration: Ansible"
-				description="Optional: configure SSH access for Ansible"
-				collapsible
-				defaultExpanded={false}
-			>
-				<FormField>
-					<label class="checkbox-label">
-						<input type="checkbox" bind:checked={ansibleEnabled} disabled={isSubmitting} />
-						<span>Enable Ansible Configuration</span>
-					</label>
-				</FormField>
-
-				{#if ansibleEnabled}
-					<div class="parameter-set-note">All Ansible fields must be provided together.</div>
-
-					<FormField
-						label="SSH Username"
-						description="Username for Ansible SSH connection"
-						required={ansibleEnabled}
-						error={errors.cnf_ansible_ssh_user}
-					>
-						<input
-							type="text"
-							bind:value={ansibleData.cnf_ansible_ssh_user}
-							placeholder="e.g., ansible"
-							disabled={isSubmitting}
-						/>
-					</FormField>
-
-					<FormField
-						label="SSH Public Key"
-						description="Public key for passwordless authentication"
-						required={ansibleEnabled}
-						error={errors.cnf_ansible_ssh_key}
-					>
-						<textarea
-							bind:value={ansibleData.cnf_ansible_ssh_key}
-							placeholder="ssh-rsa AAAAB3..."
-							disabled={isSubmitting}
-						></textarea>
-					</FormField>
-				{/if}
-			</FormSection>
-
-			<!-- Guest Configuration: Static IP -->
-			<FormSection
-				title="Guest Configuration: Static IP"
-				description="Optional: configure static IPv4 address (otherwise DHCP)"
-				collapsible
-				defaultExpanded={false}
-			>
-				<FormField>
-					<label class="checkbox-label">
-						<input type="checkbox" bind:checked={staticIpEnabled} disabled={isSubmitting} />
 						<span>Configure Static IP</span>
 					</label>
 				</FormField>
 
 				{#if staticIpEnabled}
 					<div class="parameter-set-note">
-						IP address, CIDR prefix, gateway, and primary DNS must be provided together.
+						IP address, CIDR prefix, gateway, and primary DNS must
+						be provided together.
 					</div>
 
 					<FormField
@@ -780,12 +749,179 @@
 					</FormField>
 				{/if}
 			</FormSection>
+
+			<!-- Guest Configuration: Local Admin -->
+			<FormSection
+				title="Guest Configuration: Local Administrator"
+				description="Required: credentials for the local administrator account"
+			>
+				<FormField
+					label="Username"
+					description="Local administrator username"
+					required
+					error={errors.guest_la_uid}
+				>
+					<input
+						type="text"
+						bind:value={guestLocalAdmin.guest_la_uid}
+						placeholder="Administrator"
+						disabled={isSubmitting}
+					/>
+				</FormField>
+
+				<FormField
+					label="Password"
+					description="Local administrator password"
+					required
+					error={errors.guest_la_pw}
+				>
+					<input
+						type="password"
+						bind:value={guestLocalAdmin.guest_la_pw}
+						disabled={isSubmitting}
+					/>
+				</FormField>
+			</FormSection>
+
+			<!-- Guest Configuration: Domain Join -->
+			<FormSection
+				title="Guest Configuration: Domain Join"
+				description="Optional: join the VM to an Active Directory domain"
+				collapsible
+				defaultExpanded={false}
+			>
+				<FormField>
+					<label class="checkbox-label">
+						<input
+							type="checkbox"
+							bind:checked={domainJoinEnabled}
+							disabled={isSubmitting}
+						/>
+						<span>Enable Domain Join</span>
+					</label>
+				</FormField>
+
+				{#if domainJoinEnabled}
+					<div class="parameter-set-note">
+						All domain join fields must be provided together.
+					</div>
+
+					<FormField
+						label="Domain"
+						description="Fully qualified domain name"
+						required={domainJoinEnabled}
+						error={errors.guest_domain_join_target}
+					>
+						<input
+							type="text"
+							bind:value={domainJoinData.guest_domain_join_target}
+							placeholder="e.g., ad.example.com"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="Domain Join Username"
+						description="Account with permission to join computers to the domain"
+						required={domainJoinEnabled}
+						error={errors.guest_domain_join_uid}
+					>
+						<input
+							type="text"
+							bind:value={domainJoinData.guest_domain_join_uid}
+							placeholder="e.g., DOMAIN\\admin"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="Domain Join Password"
+						required={domainJoinEnabled}
+						error={errors.guest_domain_join_pw}
+					>
+						<input
+							type="password"
+							bind:value={domainJoinData.guest_domain_join_pw}
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="Organizational Unit"
+						description="LDAP path to OU (optional)"
+						error={errors.guest_domain_join_ou}
+					>
+						<input
+							type="text"
+							bind:value={domainJoinData.guest_domain_join_ou}
+							placeholder="e.g., OU=Servers,DC=ad,DC=example,DC=com"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+				{/if}
+			</FormSection>
+
+			<!-- Guest Configuration: Ansible -->
+			<FormSection
+				title="Guest Configuration: Ansible"
+				description="Optional: configure SSH access for Ansible"
+				collapsible
+				defaultExpanded={false}
+			>
+				<FormField>
+					<label class="checkbox-label">
+						<input
+							type="checkbox"
+							bind:checked={ansibleEnabled}
+							disabled={isSubmitting}
+						/>
+						<span>Enable Ansible Configuration</span>
+					</label>
+				</FormField>
+
+				{#if ansibleEnabled}
+					<div class="parameter-set-note">
+						All Ansible fields must be provided together.
+					</div>
+
+					<FormField
+						label="SSH Username"
+						description="Username for Ansible SSH connection"
+						required={ansibleEnabled}
+						error={errors.cnf_ansible_ssh_user}
+					>
+						<input
+							type="text"
+							bind:value={ansibleData.cnf_ansible_ssh_user}
+							placeholder="e.g., ansible"
+							disabled={isSubmitting}
+						/>
+					</FormField>
+
+					<FormField
+						label="SSH Public Key"
+						description="Public key for passwordless authentication"
+						required={ansibleEnabled}
+						error={errors.cnf_ansible_ssh_key}
+					>
+						<textarea
+							bind:value={ansibleData.cnf_ansible_ssh_key}
+							placeholder="ssh-rsa AAAAB3..."
+							disabled={isSubmitting}
+						></textarea>
+					</FormField>
+				{/if}
+			</FormSection>
 		</div>
 
 		<FormActions>
-			<Button variant="secondary" onclick={onClose} disabled={isSubmitting}>Cancel</Button>
+			<Button
+				variant="secondary"
+				onclick={onClose}
+				disabled={isSubmitting}>Cancel</Button
+			>
 			<Button type="submit" variant="primary" disabled={isSubmitting}>
-				{isSubmitting ? 'Creating VM...' : 'Create Virtual Machine'}
+				{isSubmitting ? "Creating VM..." : "Create Virtual Machine"}
 			</Button>
 		</FormActions>
 	</form>
@@ -798,6 +934,25 @@
 		gap: 1.5rem;
 	}
 
+	.radio-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.radio-label {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		cursor: pointer;
+		font-size: 0.875rem;
+		color: var(--text-primary);
+	}
+
+	.radio-label input[type="radio"] {
+		margin: 0;
+	}
+
 	.checkbox-label {
 		display: flex;
 		align-items: center;
@@ -807,7 +962,7 @@
 		color: var(--text-primary);
 	}
 
-	.checkbox-label input[type='checkbox'] {
+	.checkbox-label input[type="checkbox"] {
 		margin: 0;
 	}
 
