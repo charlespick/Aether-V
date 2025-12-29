@@ -1042,10 +1042,39 @@ try {
                     }
                 }
             }
+
+            # Match disk paths to storage classes
+            if ($hostConfig -and $hostConfig.storage_classes) {
+                foreach ($vm in $result.VirtualMachines) {
+                    if ($vm.Disks) {
+                        foreach ($disk in $vm.Disks) {
+                            if ($disk.Path) {
+                                $diskPath = $disk.Path
+                                $matchedStorageClass = $null
+                                
+                                # Find storage class whose path is a prefix of the disk path
+                                foreach ($sc in $hostConfig.storage_classes) {
+                                    $scPath = $sc.path.TrimEnd('\')
+                                    if ($diskPath.StartsWith($scPath, [StringComparison]::OrdinalIgnoreCase)) {
+                                        # If multiple matches, prefer the longest (most specific) path
+                                        if (-not $matchedStorageClass -or $sc.path.Length -gt $matchedStorageClass.path.Length) {
+                                            $matchedStorageClass = $sc
+                                        }
+                                    }
+                                }
+                                
+                                if ($matchedStorageClass) {
+                                    $disk.StorageClass = $matchedStorageClass.name
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     catch {
-        $result.Warnings += "Failed to load host resources configuration for network name resolution: $($_.Exception.Message)"
+        $result.Warnings += "Failed to load host resources configuration for network/storage name resolution: $($_.Exception.Message)"
     }
 }
 catch {
