@@ -92,11 +92,31 @@ class IPSettings(BaseModel):
     
     Optional IP settings that can be used for prefilling or validation.
     """
-    gateway: Optional[str] = Field(None, description="Default gateway IP address")
-    dns: Optional[str] = Field(None, description="Primary DNS server IP address")
-    dns_secondary: Optional[str] = Field(None, description="Secondary DNS server IP address")
-    subnet_mask: Optional[str] = Field(None, description="Subnet mask (e.g., 255.255.255.0)")
-    network_address: Optional[str] = Field(None, description="Network address (e.g., 192.168.1.0)")
+    gateway: Optional[str] = Field(
+        None, 
+        description="Default gateway IP address",
+        pattern=r"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$"
+    )
+    dns: Optional[str] = Field(
+        None, 
+        description="Primary DNS server IP address",
+        pattern=r"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$"
+    )
+    dns_secondary: Optional[str] = Field(
+        None, 
+        description="Secondary DNS server IP address",
+        pattern=r"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$"
+    )
+    subnet_mask: Optional[str] = Field(
+        None, 
+        description="Subnet mask (e.g., 255.255.255.0)",
+        pattern=r"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$"
+    )
+    network_address: Optional[str] = Field(
+        None, 
+        description="Network address (e.g., 192.168.1.0)",
+        pattern=r"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$"
+    )
     dhcp_available: Optional[bool] = Field(None, description="Whether DHCP is available on this network")
 
 
